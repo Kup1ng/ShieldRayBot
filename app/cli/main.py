@@ -11,7 +11,7 @@ from app.cli.output import CliError, err
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="pgclock",
-        description="PGClockBot global operations CLI",
+        description="ShieldRay global operations CLI",
     )
     p.add_argument(
         "--root",

@@ -1,4 +1,4 @@
-# PGClockBot engineering rules
+# ShieldRay engineering rules
 
 These rules apply to every change, whether written by a person or by an AI agent. Read this file before editing code. When a rule conflicts with a quick fix, follow the rule and explain the trade-off in the pull request.
 
@@ -6,8 +6,8 @@ Rules marked **MUST** are required. Rules marked **SHOULD** are the default and 
 
 ## 1. Core rules
 
-- Implement features independently within PGClockBot's existing architecture, naming conventions, service boundaries, and UI patterns.
-- Commit messages, code comments, identifiers, tests, release notes, and product documentation should describe PGClockBot behavior and the concrete problem or feature being implemented.
+- Implement features independently within ShieldRay's existing architecture, naming conventions, service boundaries, and UI patterns.
+- Commit messages, code comments, identifiers, tests, release notes, and product documentation should describe ShieldRay behavior and the concrete problem or feature being implemented.
 - Preserve shop isolation, scoped wallet balances, authorization checks, and idempotent payment and delivery behavior when extending commerce flows.
 - Introduce changes incrementally and verify affected behavior with focused tests before expanding the scope.
 - Retain required notices for existing dependencies and assets.
@@ -87,7 +87,7 @@ Money, quota and access paths are the most expensive place to be wrong.
 
 ## 7. Performance
 
-PGClockBot serves many shops and customers from one process and one PasarGuard panel. Assume tables grow and the panel is slow.
+ShieldRay serves many shops and customers from one process and one PasarGuard panel. Assume tables grow and the panel is slow.
 
 - **No N+1 queries.** Never run a query inside a loop over rows. Load related rows with `selectinload`/`joinedload`, or fetch them in one `WHERE id IN (...)` query and index the result in a dict. Review any `await session.get/scalar/execute` inside a `for` loop.
 - **Bound every query.** Every list endpoint and job loop has a `LIMIT`, and large scans use keyset pagination (`WHERE id > :last ORDER BY id LIMIT :n`) instead of `OFFSET` or `.all()` on a whole table. Do not load full rows when you need one column or a count (`select(func.count())`, `select(Model.id)`).

@@ -1,6 +1,6 @@
-# 🕐 PGClockBot
+# 🕐 ShieldRay
 
-![PGClockBot preview](preview.png)
+![ShieldRay preview](preview.png)
 
 فروش اشتراک، نمایندگی، کیف پول و عملیات پاسارگارد؛ رابط ربات فارسی، پنل وب روی پورت `9000`.
 

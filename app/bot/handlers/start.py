@@ -71,7 +71,7 @@ async def render_home(
 
         text, home_send_kw = outbound_setting_text(
             "پنل مدیریت فروشگاه\nاز منوی زیر گزینه را انتخاب کنید.",
-            title_raw=ui.get("shop_title") or "کلاک",
+            title_raw=ui.get("shop_title") or "شیلدری",
         )
         reply_kb, ui, _ = await build_main_reply_keyboard(
             session,
