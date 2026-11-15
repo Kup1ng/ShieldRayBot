@@ -38,6 +38,7 @@ from app.services.orders import (
     reject_order,
     reject_payment,
 )
+from app.api.body_limit import BodySizeLimitMiddleware
 from app.api.guide_media_pages import PLATFORM_BASE as GUIDE_MEDIA_PLATFORM_BASE
 from app.api.guide_media_pages import guides_media_view, register_guide_media_pages
 from app.services.chat_cleanup_config import chat_cleanup_payload
@@ -5224,4 +5225,6 @@ def create_api_app(lifespan=None) -> FastAPI:
 
     app.add_middleware(PanelConnectionMiddleware)
     app.add_middleware(GZipMiddleware, minimum_size=400)
+    # Outermost of all: a body over the limit is refused before any middleware reads it.
+    app.add_middleware(BodySizeLimitMiddleware)
     return app
