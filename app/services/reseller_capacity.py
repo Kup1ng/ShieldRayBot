@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -17,6 +19,10 @@ from app.services.formatting import format_toman
 from app.services.volume_allocation_cascade import assert_child_growth_fits
 
 logger = logging.getLogger(__name__)
+
+# One panel admin's limit is raised by reading it and writing it back; two purchases of the same
+# admin running at once would both read the old limit and one increase would be lost.
+_ADMIN_LIMIT_LOCKS: defaultdict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
 # Whitelist quantities exposed in Telegram buttons — reject forged callback amounts.
 ALLOWED_EXTRA_GB = frozenset({1, 5, 10, 50})
@@ -194,13 +200,25 @@ async def _apply_paid_extra(
     error keeps the purchase, because the panel may already have applied it, and the
     next capacity sync from the subscription applies it again.
     """
-    from app.services.pasarguard import get_pg
     from app.services.pg_admin_subscription import record_unit_extra
     from app.services.wallet import debit_wallet
 
     await debit_wallet(session, user, purchase.amount, reason=purchase.reason, commit=False)
     await record_unit_extra(session, pg_username=purchase.uname, gb=purchase.gb, users=purchase.users)
     await session.commit()
+
+    async with _ADMIN_LIMIT_LOCKS[purchase.uname]:
+        return await _raise_admin_limit(session, user=user, purchase=purchase, apply=apply)
+
+
+async def _raise_admin_limit(
+    session: AsyncSession,
+    *,
+    user: BotUser,
+    purchase: _ExtraPurchase,
+    apply: Callable[[Any, dict], Awaitable[int]],
+) -> int:
+    from app.services.pasarguard import get_pg
 
     pg = get_pg()
     try:

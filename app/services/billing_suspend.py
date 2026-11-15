@@ -39,8 +39,18 @@ def _dump_id_list(ids: list[int]) -> str:
     return json.dumps([int(x) for x in ids], separators=(",", ":"))
 
 
-async def list_owned_user_ids(pg, admin_username: str, *, page_size: int = 200) -> list[int]:
-    """Page through PG users owned by this admin."""
+DISABLED_STATUS = "disabled"
+
+
+async def list_owned_user_ids(
+    pg, admin_username: str, *, page_size: int = 200, skip_disabled: bool = False
+) -> list[int]:
+    """Page through PG users owned by this admin.
+
+    ``skip_disabled`` leaves out users that are already disabled, so a suspension records only
+    the users it cut itself and its restore never re-enables one disabled for another reason
+    (a cancelled, refunded or voided service).
+    """
     ids: list[int] = []
     offset = 0
     uname = (admin_username or "").strip()
@@ -62,6 +72,8 @@ async def list_owned_user_ids(pg, admin_username: str, *, page_size: int = 200) 
         for u in users:
             if not isinstance(u, dict):
                 continue
+            if skip_disabled and str(u.get("status") or "").strip().lower() == DISABLED_STATUS:
+                continue
             uid = u.get("id")
             try:
                 ids.append(int(uid))
@@ -76,7 +88,7 @@ async def list_owned_user_ids(pg, admin_username: str, *, page_size: int = 200) 
 
 
 async def _list_owned_user_ids(pg, admin_username: str, *, page_size: int = 200) -> list[int]:
-    return await list_owned_user_ids(pg, admin_username, page_size=page_size)
+    return await list_owned_user_ids(pg, admin_username, page_size=page_size, skip_disabled=True)
 
 
 async def _set_admin_enabled(pg, username: str, *, enabled: bool) -> None:

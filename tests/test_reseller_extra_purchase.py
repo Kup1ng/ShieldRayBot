@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
@@ -81,6 +82,23 @@ class ExtraPurchaseTests(unittest.IsolatedAsyncioTestCase):
             await self.buy("users", 5)
         self.assertEqual(str(caught.exception), EXTRA_FAILED_REFUNDED)
         self.assertEqual(await self.state(), (100_000, 0, 0, 2))
+
+    async def test_two_purchases_at_once_both_reach_the_panel_limit(self) -> None:
+        limit = {"data_limit": 100 * GB, "max_users": 10}
+
+        async def read_admin(_name):
+            snapshot = dict(limit)
+            await asyncio.sleep(0)  # the other purchase runs here if nothing serialises them
+            return snapshot
+
+        async def write_admin(_name, payload):
+            limit.update(payload)
+            return {}
+
+        self.pg.get_admin = AsyncMock(side_effect=read_admin)
+        self.pg.modify_admin = AsyncMock(side_effect=write_admin)
+        await asyncio.gather(self.buy("gb", 5), self.buy("gb", 5))
+        self.assertEqual(limit["data_limit"], 110 * GB)
 
     async def test_unreadable_admin_refunds_before_any_write(self) -> None:
         self.pg.get_admin = AsyncMock(side_effect=httpx.ConnectTimeout("down"))

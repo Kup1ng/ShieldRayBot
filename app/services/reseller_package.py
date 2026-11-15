@@ -23,6 +23,7 @@ from app.db.models import BotUser, PgAdminSubscription, ResellerPlan, ResellerPr
 from app.services.billing import GB, is_payg
 from app.services.pg_admin_subscription import (
     PLAN_KIND_SUBSCRIPTION,
+    RenewalPanelIncomplete,
     compute_renew_invoice,
     get_or_create_subscription,
     get_subscription,
@@ -256,11 +257,21 @@ async def renew_package(
     await _assert_target_allowed(current=current, target=target, sub=sub, uname=uname)
     changed = current is None or int(target.id) != int(current.id)
     profile_id = int(profile.id)
-    result = await renew_subscription(
-        session, sub=sub, plan=target, payer=owner, charge_wallet=True, reset_user_traffic=True,
-    )
+    try:
+        result = await renew_subscription(
+            session, sub=sub, plan=target, payer=owner, charge_wallet=True, reset_user_traffic=True,
+        )
+    except RenewalPanelIncomplete:
+        # The paid package is saved on the subscription; the profile must name the same one.
+        if changed:
+            await _record_package_change(session, profile_id, target)
+        raise
     if changed:
-        fresh = await session.get(ResellerProfile, profile_id)
-        fresh.plan_id = int(target.id)
-        await session.commit()
+        await _record_package_change(session, profile_id, target)
     return {**result, "plan_name": target.name, "changed": changed}
+
+
+async def _record_package_change(session: AsyncSession, profile_id: int, target: ResellerPlan) -> None:
+    fresh = await session.get(ResellerProfile, profile_id)
+    fresh.plan_id = int(target.id)
+    await session.commit()

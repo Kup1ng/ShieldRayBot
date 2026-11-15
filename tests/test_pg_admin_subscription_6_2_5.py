@@ -168,6 +168,7 @@ class OwnerBudgetGuardTests(unittest.IsolatedAsyncioTestCase):
         session = AsyncMock()
         session.execute = AsyncMock(
             return_value=SimpleNamespace(
+                rowcount=1,
                 scalars=lambda: SimpleNamespace(
                     all=lambda: [
                         SimpleNamespace(
@@ -184,6 +185,7 @@ class OwnerBudgetGuardTests(unittest.IsolatedAsyncioTestCase):
         )
         session.commit = AsyncMock()
         sub = SimpleNamespace(
+            id=1,
             pg_username="child-a",
             access_status="active",
             expires_at=datetime.now(timezone.utc) + timedelta(days=10),

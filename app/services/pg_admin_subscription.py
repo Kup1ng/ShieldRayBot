@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, AsyncSessionTransaction
 
 from app.db.models import (
     BotUser,
@@ -22,7 +22,9 @@ from app.db.models import (
     ResellerProfile,
 )
 from app.services.billing import GB, is_payg
+from app.services.db_safe import rollback_quiet
 from app.services.formatting import format_toman
+from app.services.volume_allocation import is_hard_panel_rejection
 from app.services.volume_allocation_cascade import assert_child_growth_fits, assert_parent_has_room
 
 logger = logging.getLogger(__name__)
@@ -547,6 +549,11 @@ async def expire_subscription(
             await session.commit()
         return stats
 
+    # The scheduler loaded this row a while ago; a renewal may have landed since.
+    await session.refresh(sub)
+    if sub.access_status != STATUS_ACTIVE:
+        return stats
+    generation = int(sub.renew_generation or 0)
     uname = normalize_pg_username(sub.pg_username)
     pg = get_pg()
     cut_ids: list[int] = []
@@ -557,7 +564,7 @@ async def expire_subscription(
         stats["errors"] += 1
 
     try:
-        owned = await list_owned_user_ids(pg, uname)
+        owned = await list_owned_user_ids(pg, uname, skip_disabled=True)
     except Exception:
         logger.exception("expire: list users failed %s", uname)
         owned = []
@@ -574,14 +581,43 @@ async def expire_subscription(
 
     existing = _parse_id_list(sub.expiry_disabled_user_ids)
     merged = sorted(set(existing) | set(cut_ids))
-    sub.expiry_disabled_user_ids = _dump_id_list(merged) if merged else None
-    sub.access_status = STATUS_EXPIRED
-    sub.expired_at = _utcnow()
-    await _set_web_active_for_pg_admin(session, uname, active=False)
+    done = await session.execute(
+        update(PgAdminSubscription)
+        .where(
+            PgAdminSubscription.id == sub.id,
+            PgAdminSubscription.renew_generation == generation,
+            PgAdminSubscription.access_status == STATUS_ACTIVE,
+        )
+        .values(
+            access_status=STATUS_EXPIRED,
+            expired_at=_utcnow(),
+            expiry_disabled_user_ids=_dump_id_list(merged) if merged else None,
+        )
+        .execution_options(synchronize_session=False)
+    )
+    if done.rowcount != 1:
+        # Renewed while its users were being cut: the renewal wins, give the access back.
+        await _undo_expiry_cut(pg, uname, cut_ids)
+        stats["renewed"] = 1
+    else:
+        await _set_web_active_for_pg_admin(session, uname, active=False)
     await session.flush()
+    await session.refresh(sub)
     if commit:
         await session.commit()
     return stats
+
+
+async def _undo_expiry_cut(pg: Any, uname: str, cut_ids: list[int]) -> None:
+    """Re-enable what an expiry that lost to a renewal disabled; failures are logged for staff."""
+    from app.services.billing_suspend import _set_admin_enabled
+
+    await _set_admin_enabled(pg, uname, enabled=True)
+    for uid in cut_ids:
+        try:
+            await pg.set_disabled_by_id(uid, False)
+        except Exception:
+            logger.warning("expiry undo: re-enable user %s of %s failed", uid, uname, exc_info=True)
 
 
 async def restore_subscription_access(
@@ -622,6 +658,33 @@ async def restore_subscription_access(
     if commit:
         await session.commit()
     return stats
+
+
+class RenewalPanelIncomplete(ValueError):
+    """The renewal is paid and saved; applying it on the panel did not finish."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "تمدید ثبت شد، ولی اعمال آن در پاسارگارد کامل نشد؛ دوباره تمدید نکنید و وضعیت پنل را بررسی کنید."
+        )
+
+
+async def _reset_owned_traffic(pg_username: str) -> tuple[int, int]:
+    """Reset traffic of every user the admin owns; returns (reset, failed)."""
+    from app.services.billing_suspend import list_owned_user_ids
+    from app.services.pasarguard import get_pg
+
+    pg = get_pg()
+    reset_ok = 0
+    reset_err = 0
+    for uid in await list_owned_user_ids(pg, pg_username):
+        try:
+            await pg.reset_user_by_id(uid)
+            reset_ok += 1
+        except Exception:
+            reset_err += 1
+            logger.debug("renew reset user %s failed", uid, exc_info=True)
+    return reset_ok, reset_err
 
 
 async def renew_subscription(
@@ -695,9 +758,12 @@ async def renew_subscription(
         sub.base_users = max(0, int(getattr(plan, "included_users", 0) or 0))
     sub.last_renewed_at = now
     sub.warn_sent_at = None
+    # The paid renewal is saved before any panel call: restoring access writes to the panel
+    # user by user, and a failure after that must not refund a renewal that already took effect.
+    await session.commit()
 
     try:
-        restore_stats = await restore_subscription_access(session, sub, commit=False)
+        restore_stats = await restore_subscription_access(session, sub, commit=True)
         # Skip PG push when totals are zero (unlimited / unread) so renew
         # cannot clear live limits after a current_capacity grant.
         if (
@@ -707,38 +773,14 @@ async def renew_subscription(
             or int(sub.extra_users_purchased or 0)
         ):
             await sync_pg_capacity_from_sub(session, sub)
-        reset_ok = 0
-        reset_err = 0
-        if reset_user_traffic:
-            from app.services.billing_suspend import list_owned_user_ids
-            from app.services.pasarguard import get_pg
-
-            pg = get_pg()
-            for uid in await list_owned_user_ids(pg, sub.pg_username):
-                try:
-                    await pg.reset_user_by_id(uid)
-                    reset_ok += 1
-                except Exception:
-                    reset_err += 1
-                    logger.debug("renew reset user %s failed", uid, exc_info=True)
+        reset_ok, reset_err = (
+            await _reset_owned_traffic(sub.pg_username) if reset_user_traffic else (0, 0)
+        )
     except Exception as e:
-        if charge_wallet and payer is not None and amount > 0:
-            from app.services.wallet import credit_wallet
+        await rollback_quiet(session)
+        logger.exception("renew panel apply failed admin=%s", sub.pg_username)
+        raise RenewalPanelIncomplete() from e
 
-            await credit_wallet(
-                session,
-                payer,
-                amount,
-                reason=f"reseller_renew_refund:{sub.pg_username}:g{sub.renew_generation}",
-                commit=False,
-            )
-        await session.commit()
-        logger.exception("renew failed admin=%s", sub.pg_username)
-        if isinstance(e, ValueError) and str(e).strip():
-            raise ValueError(str(e)) from e
-        raise ValueError("تمدید ناموفق بود — در صورت کسر، مبلغ بازگردانده شد") from e
-
-    await session.commit()
     return {
         "amount": amount,
         "invoice": invoice,
@@ -747,6 +789,69 @@ async def renew_subscription(
         "reset_ok": reset_ok,
         "reset_err": reset_err,
     }
+
+
+CONCURRENT_CAPACITY_PURCHASE = "خرید دیگری برای همین ظرفیت هم‌زمان ثبت شد؛ صفحه را تازه کنید و دوباره تلاش کنید"
+
+
+async def _add_purchased_capacity(
+    session: AsyncSession, sub: PgAdminSubscription, *, add_gb: int, add_users: int
+) -> None:
+    """Add a pack to the subscription only if no other purchase changed it since it was read.
+
+    Two taps read the same totals; a plain read-modify-write would charge both and keep one.
+    """
+    old_gb = int(sub.extra_gb_purchased or 0)
+    old_users = int(sub.extra_users_purchased or 0)
+    claim = await session.execute(
+        update(PgAdminSubscription)
+        .where(
+            PgAdminSubscription.id == sub.id,
+            PgAdminSubscription.extra_gb_purchased == old_gb,
+            PgAdminSubscription.extra_users_purchased == old_users,
+        )
+        .values(extra_gb_purchased=old_gb + add_gb, extra_users_purchased=old_users + add_users)
+        .execution_options(synchronize_session=False)
+    )
+    if claim.rowcount != 1:
+        raise ValueError(CONCURRENT_CAPACITY_PURCHASE)
+    sub.extra_gb_purchased = old_gb + add_gb
+    sub.extra_users_purchased = old_users + add_users
+
+
+ADDON_OUTCOME_UNKNOWN = (
+    "خرید بسته ثبت و مبلغ کسر شد، ولی پاسخ پاسارگارد نرسید؛ ظرفیت با همگام‌سازی بعدی اعمال می‌شود. "
+    "دوباره خرید نکنید و اگر ظرفیت اعمال نشد به پشتیبانی خبر دهید."
+)
+
+
+async def _settle_failed_addon_purchase(
+    session: AsyncSession,
+    purchase: AsyncSessionTransaction,
+    sub: PgAdminSubscription,
+    payer: BotUser | None,
+    exc: Exception,
+    *,
+    panel_touched: bool,
+) -> None:
+    """Undo the whole purchase when the panel holds nothing; otherwise keep it for the next sync.
+
+    The capacity write sends absolute totals taken from the subscription, so a purchase kept after
+    an unanswered write is applied by any later sync and is never added twice. Always raises.
+    """
+    if panel_touched and not is_hard_panel_rejection(exc):
+        await purchase.commit()
+        await session.commit()
+        logger.error("reseller addon capacity write unanswered admin=%s", sub.pg_username, exc_info=True)
+        raise ValueError(ADDON_OUTCOME_UNKNOWN) from exc
+    await purchase.rollback()
+    await session.commit()
+    await session.refresh(sub)
+    if payer is not None:
+        await session.refresh(payer)
+    if isinstance(exc, ValueError) and str(exc).strip():
+        raise ValueError(str(exc)) from exc
+    raise ValueError("اعمال بسته در پاسارگارد ناموفق بود — مبلغی کسر نشد") from exc
 
 
 async def apply_addon_plan(
@@ -787,42 +892,33 @@ async def apply_addon_plan(
             raise ValueError("پرداخت‌کننده مشخص نیست")
         if price <= 0:
             raise ValueError("قیمت بسته نامعتبر است")
-        from app.services.wallet import debit_wallet
-
-        await debit_wallet(
-            session,
-            payer,
-            price,
-            reason=f"reseller_addon:{addon_plan.id}:{sub.pg_username}",
-            commit=False,
-        )
-
-    sub.extra_gb_purchased = int(sub.extra_gb_purchased or 0) + add_gb
-    sub.extra_users_purchased = int(sub.extra_users_purchased or 0) + add_users
+    # The debit and the capacity increase are undone together if the panel holds nothing.
+    purchase = await session.begin_nested()
+    panel_touched = False
     try:
+        if charge_wallet:
+            from app.services.wallet import debit_wallet
+
+            await debit_wallet(
+                session,
+                payer,
+                price,
+                reason=f"reseller_addon:{addon_plan.id}:{sub.pg_username}",
+                commit=False,
+            )
+        await _add_purchased_capacity(session, sub, add_gb=add_gb, add_users=add_users)
         await _assert_owner_capacity_budget(
             session,
             target_pg_username=sub.pg_username,
             next_total_gb=int(sub.base_gb or 0) + int(sub.extra_gb_purchased or 0),
             next_total_users=int(sub.base_users or 0) + int(sub.extra_users_purchased or 0),
         )
+        panel_touched = True
         await sync_pg_capacity_from_sub(session, sub)
     except Exception as e:
-        if charge_wallet and payer is not None and price > 0:
-            from app.services.wallet import credit_wallet
+        await _settle_failed_addon_purchase(session, purchase, sub, payer, e, panel_touched=panel_touched)
 
-            await credit_wallet(
-                session,
-                payer,
-                price,
-                reason=f"reseller_addon_refund:{addon_plan.id}:{sub.pg_username}",
-                commit=False,
-            )
-        await session.commit()
-        if isinstance(e, ValueError) and str(e).strip():
-            raise ValueError(str(e)) from e
-        raise ValueError("اعمال بسته در پاسارگارد ناموفق بود — مبلغ بازگردانده شد") from e
-
+    await purchase.commit()
     await session.commit()
     return {
         "amount": price,
@@ -915,7 +1011,9 @@ async def run_subscription_expiry_tick(session: AsyncSession) -> dict[str, int]:
             stats["skipped_payg"] += 1
             continue
         try:
-            await expire_subscription(session, sub, commit=False)
+            result = await expire_subscription(session, sub, commit=True)
+            if result.get("renewed"):
+                continue
             stats["expired"] += 1
             try:
                 await _notify_expired(session, sub)
