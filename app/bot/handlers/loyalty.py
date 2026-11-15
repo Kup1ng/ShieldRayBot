@@ -377,9 +377,9 @@ async def open_loyalty_rewards_message(
             type_label = REWARD_TYPE_LABELS.get(r.reward_type, r.reward_type)
             desc = (r.description or "").strip()
             lines.append(
-                f"• <b>{r.name}</b>\n"
+                f"• <b>{html.escape(r.name or '')}</b>\n"
                 f"  {type_label}: {r.reward_value} · هزینه: {r.points_cost} امتیاز"
-                + (f"\n  <i>{desc}</i>" if desc else "")
+                + (f"\n  <i>{html.escape(desc)}</i>" if desc else "")
             )
     body = format_message("🎁 جوایز", "\n".join(lines))
     redeem_kb = _rewards_redeem_keyboard(
@@ -754,7 +754,7 @@ async def open_admin_loyalty_rules(
             ev = EVENT_LABELS.get(r.event_key, r.event_key)
             mode = "به‌ازای گیگ" if r.amount_mode == "per_gb" else "ثابت"
             st = "فعال" if r.enabled else "خاموش"
-            lines.append(f"• <b>{r.name}</b>\n  {ev} · {mode}: {r.amount} · {st}")
+            lines.append(f"• <b>{html.escape(r.name or '')}</b>\n  {ev} · {mode}: {r.amount} · {st}")
         body = "\n".join(lines)
     await _staff_loyalty_answer(
         message,
@@ -800,7 +800,7 @@ async def open_admin_loyalty_rewards(
             tl = REWARD_TYPE_LABELS.get(r.reward_type, r.reward_type)
             st = "فعال" if r.enabled else "خاموش"
             lines.append(
-                f"• <b>{r.name}</b>\n  {tl}: {r.reward_value} · {r.points_cost} امتیاز · {st}"
+                f"• <b>{html.escape(r.name or '')}</b>\n  {tl}: {r.reward_value} · {r.points_cost} امتیاز · {st}"
             )
         body = "\n".join(lines)
     await _staff_loyalty_answer(
@@ -1092,9 +1092,9 @@ async def loyalty_rewards(callback: CallbackQuery, session: AsyncSession, db_use
             type_label = REWARD_TYPE_LABELS.get(r.reward_type, r.reward_type)
             desc = (r.description or "").strip()
             lines.append(
-                f"• <b>{r.name}</b>\n"
+                f"• <b>{html.escape(r.name or '')}</b>\n"
                 f"  {type_label}: {r.reward_value} · هزینه: {r.points_cost} امتیاز"
-                + (f"\n  <i>{desc}</i>" if desc else "")
+                + (f"\n  <i>{html.escape(desc)}</i>" if desc else "")
             )
     if callback.message:
         await safe_edit_text(

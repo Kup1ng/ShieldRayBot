@@ -4570,7 +4570,7 @@ async def adm_resapp_view(callback: CallbackQuery, session: AsyncSession, db_use
     text = (
         f"🤝 درخواست #{app.id}\n"
         f"وضعیت: <b>{status_fa.get(app.status, app.status)}</b>\n"
-        f"کاربر: {u.full_name or u.username or u.telegram_id if u else '—'}\n"
+        f"کاربر: {html.escape(str(u.full_name or u.username or u.telegram_id)) if u else '—'}\n"
         f"تلگرام: <code>{u.telegram_id if u else '—'}</code>\n"
         f"نوع: <b>{mode_label}</b>\n\n"
         f"{detail}"

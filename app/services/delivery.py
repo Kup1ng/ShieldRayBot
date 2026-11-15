@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Send clean delivery messages (+ optional subscription QR photo) to users."""
 
+import html
 import logging
 from typing import Any
 
@@ -69,7 +70,7 @@ def _plan_type_label(order) -> str:
 def _plan_delivery_line(order) -> str | None:
     """Always-shown plan type (+ name) line for delivery cards."""
     kind = _plan_type_label(order)
-    name = (_plan_name(order) or "").strip()
+    name = html.escape((_plan_name(order) or "").strip())
     if name and kind:
         return kv_line("💎", "نوع پلن", f"<b>{kind}</b> — {name}")
     if name:

@@ -7,6 +7,7 @@ Inline under messages: plans, services/user/reseller names, approve/reject, URL 
 
 from __future__ import annotations
 
+import html
 import logging
 from collections.abc import Callable
 
@@ -576,7 +577,7 @@ async def open_wallet_tx(message: Message, session: AsyncSession, db_user: BotUs
     for t in txs:
         sign = "+" if t.amount >= 0 else ""
         lines.append(
-            f"{sign}{format_toman(t.amount, get_settings().currency)} — {t.reason}"
+            f"{sign}{format_toman(t.amount, get_settings().currency)} — {html.escape(t.reason or '')}"
         )
     body = format_message("📜 تراکنش‌ها", "\n".join(lines))
     await present_inline_only(

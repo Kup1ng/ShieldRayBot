@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import logging
 
 from aiogram import F, Router
@@ -223,7 +224,7 @@ async def wallet_tx(callback: CallbackQuery, session: AsyncSession, db_user: Bot
         for t in txs:
             sign = "+" if t.amount >= 0 else ""
             lines.append(
-                f"{sign}{format_toman(t.amount, get_settings().currency)} — {t.reason}"
+                f"{sign}{format_toman(t.amount, get_settings().currency)} — {html.escape(t.reason or '')}"
             )
         body = "\n".join(lines)
     if callback.message:

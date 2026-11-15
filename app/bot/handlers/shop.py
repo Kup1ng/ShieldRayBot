@@ -1905,7 +1905,7 @@ async def pay_wallet_cb(
                         await callback.bot.send_message(
                             aid,
                             f"✅ نمایندگی فعال شد — سفارش #{order.id}\n"
-                            f"کاربر: {db_user.full_name or db_user.telegram_id}\n"
+                            f"کاربر: {html.escape(str(db_user.full_name or db_user.telegram_id))}\n"
                             f"(تأیید خودکار پس از پرداخت)",
                         )
                 else:
@@ -1913,7 +1913,7 @@ async def pay_wallet_cb(
                         await callback.bot.send_message(
                             aid,
                             f"🤝 درخواست نمایندگی پرداخت‌شده — سفارش #{order.id}\n"
-                            f"کاربر: {db_user.full_name or db_user.telegram_id}",
+                            f"کاربر: {html.escape(str(db_user.full_name or db_user.telegram_id))}",
                             reply_markup=kb.reseller_app_review(app_id) if app_id else None,
                         )
             except Exception:

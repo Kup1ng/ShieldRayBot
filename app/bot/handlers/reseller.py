@@ -894,8 +894,8 @@ async def present_reseller_tickets_list(
         lines = ["🎫 <b>تیکت‌های مشتریان</b>\n"]
         rows_kb: list[list[InlineKeyboardButton]] = []
         for t, u in rows:
-            who = u.full_name or u.username or str(u.telegram_id)
-            lines.append(f"#{t.id} — {t.subject[:40]} — {who}")
+            who = html.escape(u.full_name or u.username or str(u.telegram_id))
+            lines.append(f"#{t.id} — {html.escape((t.subject or '')[:40])} — {who}")
             rows_kb.append(
                 [
                     InlineKeyboardButton(
@@ -1065,7 +1065,7 @@ async def res_payments(
         return
     for payment, user in rows:
         caption = (
-            f"رسید #{payment.id}\nکاربر: {user.full_name}\n"
+            f"رسید #{payment.id}\nکاربر: {html.escape(user.full_name or str(user.telegram_id))}\n"
             f"مبلغ: {format_toman(payment.amount, get_settings().currency)}"
         )
         try:
@@ -1392,9 +1392,9 @@ async def resapply_buy(
             )
         notify = (
             f"🤝 درخواست نمایندگی جدید #{app.id}\n"
-            f"کاربر: {db_user.full_name or db_user.telegram_id}\n"
+            f"کاربر: {html.escape(str(db_user.full_name or db_user.telegram_id))}\n"
             f"نوع: {mode_label}\n"
-            f"پلن: {plan.name}"
+            f"پلن: {html.escape(plan.name or '')}"
         )
         for aid in get_settings().admin_ids:
             try:
