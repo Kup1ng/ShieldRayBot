@@ -137,8 +137,9 @@ from app.api.service_import_pages import register_service_import_pages
 from app.api.panel_connection import PanelConnectionMiddleware, finish_panel_authentication
 from app.api.login_guard import (
     client_ip as _client_ip,
-    login_blocked as _login_blocked,
+    login_attempt_slot,
     login_fail as _login_fail,
+    login_limit_keys,
     login_success as _login_success,
 )
 
@@ -2011,15 +2012,15 @@ def create_api_app(lifespan=None) -> FastAPI:
         username: str = Form(""),
         password: str = Form(""),
         session: AsyncSession = Depends(get_db),
+        admitted: bool = Depends(login_attempt_slot),
     ):
         if not is_setup_complete():
             return RedirectResponse("/", status_code=303)
 
         ip = _client_ip(request)
         typed_user = (username or "").strip()
-        # Rate-limit by IP and by username+IP so XFF spoofing (when TRUST_PROXY=1) is harder.
-        limit_keys = [ip, f"{ip}|{typed_user.lower()}"]
-        if any(_login_blocked(k) for k in limit_keys):
+        limit_keys = login_limit_keys(ip, typed_user)
+        if not admitted:
             return render(
                 request,
                 "login.html",

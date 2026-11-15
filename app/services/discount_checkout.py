@@ -55,18 +55,30 @@ def _recent_failures(user_id: int, now: float) -> list[float]:
     return stamps
 
 
-def assert_code_attempts_left(user_id: int) -> None:
-    if len(_recent_failures(user_id, time.monotonic())) >= CODE_FAILURE_LIMIT:
-        raise CodeError("تعداد تلاش‌های ناموفق زیاد بود؛ چند دقیقه بعد دوباره امتحان کنید")
+def claim_code_attempt(user_id: int) -> float:
+    """Count this code attempt as failed until it proves otherwise; refuse once the limit is met.
 
-
-def record_code_failure(user_id: int) -> None:
+    A code check awaits the database, so recording the failure only afterwards would let a burst
+    of parallel guesses all pass the limit first. Returns the stamp to release on success.
+    """
     now = time.monotonic()
     stamps = _recent_failures(user_id, now)
+    if len(stamps) >= CODE_FAILURE_LIMIT:
+        raise CodeError("تعداد تلاش‌های ناموفق زیاد بود؛ چند دقیقه بعد دوباره امتحان کنید")
     _failures[int(user_id)] = [*stamps, now]
     _failures.move_to_end(int(user_id))
     while len(_failures) > _TRACKED_CUSTOMERS:
         _failures.popitem(last=False)
+    return now
+
+
+def release_code_attempt(user_id: int, stamp: float) -> None:
+    """The attempt did not fail on its code: drop the failure counted in advance."""
+    stamps = _failures.get(int(user_id))
+    if stamps and stamp in stamps:
+        stamps.remove(stamp)
+        if not stamps:
+            _failures.pop(int(user_id), None)
 
 
 def clean_code(value: object) -> str:
@@ -125,17 +137,24 @@ async def start_discounted_checkout(
     shop's plans and records the order as that shop's.
     """
     clean = clean_code(code)
-    assert_code_attempts_left(user_id)
-    await _assert_open_checkout_room(session, user_id, shop_id)
-    order = await create_order(session, user_id=int(user_id), plan_id=int(plan_id), expected_price=expected_price)
+    stamp = claim_code_attempt(user_id)
+    try:
+        await _assert_open_checkout_room(session, user_id, shop_id)
+        order = await create_order(session, user_id=int(user_id), plan_id=int(plan_id), expected_price=expected_price)
+    except BaseException:
+        release_code_attempt(user_id, stamp)
+        raise
     order_id = int(order.id)
     try:
         order = await apply_discount_to_order(session, order, clean)
     except ValueError as exc:
-        record_code_failure(user_id)
         await rollback_quiet(session)
         await cancel_order(session, await session.get(Order, order_id), note="mini app discount code rejected")
         raise CodeError(str(exc) or "کد تخفیف نامعتبر است") from exc
+    except BaseException:
+        release_code_attempt(user_id, stamp)
+        raise
+    release_code_attempt(user_id, stamp)
     return _checkout(order)
 
 
@@ -178,17 +197,21 @@ async def redeem_wallet_code(session: AsyncSession, *, user: BotUser, code: obje
     """
     clean = clean_code(code)
     user_id = int(user.id)
-    assert_code_attempts_left(user_id)
+    stamp = claim_code_attempt(user_id)
     try:
         row, balance = await redeem_charge_code(session, user=user, code=clean)
         amount = int(row.amount or 0)
         await session.commit()
     except ValueError as exc:
         await rollback_quiet(session)
-        record_code_failure(user_id)
         raise CodeError(str(exc) or "کد نامعتبر است") from exc
     except OperationalError as exc:
         # SQLite refuses a second concurrent writer; nothing was credited, the customer may retry.
+        release_code_attempt(user_id, stamp)
         await rollback_quiet(session)
         raise CodeError("سرور مشغول است؛ چند ثانیه بعد دوباره تلاش کنید") from exc
+    except BaseException:
+        release_code_attempt(user_id, stamp)
+        raise
+    release_code_attempt(user_id, stamp)
     return amount, int(balance)

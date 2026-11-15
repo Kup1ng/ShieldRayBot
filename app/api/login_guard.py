@@ -14,9 +14,9 @@ import os
 import time
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Iterator
+from typing import AsyncIterator, Iterator
 
-from fastapi import Request
+from fastapi import Form, Request
 
 from app.config import DATA_DIR, get_settings
 
@@ -204,3 +204,48 @@ def login_success(ip: str) -> None:
         data.pop(ip, None)
         _sync_memory(data)
         _write_disk_unlocked(data)
+
+
+# Attempts admitted but not yet recorded as a success or failure. Password checks await
+# (bcrypt in a thread, database reads), so without counting these a burst of parallel
+# requests would all pass the failure check before the first failure is written.
+_IN_FLIGHT: dict[str, int] = {}
+
+
+def login_limit_keys(ip: str, username: str) -> list[str]:
+    """Rate-limit by IP and by username+IP so XFF spoofing (when TRUST_PROXY=1) is harder."""
+    return [ip, f"{ip}|{(username or '').strip().lower()}"]
+
+
+def login_begin(keys: list[str]) -> bool:
+    """Admit one login attempt for ``keys``; False when failures plus open attempts reach the cap."""
+    with _lock_file():
+        data = _merge_maps(_read_disk_unlocked(), dict(_LOGIN_FAILURES))
+        _sync_memory(data)
+        for key in keys:
+            if len(_prune_stamps(data.get(key, []))) + _IN_FLIGHT.get(key, 0) >= _LOGIN_MAX_FAILURES:
+                return False
+        for key in keys:
+            _IN_FLIGHT[key] = _IN_FLIGHT.get(key, 0) + 1
+        return True
+
+
+def login_end(keys: list[str]) -> None:
+    """Close an admitted attempt; its outcome was already recorded by the login route."""
+    for key in keys:
+        left = _IN_FLIGHT.get(key, 0) - 1
+        if left > 0:
+            _IN_FLIGHT[key] = left
+        else:
+            _IN_FLIGHT.pop(key, None)
+
+
+async def login_attempt_slot(request: Request, username: str = Form("")) -> AsyncIterator[bool]:
+    """FastAPI dependency: True when this login attempt is admitted, held until the route ends."""
+    keys = login_limit_keys(client_ip(request), username)
+    admitted = login_begin(keys)
+    try:
+        yield admitted
+    finally:
+        if admitted:
+            login_end(keys)

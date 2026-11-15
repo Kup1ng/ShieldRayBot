@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+from collections.abc import Callable
 from urllib.parse import quote
 
 from fastapi import Depends, Form, Request
@@ -9,6 +11,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.login_guard import login_begin, login_end, login_fail, login_success
 from app.config import get_settings
 from app.db.models import ResellerProfile
 from app.services.setup_wizard import update_env_keys
@@ -47,6 +50,25 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
 
     def _err(msg: str) -> RedirectResponse:
         return RedirectResponse("/security?err=" + quote(msg), status_code=303)
+
+    async def _password_ok(staff: dict, check: Callable[[], bool]) -> bool:
+        """Check the signed-in account's current password like the login form does.
+
+        bcrypt runs in a thread, and wrong guesses count toward the same limit as logins, so a
+        stolen session cannot be used to guess the password and take the account for good.
+        """
+        key = f"current-password|{staff.get('role')}|{staff.get('bot_user_id') or staff.get('username')}"
+        if not login_begin([key]):
+            return False
+        try:
+            ok = await asyncio.to_thread(check)
+        finally:
+            login_end([key])
+        if ok:
+            login_success(key)
+        else:
+            login_fail(key)
+        return ok
 
     @app.get("/security", response_class=HTMLResponse)
     async def security_page(
@@ -94,7 +116,9 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
             admin = load_web_admin()
             stored_user = (admin.get("username") or "").strip()
             session_user = (staff.get("username") or "").strip()
-            if old_u not in {stored_user, session_user} or not verify_web_admin(stored_user, cur_pass):
+            if old_u not in {stored_user, session_user} or not await _password_ok(
+                staff, lambda: verify_web_admin(stored_user, cur_pass)
+            ):
                 return _err("یوزر یا رمز قدیم اشتباه است")
 
             cleaned, uerr = validate_web_username(new_u, lowercase=False)
@@ -179,7 +203,7 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
         if (
             not profile
             or old_u.lower() != str(current_u).lower()
-            or not verify_password_hash(cur_pass, profile.web_password_hash)
+            or not await _password_ok(staff, lambda: verify_password_hash(cur_pass, profile.web_password_hash))
         ):
             return _err("یوزر یا رمز قدیم اشتباه است")
 
@@ -238,9 +262,13 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
         # preserve previous username-only behavior.
         role = staff.get("role")
         if role == "admin":
-            if not verify_web_admin(load_web_admin().get("username") or "", current_password):
-                if not verify_web_admin(staff.get("username") or "", current_password):
-                    return _err("رمز فعلی اشتباه است")
+            def _owner_password_ok() -> bool:
+                return verify_web_admin(load_web_admin().get("username") or "", current_password) or verify_web_admin(
+                    staff.get("username") or "", current_password
+                )
+
+            if not await _password_ok(staff, _owner_password_ok):
+                return _err("رمز فعلی اشتباه است")
             cleaned, err = validate_web_username(new_username, lowercase=False)
             if err:
                 return _err(err)
@@ -288,7 +316,9 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
             select(ResellerProfile).where(ResellerProfile.user_id == rid)
         )
         profile = result.scalar_one_or_none()
-        if not profile or not verify_password_hash(current_password, profile.web_password_hash):
+        if not profile or not await _password_ok(
+            staff, lambda: verify_password_hash(current_password, profile.web_password_hash)
+        ):
             return _err("رمز فعلی اشتباه است")
         cleaned, err = validate_web_username(new_username, lowercase=True)
         if err:
@@ -340,7 +370,9 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
 
         role = staff.get("role")
         if role == "admin":
-            if not verify_web_admin(load_web_admin().get("username") or "", current_password):
+            if not await _password_ok(
+                staff, lambda: verify_web_admin(load_web_admin().get("username") or "", current_password)
+            ):
                 return _err("رمز فعلی اشتباه است")
             try:
                 change_web_admin_password(new_password)
@@ -365,7 +397,9 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
             select(ResellerProfile).where(ResellerProfile.user_id == rid)
         )
         profile = result.scalar_one_or_none()
-        if not profile or not verify_password_hash(current_password, profile.web_password_hash):
+        if not profile or not await _password_ok(
+            staff, lambda: verify_password_hash(current_password, profile.web_password_hash)
+        ):
             return _err("رمز فعلی اشتباه است")
         try:
             from app.services.resellers import apply_reseller_panel_password
