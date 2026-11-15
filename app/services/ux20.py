@@ -33,6 +33,7 @@ from app.services.connection_guides import serialize_submitted_guides
 from app.services.demo_users import non_demo_customer
 from app.services.pasarguard import is_pg_permission_denied
 from app.services.pg_read_resilience import PG_READ_UNAVAILABLE_MESSAGE, PgReadUnavailable
+from app.services.secret_box import reveal_bot_token
 from app.services.service_scope import shop_services_clause
 from app.services.staff_audit import StaffActor
 from app.services.ticket_scope import ticket_shop_clause
@@ -1035,7 +1036,8 @@ async def build_magic_links_context(session: AsyncSession, staff: dict) -> dict[
         ).scalar_one_or_none()
         bot_username = (profile.bot_username if profile else None) or None
         if not bot_username and profile and profile.bot_token:
-            st = await check_bot_connection(profile.bot_token)
+            # Stored sealed; Telegram needs the plain token.
+            st = await check_bot_connection(reveal_bot_token(profile.bot_token) or "")
             bot_username = st.get("username")
     else:
         st = await check_bot_connection(get_settings().bot_token)

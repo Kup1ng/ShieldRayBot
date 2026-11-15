@@ -418,7 +418,8 @@ def update_env_keys(updates: dict[str, str | int | None]) -> Path:
         line = f'{key}="{_escape_env_value(value)}"'
         pattern = re.compile(rf"^{re.escape(key)}=.*$", re.M)
         if pattern.search(src):
-            return pattern.sub(line, src)
+            # A function replacement: a template would read the value's backslashes as escapes.
+            return pattern.sub(lambda _match: line, src)
         if src and not src.endswith("\n"):
             src += "\n"
         return src + line + "\n"

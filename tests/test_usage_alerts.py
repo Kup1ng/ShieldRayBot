@@ -214,6 +214,42 @@ class AlertJobTests(AlertCase):
             self.assertNotIn(TOPUP_CALLBACK, buttons(call.kwargs["reply_markup"]))
             self.assertNotIn("کیف پول برای تمدید", call.args[1])
 
+    async def run_job_with(self, info_for):
+        async with self.Session() as session:
+            await set_setting(session, "user_alert_low_enabled", "1")
+        clear_settings_cache()
+        pg = SimpleNamespace(subscription_info=AsyncMock(side_effect=info_for))
+        bot = AsyncMock()
+        with patch.object(jobs, "SessionLocal", self.Session), patch.object(jobs, "get_pg", return_value=pg):
+            await jobs.check_expiring_services(bot)
+        return bot, pg
+
+    async def test_a_cancelled_service_is_not_looked_up_on_the_panel(self):
+        await self.session.execute(UserService.__table__.update().where(UserService.id == 10).values(is_cancelled=True))
+        await self.session.commit()
+        _bot, pg = await self.run_job_with(lambda token: self.info(traffic_low=True))
+        self.assertNotIn("tokplat", [c.args[0] for c in pg.subscription_info.await_args_list])
+
+    async def test_one_bad_panel_answer_does_not_stop_the_other_alerts(self):
+        self.session.add(BotUser(id=6, telegram_id=1006, referral_code="c6"))
+        await self.session.flush()
+        self.session.add(UserService(
+            id=9, bot_user_id=6, plan_id=1, pg_user_id=499, pg_username="bad", subscription_token="tokbad",
+            created_at=self.now - timedelta(days=29),
+        ))
+        await self.session.commit()
+
+        def info_for(token):
+            info = self.info(traffic_low=True)
+            if token == "tokbad":
+                info["used_traffic"] = "not-a-number"
+            return info
+
+        bot, _pg = await self.run_job_with(info_for)
+        self.assertIn(1001, {c.args[0] for c in bot.send_message.await_args_list})
+        async with self.Session() as session:
+            self.assertTrue((await session.get(UserService, 10)).notified_traffic)
+
     async def test_a_shop_customer_is_not_alerted_from_the_platform_bot(self):
         bot = await self.run_job()
         self.assertEqual({c.args[0] for c in bot.send_message.await_args_list}, {1001})

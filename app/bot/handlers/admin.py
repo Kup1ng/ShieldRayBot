@@ -61,7 +61,7 @@ from app.bot.handlers.subscription_lookup import (
 )
 from app.bot.nav_inline import with_inline_back
 from app.bot.nav_input import finish_text_step, form_origin
-from app.bot.tg_utils import parse_bot_float, parse_bot_int, safe_edit_text
+from app.bot.tg_utils import parse_bot_float, parse_bot_int, safe_edit_text, send_with_flood_wait
 from app.services import bot_feedback_texts as feedback
 
 logger = logging.getLogger(__name__)
@@ -944,17 +944,17 @@ async def adm_payments(callback: CallbackQuery, session: AsyncSession, db_user: 
         caption = f"پرداخت #{p.id} — {format_toman(p.amount, get_settings().currency)}"
         try:
             with keep_sent():  # a notice or review item, never a temporary panel
-                await callback.bot.send_photo(
+                await send_with_flood_wait(lambda p=p, c=caption: callback.bot.send_photo(
                     db_user.telegram_id,
                     photo=p.receipt_file_id,
-                    caption=caption,
+                    caption=c,
                     reply_markup=kb.payment_review(p.id),
-                )
+                ))
         except Exception:
             with keep_sent():  # a notice or review item, never a temporary panel
-                await callback.bot.send_message(
-                    db_user.telegram_id, caption, reply_markup=kb.payment_review(p.id)
-                )
+                await send_with_flood_wait(lambda p=p, c=caption: callback.bot.send_message(
+                    db_user.telegram_id, c, reply_markup=kb.payment_review(p.id)
+                ))
     if callback.message:
         await callback.message.edit_text("رسیدها ارسال شد.", reply_markup=back)
 

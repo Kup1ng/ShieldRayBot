@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,12 +23,53 @@ from app.db.models import (
     ResellerProfile,
     UserService,
 )
+from app.services.catalog_pricing import MAX_PRICE
 from app.services.custom_plans import exclude_custom_order_plans
+from app.services.numbers import parse_float, parse_int
 from app.services.pasarguard import as_list, get_pg
 from app.services.pg_quota import PgQuotaError, assert_user_plan_within_limits
 from app.services.shop_scope import ShopScopeError, is_platform_admin, shop_owner_id
 
 log = logging.getLogger(__name__)
+
+# Bounds for plan numbers typed by staff; a value outside them breaks pricing or delivery later.
+MAX_PLAN_DAYS = 3650
+MAX_PLAN_GB = 100_000.0
+PLAN_PRICE_INVALID = f"قیمت باید عددی بین ۰ و {MAX_PRICE:,} باشد"
+PLAN_DAYS_INVALID = f"مدت باید بین ۱ و {MAX_PLAN_DAYS} روز باشد"
+PLAN_GB_INVALID = f"حجم باید عددی تا {int(MAX_PLAN_GB):,} گیگ باشد (۰ = نامحدود)"
+
+
+def parse_plan_price(text: str | None) -> int:
+    """A plan price in the configured currency unit, as typed by staff."""
+    try:
+        price = parse_int(text)
+    except (ValueError, OverflowError):
+        raise ValueError(PLAN_PRICE_INVALID) from None
+    if not 0 <= price <= MAX_PRICE:
+        raise ValueError(PLAN_PRICE_INVALID)
+    return price
+
+
+def parse_plan_days(text: str | None) -> int:
+    try:
+        days = parse_int(text)
+    except (ValueError, OverflowError):
+        raise ValueError(PLAN_DAYS_INVALID) from None
+    if not 1 <= days <= MAX_PLAN_DAYS:
+        raise ValueError(PLAN_DAYS_INVALID)
+    return days
+
+
+def parse_plan_gb(text: str | None) -> float | None:
+    """Plan volume in GB; None (unlimited) for zero or less. NaN and infinity are refused."""
+    try:
+        gb = parse_float(text)
+    except (ValueError, OverflowError):
+        raise ValueError(PLAN_GB_INVALID) from None
+    if not math.isfinite(gb) or gb > MAX_PLAN_GB:
+        raise ValueError(PLAN_GB_INVALID)
+    return None if gb <= 0 else gb
 
 
 def parse_user_plan_duration_days(raw: Any) -> int:

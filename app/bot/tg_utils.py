@@ -1,10 +1,12 @@
 """Small Telegram helpers — avoid noisy errors after a successful reply."""
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 
-from aiogram.exceptions import TelegramBadRequest
+from aiogram.exceptions import TelegramBadRequest, TelegramRetryAfter
 from aiogram.types import InlineKeyboardMarkup, Message, ReplyKeyboardMarkup
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.bot.chat_cleanup import replace_home
@@ -27,6 +29,19 @@ def parse_bot_int(text: str | None, *, default: int | None = None) -> int:
 
 def parse_bot_float(text: str | None, *, default: float | None = None) -> float:
     return parse_float(text, default=default)
+
+
+# Longest flood wait a handler sits through for one message before giving up on it.
+RETRY_AFTER_CAP_SECONDS = 30.0
+
+
+async def send_with_flood_wait(send: Callable[[], Awaitable[Any]]) -> Any:
+    """Send, and once more after Telegram's flood wait, so a burst into one chat loses nothing."""
+    try:
+        return await send()
+    except TelegramRetryAfter as exc:
+        await asyncio.sleep(min(float(exc.retry_after), RETRY_AFTER_CAP_SECONDS))
+        return await send()
 
 
 def _is_not_modified(exc: BaseException) -> bool:

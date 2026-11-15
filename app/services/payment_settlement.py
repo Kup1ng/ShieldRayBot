@@ -1570,18 +1570,23 @@ async def _owned_psp_settlement(
 # Each «بررسی پرداخت» tap may call the gateway; one check per settlement per window is enough.
 PSP_CHECK_THROTTLE_SECONDS = 10.0
 _PSP_CHECK_RECENT_LIMIT = 1000
-_recent_psp_checks: dict[int, float] = {}
+_recent_psp_checks: dict[tuple[int, int], float] = {}
 
 
-def claim_psp_check_slot(settlement_id: int) -> bool:
-    """False when this settlement was checked within the throttle window (bot and Mini App share it)."""
+def claim_psp_check_slot(settlement_id: int, *, user_id: int) -> bool:
+    """False when this customer checked this settlement within the throttle window.
+
+    Keyed by the customer too: a tap with someone else's settlement id is refused by the
+    ownership check later and must not use up the payer's own slot. Bot and Mini App share it.
+    """
     now = time.monotonic()
-    last = _recent_psp_checks.get(int(settlement_id))
+    key = (int(user_id), int(settlement_id))
+    last = _recent_psp_checks.get(key)
     if last is not None and now - last < PSP_CHECK_THROTTLE_SECONDS:
         return False
     if len(_recent_psp_checks) >= _PSP_CHECK_RECENT_LIMIT:
         _recent_psp_checks.pop(next(iter(_recent_psp_checks)))
-    _recent_psp_checks[int(settlement_id)] = now
+    _recent_psp_checks[key] = now
     return True
 
 

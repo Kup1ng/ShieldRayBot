@@ -123,7 +123,7 @@ def register_miniapp_topup(app: FastAPI, *, get_db) -> None:
         user = await load_mini_user(session, request)
         await _require_commerce_ready(session, user)
         settlement_id = _valid_id((await _json_object(request)).get("settlement_id"))
-        if not claim_psp_check_slot(settlement_id):
+        if not claim_psp_check_slot(settlement_id, user_id=int(user.id)):
             raise HTTPException(429, "چند ثانیه بعد دوباره بزنید")
         try:
             outcome = await check_psp_payment(

@@ -121,6 +121,8 @@ async def check_expiring_services(bot: Bot) -> None:
                 select(UserService)
                 .where(
                     UserService.subscription_token.is_not(None),
+                    # A cancelled service never gets an alert; asking the panel about it is waste.
+                    UserService.is_cancelled.is_(False),
                     or_(
                         UserService.notified_expire.is_(False),
                         UserService.notified_traffic.is_(False),
@@ -195,79 +197,83 @@ async def check_expiring_services(bot: Bot) -> None:
             for (svc, user, _ui, traffic_pct, time_pct, shop_rid), info in zip(eligible, infos):
                 if not info:
                     continue
-                from app.services.bot_user_admin import sync_service_quota_cache
-                from app.services.service_live_info import validate_service_info
+                # One bad panel answer must not stop the batch or lose the alerts already sent.
+                try:
+                    from app.services.bot_user_admin import sync_service_quota_cache
+                    from app.services.service_live_info import validate_service_info
 
-                cached_info = validate_service_info(info)
-                if cached_info.get("status") and "expire" in cached_info:
-                    sync_service_quota_cache(svc, info=cached_info)
-                send_bot = _resolve_send_bot(bot, shop_rid, profile_by_user)
-                if send_bot is None:
-                    continue  # the shop's own bot is not running: never alert its customers from the platform bot
-                extras = extras_by_shop[shop_rid]
+                    cached_info = validate_service_info(info)
+                    if cached_info.get("status") and "expire" in cached_info:
+                        sync_service_quota_cache(svc, info=cached_info)
+                    send_bot = _resolve_send_bot(bot, shop_rid, profile_by_user)
+                    if send_bot is None:
+                        continue  # the shop's own bot is not running: never alert its customers from the platform bot
+                    extras = extras_by_shop[shop_rid]
 
-                # --- remaining TIME percent ---
-                if not svc.notified_expire:
-                    expire = parse_expire(info.get("expire"))
-                    created = svc.created_at
-                    if created and created.tzinfo is None:
-                        created = created.replace(tzinfo=timezone.utc)
-                    if expire and created and expire > created:
-                        total = (expire - created).total_seconds()
-                        remaining = (expire - now).total_seconds()
-                        if total > 0 and remaining >= 0:
-                            rem_pct = (remaining / total) * 100
-                            if rem_pct <= time_pct:
-                                try:
-                                    one_tap = on(_ui.get("one_tap_renew_enabled", "1"))
-                                    markup = time_alert_markup(_ui, svc.id, extras)
-                                    alert = await send_bot.send_message(
-                                        user.telegram_id,
-                                        f"⏰ زمان سرویس <b>{svc.pg_username}</b> به کمتر از "
-                                        f"<b>{time_pct}٪</b> رسیده است.\n"
-                                        "از بخش سرویس‌ها تمدید کنید."
-                                        + ("\nیا دکمه زیر را بزنید:" if one_tap else "")
-                                        + extras.note_for(svc.id),
-                                        parse_mode="HTML",
-                                        reply_markup=markup,
-                                    )
-                                    svc.notified_expire = True
-                                    sent_alerts.append((send_bot, usage_alert_key(ALERT_TIME, svc.id), alert))
-                                    if one_tap:
-                                        svc.renew_nudge_sent_at = now
-                                except Exception:
-                                    logger.debug(
-                                        "expire alert send failed tg=%s", user.telegram_id, exc_info=True
-                                    )
+                    # --- remaining TIME percent ---
+                    if not svc.notified_expire:
+                        expire = parse_expire(info.get("expire"))
+                        created = svc.created_at
+                        if created and created.tzinfo is None:
+                            created = created.replace(tzinfo=timezone.utc)
+                        if expire and created and expire > created:
+                            total = (expire - created).total_seconds()
+                            remaining = (expire - now).total_seconds()
+                            if total > 0 and remaining >= 0:
+                                rem_pct = (remaining / total) * 100
+                                if rem_pct <= time_pct:
+                                    try:
+                                        one_tap = on(_ui.get("one_tap_renew_enabled", "1"))
+                                        markup = time_alert_markup(_ui, svc.id, extras)
+                                        alert = await send_bot.send_message(
+                                            user.telegram_id,
+                                            f"⏰ زمان سرویس <b>{svc.pg_username}</b> به کمتر از "
+                                            f"<b>{time_pct}٪</b> رسیده است.\n"
+                                            "از بخش سرویس‌ها تمدید کنید."
+                                            + ("\nیا دکمه زیر را بزنید:" if one_tap else "")
+                                            + extras.note_for(svc.id),
+                                            parse_mode="HTML",
+                                            reply_markup=markup,
+                                        )
+                                        svc.notified_expire = True
+                                        sent_alerts.append((send_bot, usage_alert_key(ALERT_TIME, svc.id), alert))
+                                        if one_tap:
+                                            svc.renew_nudge_sent_at = now
+                                    except Exception:
+                                        logger.debug(
+                                            "expire alert send failed tg=%s", user.telegram_id, exc_info=True
+                                        )
 
-                # --- remaining TRAFFIC percent ---
-                if not svc.notified_traffic:
-                    used = float(info.get("used_traffic") or 0)
-                    limit = info.get("data_limit")
-                    if limit:
-                        try:
-                            limit_f = float(limit)
-                        except Exception:
-                            limit_f = 0
-                        if limit_f > 0:
-                            rem_pct = max(0.0, (1.0 - (used / limit_f)) * 100)
-                            if rem_pct <= traffic_pct:
-                                try:
-                                    alert = await send_bot.send_message(
-                                        user.telegram_id,
-                                        f"📉 حجم باقی‌مانده سرویس <b>{svc.pg_username}</b> کمتر از "
-                                        f"<b>{traffic_pct}٪</b> است "
-                                        f"({format_bytes_ratio(used, limit_f, joiner=' از ')})."
-                                        + extras.note_for(svc.id),
-                                        parse_mode="HTML",
-                                        reply_markup=traffic_alert_markup(_ui, svc.id, extras),
-                                    )
-                                    svc.notified_traffic = True
-                                    sent_alerts.append((send_bot, usage_alert_key(ALERT_TRAFFIC, svc.id), alert))
-                                except Exception:
-                                    logger.debug(
-                                        "traffic alert send failed tg=%s", user.telegram_id, exc_info=True
-                                    )
+                    # --- remaining TRAFFIC percent ---
+                    if not svc.notified_traffic:
+                        used = float(info.get("used_traffic") or 0)
+                        limit = info.get("data_limit")
+                        if limit:
+                            try:
+                                limit_f = float(limit)
+                            except Exception:
+                                limit_f = 0
+                            if limit_f > 0:
+                                rem_pct = max(0.0, (1.0 - (used / limit_f)) * 100)
+                                if rem_pct <= traffic_pct:
+                                    try:
+                                        alert = await send_bot.send_message(
+                                            user.telegram_id,
+                                            f"📉 حجم باقی‌مانده سرویس <b>{svc.pg_username}</b> کمتر از "
+                                            f"<b>{traffic_pct}٪</b> است "
+                                            f"({format_bytes_ratio(used, limit_f, joiner=' از ')})."
+                                            + extras.note_for(svc.id),
+                                            parse_mode="HTML",
+                                            reply_markup=traffic_alert_markup(_ui, svc.id, extras),
+                                        )
+                                        svc.notified_traffic = True
+                                        sent_alerts.append((send_bot, usage_alert_key(ALERT_TRAFFIC, svc.id), alert))
+                                    except Exception:
+                                        logger.debug(
+                                            "traffic alert send failed tg=%s", user.telegram_id, exc_info=True
+                                        )
+                except Exception:
+                    logger.warning("usage alert failed service=%s", svc.id, exc_info=True)
 
             await session.commit()
             await replace_previous_alerts(session, sent_alerts)

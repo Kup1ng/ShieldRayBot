@@ -16,6 +16,9 @@ from app.db.models import BotUser, Plan, ResellerProfile
 from app.services.plans_catalog import (
     groups_allowed_for_staff,
     load_pg_plan_options,
+    parse_plan_days,
+    parse_plan_gb,
+    parse_plan_price,
     template_allowed_for_staff,
 )
 from app.services.resellers import has_bot_perm
@@ -427,9 +430,9 @@ async def res_plan_price(
         )
         return
     try:
-        price = int((message.text or "").replace(",", "").replace("٬", ""))
-    except ValueError:
-        await message.answer(feedback.ENTER_ONE_VALID_NUMBER)
+        price = parse_plan_price(message.text)
+    except ValueError as exc:
+        await message.answer(str(exc))
         return
     await state.update_data(price=price)
     from app.bot.nav_input import ask_text
@@ -470,9 +473,9 @@ async def res_plan_days(
         )
         return
     try:
-        days = max(1, int(message.text or "30"))
-    except ValueError:
-        await message.answer(feedback.ENTER_ONE_VALID_NUMBER)
+        days = parse_plan_days(message.text or "30")
+    except ValueError as exc:
+        await message.answer(str(exc))
         return
     await state.update_data(days=days)
     from app.bot.nav_input import ask_text
@@ -508,13 +511,11 @@ async def res_plan_gb(message: Message, state: FSMContext, session: AsyncSession
             message, state, session, db_user, is_reseller_bot=is_reseller_bot, reseller_owner_id=reseller_owner_id
         )
         return
-    raw = (message.text or "").strip().replace(",", ".")
     try:
-        gb_val = float(raw)
-    except ValueError:
-        await message.answer(feedback.ENTER_VALID_NUMBER_SHORT)
+        gb = parse_plan_gb(message.text)
+    except ValueError as exc:
+        await message.answer(str(exc))
         return
-    gb = None if gb_val <= 0 else gb_val
     await state.update_data(gb=gb)
     owner_id, profile = await _actor(session, db_user, is_reseller_bot=is_reseller_bot, reseller_owner_id=reseller_owner_id)
     if not owner_id or not profile:

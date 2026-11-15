@@ -49,7 +49,7 @@ from app.bot.handlers.cancellation_review import show_card as show_cancellation_
 from app.bot.handlers.reseller_package import change_button, renew_button
 from app.bot.handlers.subscription_lookup import ASK_CALLBACK
 from app.bot.reseller_hub_groups import back_callback_for
-from app.bot.tg_utils import safe_edit_text
+from app.bot.tg_utils import safe_edit_text, send_with_flood_wait
 from app.services.users import get_all_settings
 from app.services.redact import user_safe_error
 from app.services import bot_feedback_texts as feedback
@@ -1071,21 +1071,22 @@ async def res_payments(
         try:
             if payment.receipt_file_id:
                 with keep_sent():  # a notice or review item, never a temporary panel
-                    await callback.bot.send_photo(
+                    await send_with_flood_wait(lambda p=payment, c=caption: callback.bot.send_photo(
                         db_user.telegram_id,
-                        photo=payment.receipt_file_id,
-                        caption=caption,
-                        reply_markup=kb.payment_review(payment.id),
-                    )
+                        photo=p.receipt_file_id,
+                        caption=c,
+                        reply_markup=kb.payment_review(p.id),
+                    ))
             else:
                 with keep_sent():  # a notice or review item, never a temporary panel
-                    await callback.bot.send_message(
+                    await send_with_flood_wait(lambda p=payment, c=caption: callback.bot.send_message(
                         db_user.telegram_id,
-                        caption,
-                        reply_markup=kb.payment_review(payment.id),
-                    )
+                        c,
+                        reply_markup=kb.payment_review(p.id),
+                    ))
         except Exception:
-            logger.debug("res_payments: ignored failure", exc_info=True)
+            # Staff must know a receipt did not arrive; it stays pending for the next request.
+            logger.warning("res_payments: receipt %s not sent", payment.id, exc_info=True)
     if callback.message:
         await safe_edit_text(callback.message, "✅ رسیدهای در انتظار برایتان فرستاده شد. هر کدام را تأیید یا رد کنید.", reply_markup=_group_back("res_payments"))
 

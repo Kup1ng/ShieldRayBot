@@ -61,7 +61,7 @@ def psp_gateway_picker(
 @router.callback_query(F.data.regexp(rf"^{CHECK_PREFIX}\d+$"))
 async def psp_check_cb(callback: CallbackQuery, session: AsyncSession, db_user: BotUser) -> None:
     settlement_id = int((callback.data or "").removeprefix(CHECK_PREFIX))
-    if not claim_psp_check_slot(settlement_id):
+    if not claim_psp_check_slot(settlement_id, user_id=int(db_user.id)):
         await callback.answer("چند ثانیه بعد دوباره بزنید")
         return
     # Answer before the gateway call so Telegram does not expire the tap.
