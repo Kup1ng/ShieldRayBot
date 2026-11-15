@@ -18,7 +18,7 @@ from app.services.backup import (
     get_backup_path,
     prune_backups,
     resolve_stale_restore_status,
-    save_uploaded_backup,
+    save_uploaded_backup_stream,
     start_restore_async,
 )
 from app.services.backup_settings import KEEP_KEY, keep_count
@@ -162,7 +162,8 @@ def register_backup_pages(app, *, render, require_admin, get_db):
 
     @app.post("/backup/delete/{backup_id}")
     async def backup_delete(backup_id: str, staff: dict = Depends(require_admin)):
-        ok = delete_backup(backup_id)
+        # The backup lock is held for minutes by a running backup; wait for it off the event loop.
+        ok = await asyncio.to_thread(delete_backup, backup_id)
         if not ok:
             return RedirectResponse(
                 "/settings?tab=backup&err=" + quote("حذف بکاپ ممکن نشد"),
@@ -213,7 +214,8 @@ def register_backup_pages(app, *, render, require_admin, get_db):
         from app.db.session import engine
 
         await engine.dispose()
-        result = start_restore_async(
+        result = await asyncio.to_thread(
+            start_restore_async,
             path,
             restore_env=str(restore_env) in {"1", "on", "true", "yes"},
             safety_backup=True,
@@ -239,16 +241,10 @@ def register_backup_pages(app, *, render, require_admin, get_db):
         staff: dict = Depends(require_admin),
         file: UploadFile = File(...),
     ):
-        max_bytes = 500 * 1024 * 1024
-        raw = await file.read(max_bytes + 1)
-        if len(raw) > max_bytes:
-            return RedirectResponse(
-                "/settings?tab=backup&err=" + quote("حجم بکاپ بیش از ۵۰۰ مگابایت است"),
-                status_code=303,
-            )
+        # Copied to disk in chunks off the event loop; never read whole into memory.
         result = await asyncio.to_thread(
-            save_uploaded_backup,
-            raw,
+            save_uploaded_backup_stream,
+            file.file,
             filename=file.filename or "",
         )
         if not result.get("ok"):

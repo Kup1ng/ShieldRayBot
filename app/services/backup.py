@@ -25,8 +25,9 @@ import tempfile
 import threading
 import zipfile
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 from uuid import uuid4
 
 from app.config import DATA_DIR, ROOT_DIR, get_settings
@@ -256,6 +257,15 @@ def read_manifest(zip_path: Path) -> dict[str, Any] | None:
         return None
 
 
+def _member_sha256(zf: zipfile.ZipFile, name: str) -> str:
+    """Hash one archive member in chunks; a member may be up to the expanded-size limit."""
+    digest = hashlib.sha256()
+    with zf.open(name) as member:
+        for chunk in iter(lambda: member.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def validate_backup_archive(zip_path: Path) -> tuple[bool, str, dict[str, Any] | None]:
     if not zip_path.is_file():
         return False, "فایل بکاپ یافت نشد", None
@@ -263,8 +273,8 @@ def validate_backup_archive(zip_path: Path) -> tuple[bool, str, dict[str, Any] |
     max_uncompressed = 2 * 1024 * 1024 * 1024  # 2 GiB expanded
     try:
         with zipfile.ZipFile(zip_path, "r") as zf:
-            if zf.testzip() is not None:
-                return False, "آرشیو آسیب دیده است", None
+            # Declared counts and sizes first: testzip() decompresses every member, so a zip
+            # bomb must be refused before it is read.
             infos = zf.infolist()
             if len(infos) > max_members:
                 return False, "تعداد فایل‌های بکاپ بیش از حد مجاز است", None
@@ -276,6 +286,8 @@ def validate_backup_archive(zip_path: Path) -> tuple[bool, str, dict[str, Any] |
                 total_uncompressed += max(0, int(info.file_size or 0))
                 if total_uncompressed > max_uncompressed:
                     return False, "حجم uncompressed بکاپ بیش از حد مجاز است", None
+            if zf.testzip() is not None:
+                return False, "آرشیو آسیب دیده است", None
             names = set(zf.namelist())
             if MANIFEST_NAME not in names:
                 return False, "manifest.json موجود نیست", None
@@ -310,7 +322,7 @@ def validate_backup_archive(zip_path: Path) -> tuple[bool, str, dict[str, Any] |
                         continue
                     if rel not in names:
                         return False, f"فایل اعلام‌شده در بکاپ نیست: {rel}", None
-                    digest = hashlib.sha256(zf.read(rel)).hexdigest()
+                    digest = _member_sha256(zf, rel)
                     if digest != expect:
                         return False, f"هش فایل بکاپ نامعتبر است: {rel}", None
             return True, "ok", manifest
@@ -784,6 +796,20 @@ def _do_restore_thread(
         _finish_restore_error(e)
 
 
+def _drop_stale_sqlite_journal(db_path: Path) -> None:
+    """Remove the WAL and shared-memory files of the database that was just replaced.
+
+    They belong to the old file; a new connection would replay the old WAL into the restored
+    database. Connections still open keep their unlinked copies until the restart.
+    """
+    for suffix in ("-wal", "-shm"):
+        stale = db_path.with_name(db_path.name + suffix)
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            log.warning("restore: could not remove %s", stale, exc_info=True)
+
+
 def start_restore_async(
     zip_path: Path,
     *,
@@ -990,6 +1016,7 @@ def restore_backup(
                     tmp_db = live_db.with_suffix(".db.restoring")
                     shutil.copy2(extracted_db, tmp_db)
                     os.replace(tmp_db, live_db)
+                    _drop_stale_sqlite_journal(live_db)
                     try:
                         live_db.chmod(0o600)
                     except OSError:
@@ -1105,18 +1132,35 @@ def restore_backup(
             return {"ok": False, "error": message, "safety_id": safety_id}
 
 
-def save_uploaded_backup(content: bytes, *, filename: str = "") -> dict[str, Any]:
-    """Store an uploaded zip into backups dir after validation."""
-    if not content or len(content) < 64:
-        return {"ok": False, "error": "فایل خالی یا خیلی کوچک است"}
-    if len(content) > 500 * 1024 * 1024:
-        return {"ok": False, "error": "حجم بکاپ بیش از حد مجاز است (۵۰۰ مگابایت)"}
+MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+UPLOAD_TOO_LARGE = "حجم بکاپ بیش از حد مجاز است (۵۰۰ مگابایت)"
+UPLOAD_TOO_SMALL = "فایل خالی یا خیلی کوچک است"
 
+
+def save_uploaded_backup(content: bytes, *, filename: str = "") -> dict[str, Any]:
+    """Store an uploaded zip held in memory; see ``save_uploaded_backup_stream``."""
+    return save_uploaded_backup_stream(BytesIO(content), filename=filename)
+
+
+def save_uploaded_backup_stream(source: BinaryIO, *, filename: str = "") -> dict[str, Any]:
+    """Copy an uploaded zip into the backups dir in chunks, then validate it.
+
+    The upload is never held in memory whole; a file over the limit is refused while copying.
+    """
     ensure_backup_dir()
     stamp = _utcnow_stamp()
     backup_id = f"upload-{stamp}-{uuid4().hex[:8]}"
     dest = BACKUP_DIR / f"{BACKUP_PREFIX}{backup_id}.zip"
-    dest.write_bytes(content)
+    written = 0
+    with dest.open("wb") as out:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            written += len(chunk)
+            if written > MAX_UPLOAD_BYTES:
+                break
+            out.write(chunk)
+    if written > MAX_UPLOAD_BYTES or written < 64:
+        dest.unlink(missing_ok=True)
+        return {"ok": False, "error": UPLOAD_TOO_LARGE if written > MAX_UPLOAD_BYTES else UPLOAD_TOO_SMALL}
 
     ok, err, manifest = validate_backup_archive(dest)
     if not ok:
