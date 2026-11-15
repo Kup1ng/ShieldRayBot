@@ -213,6 +213,7 @@ class PayWithWalletRefundPaymentTests(unittest.IsolatedAsyncioTestCase):
         order.note = None
         order.service_id = None
         order.plan_id = None
+        order.service_mutation_pending = False
 
         payment_holder: dict = {}
 

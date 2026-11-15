@@ -7,7 +7,7 @@ import secrets
 import string
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import select, update
@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.services.custom_plans import discard_unsold_custom_plan
+from app.services.db_safe import rollback_quiet
 from app.services.funnel_events import STEP_DELIVERED, STEP_RECEIPT, record_order_funnel
 from app.services.stale_order_cleanup import (
     StaleOrderPolicy,
@@ -43,8 +44,10 @@ from app.db.models import (
     WalletTransaction,
 )
 from app.services.open_psp_checkouts import open_psp_checkouts, reusable_psp_payment
-from app.services.pasarguard import extract_sub_token, get_pg, parse_group_ids, user_subscription_url
+from app.services.pasarguard import PasarGuardError, extract_sub_token, get_pg, parse_group_ids, user_subscription_url
 from app.services.purchase_contact import CONTACT_REQUIRED_MESSAGE, purchase_contact_needed, require_purchase_contact
+from app.services.service_addons import AddonPendingReview
+from app.services.service_renewals import RenewalPendingReview
 from app.services.trial_guard import assert_trial_account_age
 from app.services.shop_membership import ensure_member
 from app.services.provision_gate import (
@@ -86,7 +89,9 @@ def is_addon_order_note(note: str | None) -> bool:
     return (note or "").strip().startswith("svc_addon:")
 
 
-async def fulfill_paid_order(session: AsyncSession, order: Order) -> Order:
+async def fulfill_paid_order(
+    session: AsyncSession, order: Order, *, attempt: DeliveryAttempt | None = None
+) -> Order:
     """Route a PAID order to renew / addon / reseller_app / new-mint delivery.
 
     Callers that previously used ``deliver_order`` for PAID recovery must use
@@ -114,7 +119,7 @@ async def fulfill_paid_order(session: AsyncSession, order: Order) -> Order:
         from app.services.service_addons import apply_service_addon
 
         return await apply_service_addon(session, order)
-    return await deliver_order(session, order)
+    return await deliver_order(session, order, attempt=attempt)
 
 
 async def _maybe_pay_referral_bonus(session: AsyncSession, order: Order) -> None:
@@ -931,13 +936,44 @@ async def _assert_plan_volume_available(
         raise ValueError(e.user_message()) from e
 
 
+# Order.renewal_snapshot kind holding the panel usernames of a new purchase, by item index.
+CREATE_SNAPSHOT_KIND = "create"
+PANEL_CONFLICT = 409
+
+
+def _saved_create_usernames(order: Order) -> dict[int, str]:
+    """Usernames an earlier delivery attempt of this order chose before calling the panel."""
+    raw = getattr(order, "renewal_snapshot", None)
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        snapshot = json.loads(raw)
+    except ValueError:
+        return {}
+    if not isinstance(snapshot, dict) or snapshot.get("kind") != CREATE_SNAPSHOT_KIND:
+        return {}
+    names = snapshot.get("usernames")
+    if not isinstance(names, dict):
+        return {}
+    return {int(k): str(v) for k, v in names.items() if str(k).isdigit() and isinstance(v, str) and v}
+
+
+def _is_custom_order(order: Order) -> bool:
+    return _order_note(order) == CUSTOM_ORDER_NOTE
+
+
 async def _hold_delivery_volume(
     session: AsyncSession, order: Order, plan: Plan, pg, *, data_limit: int | None, quantity: int
 ) -> HeldVolume | None:
-    """Hold the volume of a shop delivery before its panel calls; None for the platform."""
+    """Hold the volume of a shop delivery before its panel calls; None for the platform.
+
+    A custom order made from a template gets the buyer's chosen volume, not the template's,
+    so that chosen volume is what counts against the shop's ceiling.
+    """
+    template_id = None if _is_custom_order(order) else plan.pg_template_id
     try:
         return await hold_plan_create(
-            session, shop_id=order.reseller_id, pg=pg, template_id=plan.pg_template_id,
+            session, shop_id=order.reseller_id, pg=pg, template_id=template_id,
             data_limit=data_limit, quantity=quantity, key=f"order:{int(order.id)}", audience="customer",
         )
     except ProvisionError as e:
@@ -1141,10 +1177,12 @@ def wallet_purchase_reason(order: Order) -> str:
     return f"خرید سفارش #{order.id}"
 
 
-async def _resume_paid_wallet_order(session: AsyncSession, order: Order, user) -> Order:
-    """Continue delivery for an already-PAID wallet order (crash recovery)."""
+async def _resume_paid_wallet_order(
+    session: AsyncSession, order: Order, user, *, attempt: DeliveryAttempt | None = None
+) -> Order:
+    """Continue delivery for a PAID wallet order (first attempt or crash recovery)."""
     _ = user
-    return await fulfill_paid_order(session, order)
+    return await fulfill_paid_order(session, order, attempt=attempt)
 
 
 async def _require_checkout_contact(session: AsyncSession, order: Order) -> None:
@@ -1226,32 +1264,95 @@ async def pay_with_wallet(session: AsyncSession, order: Order, user) -> Order:
         await session.commit()
         await session.refresh(order)
         await session.refresh(payment)
-        return await _resume_paid_wallet_order(session, order, user)
-    except Exception as exc:
-        from app.services.service_renewals import RenewalPendingReview
-
-        if isinstance(exc, RenewalPendingReview):
-            # A lost panel response is not evidence that the paid renewal failed.
-            raise
-        if getattr(order, "renewal_snapshot", None):
-            await session.refresh(order)
-            await session.refresh(user)
-        # Only refund when we actually debited — never mint balance on debit failure.
-        if debited and order.amount > 0:
-            shop_id = int(order.reseller_id) if order.reseller_id else None
-            await credit_wallet(
-                session,
-                user,
-                order.amount,
-                f"برگشت خرید ناموفق #{order.id}",
-                shop_id=shop_id,
-            )
-        order.status = OrderStatus.PENDING.value
-        if payment is not None:
-            payment.status = PaymentStatus.REJECTED.value
-            payment.review_note = payment.review_note or "delivery_failed_refunded"
-        await session.commit()
+    except Exception:
+        await _undo_uncommitted_wallet_payment(session, order, user, debited=debited)
         raise
+    attempt = DeliveryAttempt()
+    try:
+        return await _resume_paid_wallet_order(session, order, user, attempt=attempt)
+    except (RenewalPendingReview, AddonPendingReview):
+        # A lost panel response is not evidence that the paid change failed; the retry
+        # reuses the target saved before the write.
+        raise
+    except Exception as exc:
+        if not await _wallet_delivery_may_hold(session, order, user, payment=payment, attempt=attempt, exc=exc):
+            await _refund_failed_wallet_delivery(session, order, user, payment=payment)
+            raise
+        if order.status == OrderStatus.DELIVERED.value:
+            return order
+        raise DeliveryPendingReview() from exc
+
+
+async def _undo_uncommitted_wallet_payment(
+    session: AsyncSession, order: Order, user, *, debited: bool
+) -> None:
+    """The claim, debit and payment row did not commit: put the order back as payable."""
+    if getattr(order, "renewal_snapshot", None):
+        await session.refresh(order)
+        await session.refresh(user)
+    # Only refund when we actually debited — never mint balance on debit failure.
+    if debited and order.amount > 0:
+        shop_id = int(order.reseller_id) if order.reseller_id else None
+        await credit_wallet(
+            session,
+            user,
+            order.amount,
+            f"برگشت خرید ناموفق #{order.id}",
+            shop_id=shop_id,
+        )
+    order.status = OrderStatus.PENDING.value
+    await session.commit()
+
+
+async def _wallet_delivery_may_hold(
+    session: AsyncSession,
+    order: Order,
+    user,
+    *,
+    payment: Payment,
+    attempt: DeliveryAttempt,
+    exc: Exception,
+) -> bool:
+    """True when a failed delivery may have reached the panel, so the payment must stay.
+
+    A new purchase whose create call got no answer stays paid and is listed under failed
+    deliveries; refunding it would let the buyer keep a panel user they did not pay for.
+    """
+    if not session.is_active:
+        await rollback_quiet(session)
+    await session.refresh(order)
+    await session.refresh(user)
+    await session.refresh(payment)
+    if order.status != OrderStatus.PAID.value or order.service_mutation_pending:
+        # Sealed as delivered, or still claimed: the panel holds the change.
+        logger.warning("wallet order %s kept after delivery error status=%s", order.id, order.status, exc_info=True)
+        return True
+    if not attempt.panel_may_hold_account:
+        return False
+    # Local import: ux20 imports this module.
+    from app.services.ux20 import note_delivery_send_failure
+
+    await note_delivery_send_failure(session, order=order, payment=payment, error=str(exc))
+    return True
+
+
+async def _refund_failed_wallet_delivery(
+    session: AsyncSession, order: Order, user, *, payment: Payment
+) -> None:
+    """The panel definitely holds nothing for this order: return the money and reopen it."""
+    if order.amount > 0:
+        shop_id = int(order.reseller_id) if order.reseller_id else None
+        await credit_wallet(
+            session,
+            user,
+            order.amount,
+            f"برگشت خرید ناموفق #{order.id}",
+            shop_id=shop_id,
+        )
+    order.status = OrderStatus.PENDING.value
+    payment.status = PaymentStatus.REJECTED.value
+    payment.review_note = payment.review_note or "delivery_failed_refunded"
+    await session.commit()
 
 
 async def mark_order_free_paid(session: AsyncSession, order: Order, user_id: int) -> Order:
@@ -1278,6 +1379,15 @@ async def mark_order_free_paid(session: AsyncSession, order: Order, user_id: int
     await session.commit()
     await session.refresh(order)
     return order
+
+
+class DeliveryPendingReview(ValueError):
+    """The panel may already hold the paid service; staff settle it instead of a refund."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "نتیجهٔ ساخت سرویس نیاز به بررسی پشتیبانی دارد؛ پرداخت شما ثبت شده است. دوباره خرید نکنید."
+        )
 
 
 @dataclass(slots=True)
@@ -1667,6 +1777,35 @@ async def _wallet_topup_already_credited(
     return row is not None
 
 
+# A delivery claim this old is a crashed attempt, never one still waiting on the panel.
+DELIVERY_CLAIM_STALE_AFTER = timedelta(minutes=10)
+DELIVERY_IN_PROGRESS = "این سفارش همین حالا در حال تحویل است؛ چند دقیقه بعد دوباره تلاش کنید"
+
+
+async def release_stale_delivery_claim(session: AsyncSession, order: Order) -> None:
+    """Return a DELIVERING order to PAID for a retry, only once its claim is old enough.
+
+    Resetting a fresh claim would run a second delivery beside the one in progress and
+    create a second panel user (or add a pack twice).
+    """
+    cutoff = datetime.now(timezone.utc) - DELIVERY_CLAIM_STALE_AFTER
+    with session.no_autoflush:
+        result = await session.execute(
+            update(Order)
+            .where(
+                Order.id == int(order.id),
+                Order.status == OrderStatus.DELIVERING.value,
+                Order.updated_at <= cutoff,
+            )
+            .values(status=OrderStatus.PAID.value)
+            .execution_options(synchronize_session=False)
+        )
+    if result.rowcount != 1:
+        raise ValueError(DELIVERY_IN_PROGRESS)
+    await session.commit()
+    await session.refresh(order)
+
+
 async def _resume_approved_payment(
     session: AsyncSession, payment: Payment
 ) -> Order | None:
@@ -1728,22 +1867,11 @@ async def _resume_approved_payment(
         # Truly complete — do not re-run delivery / notifications as a new approve.
         raise ValueError("این پرداخت قبلاً تأیید شده")
 
-    # Heal mid-flight / crashed delivery back to PAID so fulfill can claim again.
+    # Heal a crashed delivery back to PAID so fulfill can claim again; one still running is left alone.
     if order.status == OrderStatus.DELIVERING.value and not (
         bool(order.service_id) and not is_mutation
     ):
-        with session.no_autoflush:
-            await session.execute(
-                update(Order)
-                .where(
-                    Order.id == int(order.id),
-                    Order.status == OrderStatus.DELIVERING.value,
-                )
-                .values(status=OrderStatus.PAID.value)
-                .execution_options(synchronize_session=False)
-            )
-        await session.commit()
-        await session.refresh(order)
+        await release_stale_delivery_claim(session, order)
 
     if order.status in {
         OrderStatus.PENDING.value,
@@ -1951,6 +2079,29 @@ async def approve_payment(
     return await fulfill_paid_order(session, order)
 
 
+async def _close_rejected_order(session: AsyncSession, order_id: int, payment_id: int) -> None:
+    """Free what a just-rejected order held and close its other open payments.
+
+    The released discount puts the order back at full price; a gateway checkout opened at the
+    discounted price must not stay payable for it.
+    """
+    await session.execute(
+        update(Payment)
+        .where(
+            Payment.order_id == order_id,
+            Payment.id != payment_id,
+            Payment.status == PaymentStatus.PENDING.value,
+        )
+        .values(status=PaymentStatus.REJECTED.value, review_note="superseded: order rejected")
+        .execution_options(synchronize_session=False)
+    )
+    rejected_order = await session.get(Order, order_id)
+    if rejected_order is not None:
+        await _release_order_discount(session, rejected_order)
+        await _release_trial_claim_for_order(session, rejected_order)
+        await discard_unsold_custom_plan(session, rejected_order)
+
+
 async def reject_payment(
     session: AsyncSession, payment: Payment, reviewer_tg: int, note: str = "", *, bot=None
 ) -> None:
@@ -1973,7 +2124,7 @@ async def reject_payment(
         await _sync_payment_review_messages(session, payment_id, bot=bot)
         raise ValueError("این پرداخت قابل رد نیست")
     if payment.order_id:
-        await session.execute(
+        order_rejected = await session.execute(
             update(Order)
             .where(
                 Order.id == payment.order_id,
@@ -1988,11 +2139,10 @@ async def reject_payment(
             .values(status=OrderStatus.REJECTED.value)
             .execution_options(synchronize_session=False)
         )
-        rejected_order = await session.get(Order, int(payment.order_id))
-        if rejected_order is not None:
-            await _release_order_discount(session, rejected_order)
-            await _release_trial_claim_for_order(session, rejected_order)
-            await discard_unsold_custom_plan(session, rejected_order)
+        # A leftover receipt of an order already paid another way releases nothing the
+        # order still holds (its discount, its trial claim, its custom plan).
+        if order_rejected.rowcount == 1:
+            await _close_rejected_order(session, int(payment.order_id), payment_id)
     await session.commit()
     await _sync_payment_review_messages(session, payment_id, bot=bot)
 
@@ -2246,7 +2396,8 @@ async def deliver_order(
                     pg_role_id=pg_role_id,
                     data_limit=data_limit,
                     expire_ts=expire,
-                    from_template=bool(plan.pg_template_id),
+                    # A custom order overrides the template's volume and expiry with the chosen ones.
+                    from_template=bool(plan.pg_template_id) and not _is_custom_order(order),
                     quantity=qty,
                 )
             except ProvisionError as e:
@@ -2266,41 +2417,56 @@ async def deliver_order(
         created_pg_ids: list[int] = []
         services: list[UserService] = []
 
+        saved_names = _saved_create_usernames(order)
+
         async def _create_one(index: int) -> UserService:
-            # ``{id}`` = order id (catalog); ``buyer_id`` resolves ``{username}``.
-            username = await generate_pg_username(
-                session,
-                user_id=int(order.id),
-                buyer_id=int(order.user_id),
-                plan=plan,
-                reseller_id=order.reseller_id,
-                user=order.user,
-            )
+            username = saved_names.get(index)
+            retried = username is not None
+            if username is None:
+                # ``{id}`` = order id (catalog); ``buyer_id`` resolves ``{username}``.
+                username = await generate_pg_username(
+                    session,
+                    user_id=int(order.id),
+                    buyer_id=int(order.user_id),
+                    plan=plan,
+                    reseller_id=order.reseller_id,
+                    user=order.user,
+                )
+                saved_names[index] = username
+                # Frozen before the panel call: a retry after a lost response reuses this name.
+                order.renewal_snapshot = json.dumps({"kind": CREATE_SNAPSHOT_KIND, "usernames": saved_names})
+                await session.commit()
             note = f"PGClockBot order #{order.id}"
             if qty > 1:
                 note = f"{note} ({index}/{qty})"
             panel["touched"] = True
-            if plan.pg_template_id:
-                payload = {
-                    "username": username,
-                    "user_template_id": plan.pg_template_id,
-                    "note": note,
-                }
-                pg_user = await pg.create_user_from_template(payload)
-            else:
-                pg_user = await pg.create_user(
-                    build_user_create_payload(
-                        username=username,
-                        group_ids=group_ids or [],
-                        data_limit=data_limit,
-                        expire_ts=expire,
-                        note=note,
+            try:
+                if plan.pg_template_id:
+                    payload = {
+                        "username": username,
+                        "user_template_id": plan.pg_template_id,
+                        "note": note,
+                    }
+                    pg_user = await pg.create_user_from_template(payload)
+                else:
+                    pg_user = await pg.create_user(
+                        build_user_create_payload(
+                            username=username,
+                            group_ids=group_ids or [],
+                            data_limit=data_limit,
+                            expire_ts=expire,
+                            note=note,
+                        )
                     )
-                )
+            except PasarGuardError as exc:
+                if not (retried and exc.status_code == PANEL_CONFLICT):
+                    raise
+                # An earlier attempt created this user and its answer was lost: deliver that one.
+                pg_user = await pg.get_user_by_username(username)
             pg_uid = pg_user.get("id")
             if pg_uid:
                 created_pg_ids.append(int(pg_uid))
-            if plan.pg_template_id and _order_note(order) == CUSTOM_ORDER_NOTE and pg_uid:
+            if plan.pg_template_id and _is_custom_order(order) and pg_uid:
                 # A template brings its own volume and expiry; the buyer paid for the chosen ones.
                 applied = await pg.modify_user_by_id(
                     int(pg_uid), build_user_modify_payload(data_limit=data_limit, expire_ts=expire)

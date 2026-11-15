@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock, patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.models import BotUser, DeliveryFailure, Order
+from app.db.models import BotUser, DeliveryFailure, Order, Payment
 from app.services.delivery_failure_queue import dismiss_delivery_failures
 from app.services.ux20 import DeliveryNotRetryable, list_open_delivery_failures, retry_delivery
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
@@ -129,3 +130,52 @@ class RouteTests(QueueHarness):
         self.assertIn("/orders/10/dismiss-delivery-failure", response.text)
         self.assertEqual(response.text.count("/orders/10/retry-delivery"), 1)
         self.assertEqual(response.text.count("/orders/10/dismiss-delivery-failure"), 1)
+
+
+class RetryClaimTests(QueueHarness):
+    async def add(self, *rows) -> None:
+        async with self.Session() as session:
+            session.add_all(rows)
+            await session.commit()
+
+    async def status(self, order_id: int) -> str:
+        async with self.Session() as session:
+            return (await session.get(Order, order_id)).status
+
+    async def test_a_delivery_still_running_is_not_started_a_second_time(self):
+        await self.add(Order(id=30, user_id=1, amount=1, status="delivering", updated_at=datetime.now(timezone.utc)))
+        with patch("app.services.orders.fulfill_paid_order", AsyncMock()) as fulfill:
+            async with self.Session() as session:
+                with self.assertRaisesRegex(ValueError, "در حال تحویل"):
+                    await retry_delivery(session, 30)
+        fulfill.assert_not_awaited()
+        self.assertEqual(await self.status(30), "delivering")
+
+    async def test_a_crashed_delivery_claim_is_retried(self):
+        stale = datetime.now(timezone.utc) - timedelta(minutes=30)
+        await self.add(Order(id=32, user_id=1, amount=1, status="delivering", updated_at=stale))
+        seen: list[str] = []
+
+        async def fulfill(session, order, **_kw):
+            seen.append(order.status)
+            raise RuntimeError("panel down")
+
+        with patch("app.services.orders.fulfill_paid_order", fulfill):
+            async with self.Session() as session:
+                with self.assertRaises(RuntimeError):
+                    await retry_delivery(session, 32)
+        self.assertEqual(seen, ["paid"])
+
+    async def test_retry_does_not_deliver_an_order_whose_receipt_is_not_approved(self):
+        await self.add(
+            Order(id=31, user_id=1, amount=1, status="awaiting_approval"),
+            Payment(id=31, order_id=31, user_id=1, amount=1, method="card", status="pending"),
+        )
+        before = await self.failure_total()
+        with patch("app.services.orders.fulfill_paid_order", AsyncMock()) as fulfill:
+            async with self.Session() as session:
+                with self.assertRaises(DeliveryNotRetryable):
+                    await retry_delivery(session, 31)
+        fulfill.assert_not_awaited()
+        self.assertEqual(await self.status(31), "awaiting_approval")
+        self.assertEqual(await self.failure_total(), before)

@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import or_, select, update
@@ -46,6 +48,41 @@ _NOTE_RE = re.compile(
 MAX_VOLUME_GB = 10_000.0
 MAX_DURATION_DAYS = 3650
 MAX_PRICE = 2_000_000_000
+
+# Order.renewal_snapshot kind for an add-on's saved absolute panel target.
+ADDON_SNAPSHOT_KIND = "addon"
+
+
+class AddonPendingReview(ValueError):
+    """The panel may already hold the pack; the paid order waits for a retry of the saved target."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "نتیجهٔ اعمال بسته نیاز به بررسی پشتیبانی دارد؛ پرداخت شما ثبت شده است. دوباره خرید نکنید."
+        )
+
+
+@dataclass(slots=True)
+class _AddonRun:
+    """One ``apply_service_addon`` attempt, shared with its failure path."""
+
+    saved_target: dict[str, Any] | None
+    write_attempted: bool = False
+
+
+def _saved_addon_target(order: Order) -> dict[str, Any] | None:
+    """The absolute target an earlier attempt froze before its panel write, if any."""
+    raw = getattr(order, "renewal_snapshot", None)
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        snapshot = json.loads(raw)
+    except ValueError:
+        return None
+    if not isinstance(snapshot, dict) or snapshot.get("kind") != ADDON_SNAPSHOT_KIND:
+        return None
+    target = snapshot.get("target")
+    return dict(target) if isinstance(target, dict) else None
 
 
 def format_addon_note(
@@ -571,18 +608,7 @@ async def apply_service_addon(
     await session.commit()
     await session.refresh(order)
 
-    async def _release() -> None:
-        await session.execute(
-            update(Order)
-            .where(
-                Order.id == order_id,
-                Order.status == OrderStatus.DELIVERING.value,
-            )
-            .values(status=OrderStatus.PAID.value, service_mutation_pending=False)
-            .execution_options(synchronize_session=False)
-        )
-        await session.commit()
-
+    run = _AddonRun(saved_target=_saved_addon_target(order))
     pg_applied = False
     try:
         pack = await session.get(ServiceAddonPack, pack_id)
@@ -615,7 +641,9 @@ async def apply_service_addon(
             kind=apply_kind,
             amount=apply_amount,
             order_reseller_id=order.reseller_id,
-            order_id=int(order_id),
+            order_id=order_id,
+            order=order,
+            run=run,
         )
         pg_applied = True
 
@@ -641,12 +669,10 @@ async def apply_service_addon(
         await session.commit()
         await session.refresh(order)
         return order
-    except Exception:
+    except Exception as exc:
         if not pg_applied:
-            try:
-                await _release()
-            except Exception:
-                log.exception("addon claim release failed order=%s", order_id)
+            if await _release_failed_addon(session, order_id, run, exc):
+                raise AddonPendingReview() from exc
         else:
             # Capacity already on PG — leave order DELIVERED so retries do not
             # re-apply. Prefer seal over leaving DELIVERING/PAID.
@@ -729,43 +755,63 @@ async def _write_pack(
     await release_volume_hold(session, hold)
 
 
-async def _apply_pack_to_service(
-    session: AsyncSession,
-    service: UserService,
-    *,
-    kind: str,
-    amount: float,
-    order_reseller_id: int | None,
-    order_id: int | None = None,
-) -> None:
-    """Additive PG mutate — never falls back across shop PG credentials.
+async def _release_failed_addon(
+    session: AsyncSession, order_id: int, run: _AddonRun, exc: Exception
+) -> bool:
+    """Return the claim to PAID; True (and the quota lock kept) when the panel may hold the pack.
+
+    A retry of an earlier unknown write keeps its saved target whatever this attempt did. A first
+    write the panel refused has a known outcome, so its target is dropped and the order is free.
+    """
+    pending = run.saved_target is not None or (
+        run.write_attempted and not is_hard_panel_rejection(exc)
+    )
+    values: dict[str, Any] = {"status": OrderStatus.PAID.value, "service_mutation_pending": pending}
+    if run.write_attempted and not pending:
+        values["renewal_snapshot"] = None
+    try:
+        if not session.is_active:
+            await session.rollback()
+        await session.execute(
+            update(Order)
+            .where(Order.id == order_id, Order.status == OrderStatus.DELIVERING.value)
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        await session.commit()
+    except Exception:
+        log.exception("addon claim release failed order=%s", order_id)
+    return pending
+
+
+async def _addon_panel_client(session: AsyncSession, order_reseller_id: int | None) -> Any:
+    """The shop's own panel credentials; never falls back across shops."""
+    # Local import: pasarguard pulls in the order services that import this module.
+    from app.services.pasarguard import get_pg, get_pg_for_reseller
+
+    if order_reseller_id:
+        return await get_pg_for_reseller(session, int(order_reseller_id))
+    from app.services.users import current_shop_reseller_id
+
+    if current_shop_reseller_id():
+        raise ValueError("فروشگاه بدون اعتبار پاسارگارد معتبر است")
+    return get_pg()
+
+
+async def _pack_target(
+    session: AsyncSession, pg: Any, service: UserService, *, kind: str, amount: float
+) -> dict[str, Any]:
+    """Absolute panel payload for live quota plus the pack.
 
     Unlimited volume/time services are rejected (not converted to limited).
     """
-    from app.services.bot_user_admin import sync_service_quota_cache
     from app.services.formatting import is_on_hold_status, parse_expire
-    from app.services.pasarguard import get_pg, get_pg_for_reseller
-
-    if not service.pg_user_id:
-        raise ValueError("سرویس به پنل متصل نیست")
-
-    if order_reseller_id:
-        pg = await get_pg_for_reseller(session, int(order_reseller_id))
-    else:
-        from app.services.users import current_shop_reseller_id
-
-        if current_shop_reseller_id():
-            raise ValueError("فروشگاه بدون اعتبار پاسارگارد معتبر است")
-        pg = get_pg()
 
     info = await pg.get_user_by_id(int(service.pg_user_id))
     if not isinstance(info, dict):
         raise ValueError("کاربر پاسارگارد یافت نشد")
 
     payload: dict[str, Any] = {"status": "active"}
-    expire_ts = None
-    data_limit_bytes = None
-
     if kind == KIND_VOLUME:
         add_bytes = pack_volume_bytes(amount)
         if add_bytes <= 0:
@@ -776,14 +822,12 @@ async def _apply_pack_to_service(
             current = 0
         if current <= 0:
             raise ValueError("این سرویس حجم نامحدود دارد — بسته حجم قابل اعمال نیست")
-        data_limit_bytes = current + add_bytes
-        payload["data_limit"] = data_limit_bytes
+        payload["data_limit"] = current + add_bytes
         if is_on_hold_status(info.get("status")):
             # Switching to active does not start PG's pending expiration timer.
-            expire_ts = await _on_hold_activation_expire_ts(
+            payload["expire"] = await _on_hold_activation_expire_ts(
                 session, service, info, now=int(time.time())
             )
-            payload["expire"] = expire_ts
     elif kind == KIND_DURATION:
         days = int(float(amount))
         if days <= 0:
@@ -794,13 +838,11 @@ async def _apply_pack_to_service(
             base = await _on_hold_activation_expire_ts(
                 session, service, info, now=now
             )
-            expire_ts = base + days * 86400
         elif cur is None:
             raise ValueError("این سرویس زمان نامحدود دارد — بسته زمان قابل اعمال نیست")
         else:
             base = max(now, int(cur.timestamp()))
-            expire_ts = base + days * 86400
-        payload["expire"] = expire_ts
+        payload["expire"] = base + days * 86400
         if "data_limit" in info:
             # Preserve the live volume quota explicitly, and cache it alongside
             # the new expiration so a time-only write cannot look unlimited.
@@ -813,11 +855,43 @@ async def _apply_pack_to_service(
             payload["data_limit"] = data_limit_bytes
     else:
         raise ValueError("نوع بسته پشتیبانی نمی‌شود")
+    return payload
 
+
+async def _apply_pack_to_service(
+    session: AsyncSession,
+    service: UserService,
+    *,
+    kind: str,
+    amount: float,
+    order_reseller_id: int | None,
+    order_id: int | None = None,
+    order: Order | None = None,
+    run: _AddonRun | None = None,
+) -> None:
+    """Write the pack as an absolute target, frozen on ``order`` before the panel call.
+
+    The target is computed from live quota once; a retry after an unknown outcome writes the
+    same saved target again, so a write that already landed is not added a second time.
+    """
+    from app.services.bot_user_admin import sync_service_quota_cache
+
+    run = run or _AddonRun(saved_target=None)
+    if not service.pg_user_id:
+        raise ValueError("سرویس به پنل متصل نیست")
+    pg = await _addon_panel_client(session, order_reseller_id)
+    payload = run.saved_target or await _pack_target(session, pg, service, kind=kind, amount=amount)
+    data_limit_bytes = payload.get("data_limit")
+    expire_ts = payload.get("expire")
     hold = await _hold_pack_volume(
         session, service, shop_id=order_reseller_id,
-        new_limit=data_limit_bytes if kind == KIND_VOLUME else None, key=f"addon:{int(order_id)}" if order_id else new_hold_key("addon"),
+        new_limit=data_limit_bytes if kind == KIND_VOLUME else None,
+        key=f"addon:{int(order_id)}" if order_id else new_hold_key("addon"),
     )
+    if order is not None and run.saved_target is None:
+        order.renewal_snapshot = json.dumps({"kind": ADDON_SNAPSHOT_KIND, "target": payload})
+        await session.commit()
+    run.write_attempted = True
     await _write_pack(session, pg, service, payload, hold)
     # Cache sync is best-effort — PG already mutated. Never fail the delivery
     # claim here or a retry would double-apply the same addon.

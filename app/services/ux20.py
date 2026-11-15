@@ -514,6 +514,40 @@ def _assert_retryable(order: Order) -> None:
         raise DeliveryNotRetryable("این سفارش برای تلاش مجدد آماده نیست؛ در صورت نیاز از «حذف از لیست» استفاده کنید")
 
 
+RECEIPT_NOT_APPROVED = "پرداخت این سفارش هنوز تأیید نشده؛ اول رسید را در بخش پرداخت‌ها تأیید کنید"
+
+
+async def _claim_retry(session: AsyncSession, order: Order) -> None:
+    """Bring a retryable order to PAID without racing a delivery or skipping payment review."""
+    # Local import: orders imports this module.
+    from app.services.orders import release_stale_delivery_claim
+
+    if order.status == OrderStatus.DELIVERING.value:
+        await release_stale_delivery_claim(session, order)
+        return
+    if order.status != OrderStatus.AWAITING_APPROVAL.value:
+        return
+    # Only an approval whose order never moved to PAID (a crash in between) is resumed here.
+    approved = await session.scalar(
+        select(Payment.id).where(
+            Payment.order_id == int(order.id),
+            Payment.status == PaymentStatus.APPROVED.value,
+        ).limit(1)
+    )
+    if approved is None:
+        raise DeliveryNotRetryable(RECEIPT_NOT_APPROVED)
+    claim = await session.execute(
+        update(Order)
+        .where(Order.id == int(order.id), Order.status == OrderStatus.AWAITING_APPROVAL.value)
+        .values(status=OrderStatus.PAID.value)
+        .execution_options(synchronize_session=False)
+    )
+    if claim.rowcount != 1:
+        raise ValueError("وضعیت سفارش همین حالا تغییر کرد؛ صفحه را تازه کنید")
+    await session.commit()
+    await session.refresh(order)
+
+
 async def retry_delivery(session: AsyncSession, order_id: int) -> Order:
     from app.db.models import BotUser, Payment
     from app.services.delivery import send_delivery_to_user
@@ -532,6 +566,7 @@ async def retry_delivery(session: AsyncSession, order_id: int) -> Order:
     # Checked before the try below: an order that can never be retried must not be
     # recorded as one more failed attempt every time somebody presses the button.
     _assert_retryable(order)
+    await _claim_retry(session, order)
 
     async def _resend() -> None:
         user = order.__dict__.get("user") or await session.get(BotUser, order.user_id)
@@ -562,9 +597,6 @@ async def retry_delivery(session: AsyncSession, order_id: int) -> Order:
             # Resend Telegram delivery only
             await _resend()
         else:
-            if order.status != OrderStatus.PAID.value:
-                order.status = OrderStatus.PAID.value
-                await session.commit()
             # Route renew/addon/reseller_app correctly — deliver_order alone
             # seals mutation orders (service_id already set) without applying.
             order = await fulfill_paid_order(session, order)
