@@ -52,6 +52,41 @@
     if (window.matchMedia('(min-width: 961px)').matches) setNav(false);
   });
 
+  /* Light/dark toggle — same storage key + values as the app */
+  var themeBtn = document.getElementById('guide-theme-toggle');
+  function currentTheme() {
+    var t = document.documentElement.getAttribute('data-theme');
+    if (t === 'light' || t === 'dark') return t;
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  function labelTheme(t) {
+    if (themeBtn) {
+      themeBtn.setAttribute('aria-label', t === 'dark' ? 'تغییر به تم روشن' : 'تغییر به تم تاریک');
+    }
+  }
+  function paintTheme(t) {
+    document.documentElement.setAttribute('data-theme', t);
+    var color = t === 'dark' ? '#0e0d0e' : '#f0f0f1';
+    document.querySelectorAll('meta[name="theme-color"]').forEach(function (m, i) {
+      if (i === 0) { m.setAttribute('content', color); m.removeAttribute('media'); }
+      else m.parentNode.removeChild(m);
+    });
+    labelTheme(t);
+  }
+  if (themeBtn) {
+    labelTheme(currentTheme());
+    themeBtn.addEventListener('click', function () {
+      var next = currentTheme() === 'dark' ? 'light' : 'dark';
+      paintTheme(next);
+      try { localStorage.setItem('shieldray-theme', next); } catch (e) {}
+    });
+  }
+  window.addEventListener('storage', function (e) {
+    if (e.key === 'shieldray-theme' && (e.newValue === 'light' || e.newValue === 'dark')) {
+      paintTheme(e.newValue);
+    }
+  });
+
   document.querySelectorAll('[data-panel-path]').forEach(function (el) {
     var path = el.getAttribute('data-panel-path') || '';
     if (!path) return;

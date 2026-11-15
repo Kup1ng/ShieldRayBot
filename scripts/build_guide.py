@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the Persian PGClockBot guide into app/web/static/guide/.
+"""Build the Persian ShieldRay guide into app/web/static/guide/.
 
 Sources:
   docs/guide/pages/*.md
@@ -30,7 +30,6 @@ ROOT = Path(__file__).resolve().parents[1]
 PAGES = ROOT / "docs" / "guide" / "pages"
 THEME = ROOT / "docs" / "guide" / "theme"
 OUT = ROOT / "app" / "web" / "static" / "guide"
-WEB_STATIC = ROOT / "app" / "web" / "static"
 
 sys.path.insert(0, str(ROOT))
 from app.services.guide_catalog import NAV_ORDER, TOPICS, nav_topics  # noqa: E402
@@ -312,21 +311,13 @@ def main() -> int:
         shutil.rmtree(OUT)
     OUT.mkdir(parents=True)
 
-    shutil.copy2(THEME / "guide.css", OUT / "guide.css")
-    shutil.copy2(THEME / "guide.js", OUT / "guide.js")
-    shutil.copy2(WEB_STATIC / "fonts.css", OUT / "fonts.css")
-    fonts_dir = WEB_STATIC / "fonts"
-    if fonts_dir.is_dir():
-        shutil.copytree(fonts_dir, OUT / "fonts")
-    for name in ("logo-64.png", "logo.png"):
-        src = WEB_STATIC / name
-        if src.is_file():
-            shutil.copy2(src, OUT / name)
-
-    fonts_css = (OUT / "fonts.css").read_text(encoding="utf-8")
-    fonts_css = fonts_css.replace('url("/static/fonts/', 'url("fonts/')
-    fonts_css = fonts_css.replace("url('/static/fonts/", "url('fonts/")
-    (OUT / "fonts.css").write_text(fonts_css, encoding="utf-8")
+    # Self-contained assets: everything the guide needs lives in the theme dir.
+    for name in ("guide.css", "guide.js", "fonts.css", "theme-init.js"):
+        shutil.copy2(THEME / name, OUT / name)
+    for sub in ("fonts", "brand"):
+        src_dir = THEME / sub
+        if src_dir.is_dir():
+            shutil.copytree(src_dir, OUT / sub)
 
     env = Environment(
         loader=FileSystemLoader(str(THEME)),
