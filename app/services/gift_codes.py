@@ -189,12 +189,14 @@ async def claim_use(
     user_id: int,
     shop_id: int | None,
     kind: str,
+    per_user_default: int | None = None,
 ) -> None:
     """The code UPDATE serializes claims on both PostgreSQL and SQLite.
 
     Caller must wrap the claim and entitlement in one savepoint/transaction.
     Check user counts AFTER taking the code lock, so parallel requests see
-    the preceding committed reservation.
+    the preceding committed reservation. ``per_user_default`` is the cap used
+    when the code sets no ``max_uses_per_user`` of its own.
     """
     claim = await session.execute(
         update(ChargeCode)
@@ -206,7 +208,8 @@ async def claim_use(
         raise ValueError("کد نامعتبر است")
     await session.refresh(row)
     check_available(row, shop_id=shop_id, kind=kind)
-    if row.max_uses_per_user is not None:
+    per_user = row.max_uses_per_user if row.max_uses_per_user is not None else per_user_default
+    if per_user is not None:
         used = (
             await session.execute(
                 select(func.count(ChargeCodeUse.id)).where(
@@ -216,7 +219,9 @@ async def claim_use(
                 )
             )
         ).scalar_one()
-        if used >= row.max_uses_per_user:
+        if used >= per_user:
+            if row.max_uses_per_user is None:
+                raise ValueError("این کد را قبلاً استفاده کرده‌اید")
             raise ValueError("سقف استفاده شما از این کد پر شده است")
     await session.execute(
         update(ChargeCode)
