@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from io import BytesIO
 from pathlib import Path
@@ -71,6 +72,12 @@ def _resize_png(src: Path, size: int, *, maskable: bool = False) -> bytes:
     return buf.getvalue()
 
 
+# (source path, source mtime, size, maskable) -> PNG. The public icon route is unauthenticated,
+# so each icon is resized once per source file; a new upload changes the mtime and the key.
+_ICON_CACHE: dict[tuple[str, int, int, bool], bytes] = {}
+_ICON_CACHE_LIMIT = 8
+
+
 def icon_bytes(size: int, *, maskable: bool = False) -> bytes:
     src = source_icon_path()
     if not src.is_file():
@@ -80,11 +87,19 @@ def icon_bytes(size: int, *, maskable: bool = False) -> bytes:
         buf = BytesIO()
         Image.new("RGBA", (size, size), (9, 9, 11, 255)).save(buf, format="PNG")
         return buf.getvalue()
+    key = (str(src), src.stat().st_mtime_ns, int(size), bool(maskable))
+    cached = _ICON_CACHE.get(key)
+    if cached is not None:
+        return cached
     try:
-        return _resize_png(src, size, maskable=maskable)
+        data = _resize_png(src, size, maskable=maskable)
     except Exception:
         logger.exception("PWA icon resize failed")
         return src.read_bytes() if src.suffix.lower() == ".png" else b""
+    if len(_ICON_CACHE) >= _ICON_CACHE_LIMIT:
+        _ICON_CACHE.clear()
+    _ICON_CACHE[key] = data
+    return data
 
 
 def save_uploaded_icon(data: bytes) -> str:
@@ -215,11 +230,12 @@ async def save_pwa_from_form(session: AsyncSession, form: Any) -> tuple[bool, st
                 if len(raw) > 2_500_000:
                     return False, "حجم آیکن حداکثر ۲٫۵ مگابایت باشد"
                 try:
-                    save_uploaded_icon(raw)
+                    # Decoding and resizing an image is CPU work; keep it off the event loop.
+                    await asyncio.to_thread(save_uploaded_icon, raw)
                     await set_setting(session, SETTING_ICON, ICON_NAME)
-                except Exception as exc:
+                except Exception:
                     logger.exception("pwa icon save failed")
-                    return False, f"آیکن نامعتبر است: {exc}"
+                    return False, "آیکن نامعتبر است؛ یک فایل PNG یا JPG سالم انتخاب کنید"
 
     await set_setting(session, SETTING_NAME, name)
     await set_setting(session, SETTING_SHORT, short)

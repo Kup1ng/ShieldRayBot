@@ -660,7 +660,8 @@ def register_miniapp_pages(app: FastAPI, *, render, get_db) -> None:
             raise HTTPException(403, "qr disabled")
         bg = (ui.get("qr_background") or "").strip() or None
         try:
-            buf = make_subscription_qr(url, background=bg, box_size=8, border=2)
+            # Image work (a shop's background can be large) must not stall every other request.
+            buf = await asyncio.to_thread(make_subscription_qr, url, background=bg, box_size=8, border=2)
         except Exception:
             log.exception("miniapp qr failed service=%s", service_id)
             raise HTTPException(500, "qr failed")

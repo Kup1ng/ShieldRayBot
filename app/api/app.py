@@ -1665,7 +1665,7 @@ def create_api_app(lifespan=None) -> FastAPI:
         if size not in (180, 192, 512):
             raise HTTPException(status_code=404)
         maskable = request.query_params.get("maskable") in {"1", "true", "yes"} and size == 512
-        data = icon_bytes(size, maskable=maskable)
+        data = await asyncio.to_thread(icon_bytes, size, maskable=maskable)
         if not data:
             raise HTTPException(status_code=404)
         return Response(
@@ -1940,7 +1940,8 @@ def create_api_app(lifespan=None) -> FastAPI:
         from app.services.service_control import schedule_panel_restart
         from app.services.setup_wizard import force_http_login_url
 
-        schedule_panel_restart(delay_sec=2.5, reason="setup wizard finished")
+        # sudo probes and systemd-run can take seconds: never on the event loop.
+        await asyncio.to_thread(schedule_panel_restart, delay_sec=2.5, reason="setup wizard finished")
         # Prefer an explicit next from the wizard page (matches the displayed
         # panel URL). Coerce to http only when TLS is not live yet; install-time
         # SSL already serves HTTPS so we must not downgrade the login URL.
@@ -1950,7 +1951,7 @@ def create_api_app(lifespan=None) -> FastAPI:
             next_url = str(form.get("next") or "").strip()
         except Exception:
             next_url = ""
-        return RedirectResponse(force_http_login_url(next_url), status_code=303)
+        return RedirectResponse(await asyncio.to_thread(force_http_login_url, next_url), status_code=303)
 
     @app.get("/", response_class=HTMLResponse)
     async def root(request: Request):
@@ -4676,7 +4677,7 @@ def create_api_app(lifespan=None) -> FastAPI:
                         ),
                         status_code=303,
                     )
-                result = enable_https(restart=True)
+                result = await asyncio.to_thread(enable_https, restart=True)
                 if not result.get("ok"):
                     return RedirectResponse(
                         "/settings?tab=ssl&err=" + quote(str(result.get("error") or "خطا")[:400]),
@@ -4685,7 +4686,7 @@ def create_api_app(lifespan=None) -> FastAPI:
                 return RedirectResponse("/settings?tab=ssl", status_code=303)
 
             if action == "disable":
-                result = disable_https(restart=True)
+                result = await asyncio.to_thread(disable_https, restart=True)
                 if not result.get("ok"):
                     return RedirectResponse(
                         "/settings?tab=ssl&err=" + quote(str(result.get("error") or "خطا")[:400]),
@@ -4917,7 +4918,7 @@ def create_api_app(lifespan=None) -> FastAPI:
 
             clear_platform_pg_capability_cache()
             pre_boot = BOOT_ID
-            schedule_panel_restart(delay_sec=2.5, reason="bot settings saved")
+            await asyncio.to_thread(schedule_panel_restart, delay_sec=2.5, reason="bot settings saved")
             if ajax:
                 return JSONResponse(
                     {
@@ -4978,7 +4979,7 @@ def create_api_app(lifespan=None) -> FastAPI:
             update_env_keys(payload)
             ensure_web_secret()
             get_settings.cache_clear()
-            schedule_panel_restart(delay_sec=2.5, reason="panel general settings saved")
+            await asyncio.to_thread(schedule_panel_restart, delay_sec=2.5, reason="panel general settings saved")
             return RedirectResponse(
                 "/settings?tab=general&ok=" + quote("تنظیمات ذخیره شد — در حال ری‌استارت"),
                 status_code=303,
