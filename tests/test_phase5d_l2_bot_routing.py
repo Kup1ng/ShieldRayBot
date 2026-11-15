@@ -20,6 +20,7 @@ from app.bot.auth import (
     is_bot_owner_principal,
     is_migrated_pg_soft_callback,
 )
+from app.services.bot_feedback_texts import NOT_ADMIN
 from app.services.bot_l2_bind import bind_l2_bot_telegram
 from app.services.bot_pg_user_pilot import authorize_bot_pg_user_op
 from app.services.bot_principal_identity import (
@@ -531,22 +532,31 @@ class Phase5DBotL2RoutingTests(unittest.IsolatedAsyncioTestCase):
                     cb2, fx.l2_user, session=session, staff=fake_staff
                 )
                 self.assertIn(OWNER_REQUIRED_MESSAGE, cb2.answer.await_args.args[0])
+                # A shop admin never sees the platform settings hub, whatever staff it claims.
                 cb3 = _fake_cb("adm:settings")
                 await settings_hub(
                     cb3, session, fx.l2_user, _fake_state()
                 )
-                # Inline back is navigation, not an Owner trap.
-                if cb3.answer.await_args and cb3.answer.await_args.args:
-                    self.assertNotIn(
-                        OWNER_REQUIRED_MESSAGE, cb3.answer.await_args.args[0]
-                    )
-                cb3.message.edit_text.assert_awaited()
+                self.assertEqual(cb3.answer.await_args.args[0], NOT_ADMIN)
+                cb3.message.edit_text.assert_not_awaited()
                 cb3.message.answer.assert_not_awaited()
                 cb4 = _fake_cb("adm:plans")
                 await plans_hub(
                     cb4, session, fx.l2_user, _fake_state(), staff=fake_staff
                 )
                 self.assertIn(OWNER_REQUIRED_MESSAGE, cb4.answer.await_args.args[0])
+
+    async def test_e_platform_admin_back_to_settings_is_navigation(self) -> None:
+        from app.bot.handlers.admin_settings import settings_hub
+
+        async with self.Session() as session:
+            fx = await self._fixtures(session)
+            cb = _fake_cb("adm:settings")
+            await settings_hub(cb, session, fx.owner_user, _fake_state())
+            for call in cb.answer.await_args_list:
+                self.assertNotIn(OWNER_REQUIRED_MESSAGE, str(call.args[:1]))
+            cb.message.edit_text.assert_awaited()
+            cb.message.answer.assert_not_awaited()
 
     async def test_f_role_admin_is_not_owner(self) -> None:
         async with self.Session() as session:

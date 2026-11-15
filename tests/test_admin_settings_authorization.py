@@ -93,5 +93,31 @@ class SettingsAuthorizationTests(unittest.IsolatedAsyncioTestCase):
         event.answer.assert_awaited_once()
 
 
+class SettingsHandlerGateTests(unittest.IsolatedAsyncioTestCase):
+    async def test_registered_handlers_run_the_owner_gate_outside_the_settings_flow(self):
+        fn = _handlers()["settings_section"]
+        kwargs = _kwargs(fn, await _state())
+        kwargs["db_user"] = SimpleNamespace(role="admin", telegram_id=7, id=7)
+        with (
+            patch.object(admin_settings, "require_bot_owner", AsyncMock(return_value=False)) as gate,
+            patch.object(admin_settings, "_render_section", AsyncMock()) as render,
+        ):
+            await fn(**kwargs)
+        gate.assert_awaited_once()
+        render.assert_not_awaited()
+
+    async def test_settings_hub_does_not_open_the_settings_flow_for_a_non_admin(self):
+        state = await _state()
+        fn = _handlers()["settings_hub"]
+        kwargs = _kwargs(fn, state)
+        with patch.object(admin_settings, "_render_hub", AsyncMock()) as render:
+            await fn(**kwargs)
+        render.assert_not_awaited()
+        kwargs["callback"].answer.assert_awaited_once()
+        from app.bot import menu_nav as nav
+
+        self.assertNotEqual(await nav.get_nav_level(state), nav.NAV_ADMIN_SETTINGS)
+
+
 if __name__ == "__main__":
     unittest.main()

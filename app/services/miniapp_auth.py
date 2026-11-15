@@ -26,7 +26,7 @@ from app.services.miniapp_shop import (
 )
 from app.services.shop_customer_block import BLOCKED_MESSAGE as SHOP_BLOCKED_MESSAGE, is_blocked_in_shop
 from app.services.platform_identity import is_bot_platform_admin
-from app.services.users import set_shop_reseller_id
+from app.services.users import demote_removed_admin, set_shop_reseller_id
 
 
 logger = logging.getLogger(__name__)
@@ -142,6 +142,9 @@ async def load_mini_user(session: AsyncSession, request: Request) -> BotUser:
     user = result.scalar_one_or_none()
     if not user:
         raise mini_reject(404, NOT_STARTED)
+    # Opening the Mini App sends the bot no update, so the bot's demotion never runs here.
+    if await demote_removed_admin(session, user):
+        await session.commit()
     if bool(getattr(user, "is_blocked", False)):
         raise HTTPException(403, "دسترسی شما مسدود شده است")
     await assert_shop_member(session, scope, user)

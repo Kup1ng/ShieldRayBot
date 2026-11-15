@@ -25,6 +25,7 @@ from aiogram.types import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.bot.auth import require_bot_owner
 from app.bot.chat_cleanup import keep_message, note_throwaway, sweep_above
 from app.bot.nav_inline import NAV_PANEL_CHAT_KEY, NAV_PANEL_MSG_KEY, is_bot_panel_message, panel_is_still_live
 from app.bot.screen_replay import replay_screen
@@ -51,6 +52,8 @@ class CancelEntry:
     reopen: CancelReopen
     # Optional extra kwargs passed to reopen (besides message/session/db_user/state).
     reopen_kw: dict[str, Any] | None = None
+    # The reopened screen belongs to the Owner; anyone can send this callback data.
+    owner_only: bool = False
 
 
 # Populated by register_cancel_codes() at import of dependent handlers.
@@ -359,6 +362,10 @@ async def nv_cancel_input(
     entry = CANCEL_REGISTRY.get(code)
     if entry is None:
         await callback.answer(feedback.INVALID, show_alert=True)
+        return
+    if entry.owner_only and not await require_bot_owner(
+        session, db_user, is_reseller_bot=is_reseller_bot, callback=callback
+    ):
         return
     await callback.answer()
     if callback.message and await _replay_return(

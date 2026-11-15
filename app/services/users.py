@@ -412,6 +412,23 @@ async def _has_commerce_history(session: AsyncSession, user_id: int) -> bool:
     return has_order is not None
 
 
+async def demote_removed_admin(session: AsyncSession, user: BotUser) -> bool:
+    """Drop a sticky ADMIN role once the Telegram id left ADMIN_IDS; True when the role changed.
+
+    The role is kept on the row, so every entry point (bot update, Mini App) must re-check it
+    against the configured list before trusting it.
+    """
+    if user.role != Role.ADMIN.value or int(user.telegram_id or 0) in get_settings().admin_ids:
+        return False
+    from app.db.models import ResellerProfile
+
+    profile = (
+        await session.execute(select(ResellerProfile).where(ResellerProfile.user_id == user.id))
+    ).scalar_one_or_none()
+    user.role = Role.RESELLER.value if profile and profile.is_active else Role.USER.value
+    return True
+
+
 async def get_or_create_user(
     session: AsyncSession,
     telegram_id: int,
@@ -446,23 +463,7 @@ async def get_or_create_user(
         if is_admin and user.role != Role.ADMIN.value:
             user.role = Role.ADMIN.value
             changed = True
-        # Demote sticky ADMIN when removed from ADMIN_IDS (unless still a reseller)
-        elif (
-            not is_admin
-            and user.role == Role.ADMIN.value
-            and telegram_id not in settings.admin_ids
-        ):
-            from app.db.models import ResellerProfile
-
-            profile = (
-                await session.execute(
-                    select(ResellerProfile).where(ResellerProfile.user_id == user.id)
-                )
-            ).scalar_one_or_none()
-            if profile and profile.is_active:
-                user.role = Role.RESELLER.value
-            else:
-                user.role = Role.USER.value
+        elif not is_admin and await demote_removed_admin(session, user):
             changed = True
         # Sticky first-touch attribution for reseller shop bots. A customer who
         # already bought elsewhere keeps their services and stays out of the shop's

@@ -966,7 +966,11 @@ async def settings_hub(
     is already inside Settings; showing «دسترسی مالک سیستم لازم است» here
     traps them. Hub text is not sensitive; the reply keyboard is already shown.
     """
-    _ = (db_user, is_reseller_bot)
+    _ = is_reseller_bot
+    # Entering the settings flow relaxes the Owner middleware for later taps; admins only.
+    if not _is_admin(db_user):
+        await callback.answer(feedback.NOT_ADMIN, show_alert=True)
+        return
     await callback.answer()
     if state is not None:
         from app.bot import menu_nav as nav
@@ -975,8 +979,8 @@ async def settings_hub(
     await _render_hub(callback, session, refresh_keyboard=False)
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sec:"))
+@settings_actor_required
 async def settings_section(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -991,8 +995,8 @@ async def settings_section(
     await _render_section(callback, session, sec_id)
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sub:"))
+@settings_actor_required
 async def settings_sub(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1009,8 +1013,8 @@ async def settings_sub(
     await _render_sub(callback, session, sec_id, sub_id)
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:lab:"))
+@settings_actor_required
 async def settings_labels_audience(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1032,8 +1036,8 @@ async def settings_labels_audience(
 # ----- toggle / edit -----
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:tog:"))
+@settings_actor_required
 async def settings_toggle(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1111,8 +1115,8 @@ def _search_results_panel(query: str) -> Panel:
     return head, _kb(rows)
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:find")
+@settings_actor_required
 async def settings_search_ask(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1132,8 +1136,8 @@ async def settings_search_ask(
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.search_query)
+@settings_actor_required
 async def settings_search_run(
     message: Message, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1157,8 +1161,8 @@ async def settings_search_run(
 
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:edit:"))
+@settings_actor_required
 async def settings_edit_ask(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1210,8 +1214,8 @@ async def settings_edit_ask(
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.edit_value)
+@settings_actor_required
 async def settings_edit_save(
     message: Message, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1261,8 +1265,8 @@ async def settings_edit_save(
     await _finish_settings_text_edit(message, state, session, db_user, loc=loc)
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:menu:layout")
+@settings_actor_required
 async def menu_layout_toggle(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1278,10 +1282,10 @@ async def menu_layout_toggle(
     await _render_sub(callback, session, "menu", "layout")
 
 
-@settings_actor_required
 @router.callback_query(
     F.data.startswith("adm:st:menu:up:") | F.data.startswith("adm:st:menu:dn:")
 )
+@settings_actor_required
 async def menu_reorder(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1321,8 +1325,8 @@ async def menu_reorder(
 # ----- Supports -----
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:sup:add")
+@settings_actor_required
 async def support_add_start(
     callback: CallbackQuery,
     state: FSMContext,
@@ -1347,8 +1351,8 @@ async def support_add_start(
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.support_title)
+@settings_actor_required
 async def support_title_msg(
     message: Message,
     state: FSMContext,
@@ -1381,8 +1385,8 @@ async def support_title_msg(
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.support_telegram)
+@settings_actor_required
 async def support_telegram_msg(
     message: Message, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1416,8 +1420,8 @@ async def support_telegram_msg(
     )
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sup:v:"))
+@settings_actor_required
 async def support_view(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1463,8 +1467,8 @@ async def _support_view_panel(session: AsyncSession, cid: str) -> Panel | None:
     return text, _kb(rows)
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sup:tog:"))
+@settings_actor_required
 async def support_toggle(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1511,8 +1515,8 @@ async def support_toggle(
     await callback.message.edit_text(text, reply_markup=_kb(rows))
 
 
-@settings_actor_required
 @router.callback_query(F.data.regexp(r"^adm:st:sup:color:[^:]+$"))
+@settings_actor_required
 async def support_color_picker(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1542,8 +1546,8 @@ async def support_color_picker(
         )
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sup:color:set:"))
+@settings_actor_required
 async def support_color_set(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1600,8 +1604,8 @@ async def support_color_set(
     await callback.message.edit_text(text, reply_markup=_kb(rows))
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sup:edit:"))
+@settings_actor_required
 async def support_edit_start(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1627,8 +1631,8 @@ async def support_edit_start(
     )
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:sup:del:"))
+@settings_actor_required
 async def support_delete(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1665,8 +1669,8 @@ async def _ensure_trial(session: AsyncSession) -> Plan:
     return trial
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:trial:name")
+@settings_actor_required
 async def trial_ask_name(callback: CallbackQuery, state: FSMContext, db_user: BotUser):
     if not _is_admin(db_user):
         await callback.answer(feedback.NOT_ADMIN, show_alert=True)
@@ -1685,8 +1689,8 @@ async def trial_ask_name(callback: CallbackQuery, state: FSMContext, db_user: Bo
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.trial_name)
+@settings_actor_required
 async def trial_save_name(
     message: Message, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1709,8 +1713,8 @@ async def trial_save_name(
     )
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:trial:days")
+@settings_actor_required
 async def trial_ask_days(callback: CallbackQuery, state: FSMContext, db_user: BotUser):
     if not _is_admin(db_user):
         await callback.answer(feedback.NOT_ADMIN, show_alert=True)
@@ -1729,8 +1733,8 @@ async def trial_ask_days(callback: CallbackQuery, state: FSMContext, db_user: Bo
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.trial_days)
+@settings_actor_required
 async def trial_save_days(
     message: Message, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1758,8 +1762,8 @@ async def trial_save_days(
     )
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:trial:gb")
+@settings_actor_required
 async def trial_ask_gb(callback: CallbackQuery, state: FSMContext, db_user: BotUser):
     if not _is_admin(db_user):
         await callback.answer(feedback.NOT_ADMIN, show_alert=True)
@@ -1778,8 +1782,8 @@ async def trial_ask_gb(callback: CallbackQuery, state: FSMContext, db_user: BotU
     )
 
 
-@settings_actor_required
 @router.message(SettingsStates.trial_gb)
+@settings_actor_required
 async def trial_save_gb(
     message: Message, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1807,8 +1811,8 @@ async def trial_save_gb(
     )
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:trial:tpl")
+@settings_actor_required
 async def trial_pick_tpl(
     callback: CallbackQuery,
     db_user: BotUser,
@@ -1843,8 +1847,8 @@ async def trial_pick_tpl(
         await callback.message.edit_text(feedback.PICK_TEMPLATE, reply_markup=_kb(rows))
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:trial:settpl:"))
+@settings_actor_required
 async def trial_set_tpl(
     callback: CallbackQuery,
     session: AsyncSession,
@@ -1863,8 +1867,8 @@ async def trial_set_tpl(
     await _render_trial(callback, session)
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:trial:grp")
+@settings_actor_required
 async def trial_pick_grp(
     callback: CallbackQuery, state: FSMContext, session: AsyncSession, db_user: BotUser
 ):
@@ -1920,8 +1924,8 @@ async def _show_trial_groups(callback: CallbackQuery, state: FSMContext) -> None
         await callback.message.edit_text(feedback.PICK_GROUPS, reply_markup=_kb(rows))
 
 
-@settings_actor_required
 @router.callback_query(F.data.startswith("adm:st:trial:toggrp:"))
+@settings_actor_required
 async def trial_tog_grp(callback: CallbackQuery, state: FSMContext, db_user: BotUser):
     if not _is_admin(db_user):
         await callback.answer(feedback.NOT_ADMIN, show_alert=True)
@@ -1937,8 +1941,8 @@ async def trial_tog_grp(callback: CallbackQuery, state: FSMContext, db_user: Bot
     await _show_trial_groups(callback, state)
 
 
-@settings_actor_required
 @router.callback_query(F.data == "adm:st:trial:grpdone")
+@settings_actor_required
 async def trial_grp_done(
     callback: CallbackQuery, session: AsyncSession, state: FSMContext, db_user: BotUser
 ):

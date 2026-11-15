@@ -404,14 +404,14 @@ async def reopen_reseller_cap_adjust(
 def register_staff_cancel_codes() -> None:
     from app.bot.nav_input import CancelEntry, register_cancel_code
 
-    register_cancel_code("adm_pln", CancelEntry(reopen=reopen_admin_plans))
-    register_cancel_code("adm_usr", CancelEntry(reopen=reopen_admin_users))
-    register_cancel_code("adm_res", CancelEntry(reopen=reopen_admin_resellers))
-    register_cancel_code("adm_tkt", CancelEntry(reopen=reopen_admin_tickets))
-    register_cancel_code("adm_home", CancelEntry(reopen=reopen_admin_home))
-    register_cancel_code("adm_bc", CancelEntry(reopen=reopen_admin_broadcast))
-    register_cancel_code("adm_set", CancelEntry(reopen=reopen_admin_settings))
-    register_cancel_code("adm_bak", CancelEntry(reopen=reopen_admin_backup))
+    register_cancel_code("adm_pln", CancelEntry(reopen=reopen_admin_plans, owner_only=True))
+    register_cancel_code("adm_usr", CancelEntry(reopen=reopen_admin_users, owner_only=True))
+    register_cancel_code("adm_res", CancelEntry(reopen=reopen_admin_resellers, owner_only=True))
+    register_cancel_code("adm_tkt", CancelEntry(reopen=reopen_admin_tickets, owner_only=True))
+    register_cancel_code("adm_home", CancelEntry(reopen=reopen_admin_home, owner_only=True))
+    register_cancel_code("adm_bc", CancelEntry(reopen=reopen_admin_broadcast, owner_only=True))
+    register_cancel_code("adm_set", CancelEntry(reopen=reopen_admin_settings, owner_only=True))
+    register_cancel_code("adm_bak", CancelEntry(reopen=reopen_admin_backup, owner_only=True))
     register_cancel_code("adm_pg_u", CancelEntry(reopen=reopen_pg_users))
     register_cancel_code("adm_pg_n", CancelEntry(reopen=reopen_pg_nodes))
     register_cancel_code("pcm_hub", CancelEntry(reopen=reopen_plan_catalog))
@@ -419,7 +419,7 @@ def register_staff_cancel_codes() -> None:
     register_cancel_code("rs_set", CancelEntry(reopen=reopen_reseller_settings))
     register_cancel_code("rs_msg", CancelEntry(reopen=reopen_reseller_user_msg))
     register_cancel_code("loy_stf", CancelEntry(reopen=reopen_loyalty_staff))
-    register_cancel_code("adm_cap", CancelEntry(reopen=reopen_reseller_cap_adjust))
+    register_cancel_code("adm_cap", CancelEntry(reopen=reopen_reseller_cap_adjust, owner_only=True))
 
 
 register_staff_cancel_codes()

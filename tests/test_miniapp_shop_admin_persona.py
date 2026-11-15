@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.api.miniapp_feeds import register_miniapp_feeds
 from app.api.miniapp_pages import register_miniapp_pages
+from app.config import get_settings
 from app.db.models import Base, BotUser, BotUserShop, ResellerProfile
 from app.services.miniapp_shop import NOT_A_CUSTOMER, PLATFORM_SWITCH, SHOP_SWITCH
 from app.services.secret_box import seal_bot_token
@@ -75,7 +76,12 @@ class ShopAdminPersonaTests(unittest.IsolatedAsyncioTestCase):
                 await set_setting(session, SHOP_SWITCH, "1", reseller_id=shop)
         clear_settings_cache()
         settings = SimpleNamespace(miniapp_enabled=True, bot_token=MAIN_TOKEN, currency="تومان")
-        self.patches = [patch("app.services.miniapp_auth.get_settings", return_value=settings)]
+        # A platform admin is someone listed in ADMIN_IDS; a role left on the row alone is demoted.
+        listed = get_settings().model_copy(update={"admin_ids": [ADMIN_TG]})
+        self.patches = [
+            patch("app.services.miniapp_auth.get_settings", return_value=settings),
+            patch("app.services.users.get_settings", return_value=listed),
+        ]
         for p in self.patches:
             p.start()
 
