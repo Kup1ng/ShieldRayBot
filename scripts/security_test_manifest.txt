@@ -359,3 +359,43 @@ tests/test_shop_customer_block.py
 tests/test_campaign_broad_audiences.py
 # Shop bot customer card tools: same keys and checks as the web, own shop only, once per flow.
 tests/test_shop_bot_customer_tools.py
+# Wallet purchases: an unknown panel outcome keeps the payment and a retry reuses the saved add-on target; a refused write refunds.
+tests/test_wallet_delivery_unknown_outcome.py
+
+# Wallet gift codes: the default once-per-customer rule is counted after the code lock, so parallel redeems credit once.
+tests/test_gift_code_redeem_race.py
+
+# Reseller capacity packs and package renewals: a refused purchase changes neither money nor capacity; one that reached the panel is never refunded.
+tests/test_reseller_addon_purchase_failure.py
+
+# Reseller expiry and PAYG suspension record only the users they disabled, so a renewal never re-enables a cancelled or voided service.
+tests/test_subscription_expiry_keeps_disabled_users.py
+
+# Request bodies over the size limit are refused before the CSRF check or a route buffers them.
+tests/test_body_size_limit.py
+
+# Bot access: Owner-only «انصراف» codes refuse other users, and a removed admin is a customer in the Mini App too.
+tests/test_nav_cancel_owner_codes.py
+tests/test_miniapp_removed_admin.py
+
+# Telegram HTML: a shop's plan name is escaped in the delivery card.
+tests/test_delivery_plan_name_escaping.py
+
+# Guessing limits: parallel logins and parallel code guesses count before their result is known.
+tests/test_login_parallel_attempts.py
+tests/test_code_attempt_limit_parallel.py
+
+# Payments: Stars are refunded only when nothing was delivered; a rejected receipt frees only what its own order held; a photo never settles a gateway or Stars payment; gateways take real money unless sandbox is chosen.
+tests/test_money_delivery_safety.py
+tests/test_reject_payment_releases.py
+tests/test_generic_receipt_methods.py
+tests/test_psp_sandbox_default.py
+
+# Rewards and volume: an unanswered reward write stays spent for review; a custom order holds the volume it delivers.
+tests/test_loyalty_reward_unknown_outcome.py
+tests/test_custom_order_volume_hold.py
+
+# Hardening: current-password checks share the login limit; backup uploads stream to disk and refuse zip bombs before decompressing; the payment-check throttle is per customer.
+tests/test_security_current_password_limit.py
+tests/test_backup_upload_limits.py
+tests/test_small_low_fixes.py
