@@ -15,7 +15,7 @@ def get_psp_adapter(provider: str, *, ui: dict, public_base_url: str) -> PspAdap
     if name == "zarinpal":
         return ZarinpalAdapter(
             merchant_id=str(ui.get("psp_merchant_id") or ""),
-            sandbox=str(ui.get("psp_sandbox") or "1") in {"1", "true", "yes", "on"},
+            sandbox=str(ui.get("psp_sandbox") or "0") in {"1", "true", "yes", "on"},
         )
     if name == "sunpay":
         # Credential reuses psp_merchant_id (مرچنت/کلید API); PAY_URL is psp_pay_url.

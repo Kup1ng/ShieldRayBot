@@ -6,14 +6,16 @@ from aiogram import F, Router
 from aiogram.types import CallbackQuery, Message, PreCheckoutQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import BotUser, Payment, PaymentMethod, PaymentStatus
+from app.db.models import BotUser, Order, OrderStatus, Payment, PaymentMethod, PaymentStatus
 from app.services.chat_records import keep_sent
+from app.services.db_safe import rollback_quiet
 from app.services.delivery import send_delivery_to_user
 from app.services.formatting import format_message
 from app.services.notifications import notify_stars_delivery_failed
 from app.services.orders import approve_payment, reject_payment, stars_amount_for_toman
 from app.services.resellers import reseller_can_review_payment
 from app.services.users import get_all_settings, get_setting
+from app.services.volume_allocation import is_hard_panel_rejection
 from app.services import bot_feedback_texts as feedback
 
 logger = logging.getLogger(__name__)
@@ -39,6 +41,29 @@ async def _refund_stars_charge(bot, *, telegram_user_id: int, charge_id: str) ->
             "stars refund failed user=%s charge=%s", telegram_user_id, charge
         )
         return False
+
+
+STARS_DELIVERY_UNDER_REVIEW = (
+    "پرداخت استارز ثبت شد ولی نتیجهٔ تحویل مشخص نیست؛ پشتیبانی آن را بررسی و تکمیل می‌کند. دوباره پرداخت نکنید."
+)
+
+
+async def stars_refund_is_safe(session: AsyncSession, payment: Payment, exc: BaseException) -> bool:
+    """True only when the failed approval provably granted nothing, so the Stars can go back.
+
+    An approval that started delivery may have reached the panel (a lost response, a renewal or
+    add-on under review); refunding it would leave the buyer with the service and the Stars.
+    """
+    await session.refresh(payment)
+    if payment.status != PaymentStatus.APPROVED.value:
+        return True
+    if not is_hard_panel_rejection(exc):
+        return False
+    order = await session.get(Order, payment.order_id) if payment.order_id else None
+    if order is None:
+        return False
+    await session.refresh(order)
+    return order.status != OrderStatus.DELIVERED.value and not order.service_mutation_pending
 
 
 @router.pre_checkout_query()
@@ -153,21 +178,22 @@ async def stars_successful_payment(message: Message, session: AsyncSession, db_u
             e,
             exc_info=True,
         )
-        refunded = await _refund_stars_charge(
+        buyer_tg = int(db_user.telegram_id)
+        if not session.is_active:
+            await rollback_quiet(session)
+        refund_safe = await stars_refund_is_safe(session, payment, e)
+        refunded = refund_safe and await _refund_stars_charge(
             message.bot,
-            telegram_user_id=int(db_user.telegram_id),
+            telegram_user_id=buyer_tg,
             charge_id=charge_id,
         )
-        # approve_payment may have left the row APPROVED or rolled it; force a
-        # clear rejected marker when we refund so staff do not re-deliver.
         try:
             await session.refresh(payment)
-            note = (
-                f"stars approve/delivery failed: {e}"
-                + ("; refunded" if refunded else "; refund_failed")
+            note = f"stars approve/delivery failed: {e}" + (
+                "; refunded" if refunded else "; refund_failed" if refund_safe else "; kept for review"
             )
-            # Refunded → reject so staff do not re-deliver. Still-APPROVED without
-            # refund stays approved for manual retry, but always stamp the note.
+            # Refunded → reject so staff do not re-deliver. An approval whose delivery may have
+            # reached the panel stays approved for staff to finish, like a card payment.
             if refunded or payment.status != PaymentStatus.APPROVED.value:
                 payment.status = PaymentStatus.REJECTED.value
             payment.review_note = payment.review_note or note
@@ -179,6 +205,8 @@ async def stars_successful_payment(message: Message, session: AsyncSession, db_u
         with keep_sent():  # a payment outcome the buyer must be able to find again
             if refunded:
                 await message.answer("پرداخت استارز دریافت شد ولی تحویل ناموفق بود و استارز بازگردانده شد.")
+            elif not refund_safe:
+                await message.answer(STARS_DELIVERY_UNDER_REVIEW)
             else:
                 await message.answer(
                     "پرداخت استارز دریافت شد ولی تحویل ناموفق بود.\n"
@@ -186,7 +214,7 @@ async def stars_successful_payment(message: Message, session: AsyncSession, db_u
                 )
         try:
             await notify_stars_delivery_failed(
-                message.bot, session, payment, telegram_id=int(db_user.telegram_id),
+                message.bot, session, payment, telegram_id=buyer_tg,
                 charge_id=charge_id, refunded=refunded, error=str(e),
             )
         except Exception:

@@ -115,7 +115,7 @@ def _legacy_gateway(ui: dict) -> PspGateway:
         merchant_id=str(ui.get("psp_merchant_id") or "").strip(),
         pay_url=str(ui.get("psp_pay_url") or "").strip(),
         request_method=_request_method(ui.get("psp_sunpay_request_method")),
-        sandbox=_on(ui.get("psp_sandbox"), True),
+        sandbox=_on(ui.get("psp_sandbox"), False),
         enabled=True,
     )
 

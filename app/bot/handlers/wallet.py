@@ -31,7 +31,7 @@ from app.services.receipts import submit_receipt
 from app.services.ux20 import payment_shop_clause
 from app.services.users import current_shop_reseller_id, get_all_settings, on
 from app.services.wallet import list_activity
-from app.services.wallet_topup import TOPUP_METHODS
+from app.services.wallet_topup import RECEIPT_PAYMENT_METHODS, TOPUP_METHODS
 from app.services.crypto_rates import CryptoQuote, attach_quote, display_amount, quote_from_settings, validity_note
 from app.services.message_variables import DOMAIN_PAYMENT, render_message_template
 from app.services import bot_feedback_texts as feedback
@@ -860,6 +860,8 @@ async def generic_receipt(
             Payment.user_id == db_user.id,
             Payment.status == PaymentStatus.PENDING.value,
             Payment.receipt_file_id.is_(None),
+            # Stars, gateway checkouts and BezanBeCard settle themselves; a photo never approves them.
+            Payment.method.in_(RECEIPT_PAYMENT_METHODS),
             # Only a payment of the shop whose bot received the photo.
             payment_shop_clause(current_shop_reseller_id()),
         )

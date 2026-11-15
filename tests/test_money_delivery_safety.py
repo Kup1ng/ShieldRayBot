@@ -207,6 +207,51 @@ class StarsRefundHelperTests(unittest.IsolatedAsyncioTestCase):
         await engine.dispose()
 
 
+class StarsRefundSafetyTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from app.db.models import Base, BotUser, Order, Payment
+
+        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with self.engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
+        self.session.add(BotUser(id=1, telegram_id=9301, referral_code="S9301"))
+        await self.session.flush()
+        self.order = Order(id=1, user_id=1, amount=100, status="paid")
+        self.payment = Payment(id=1, order_id=1, user_id=1, amount=100, method="stars", status="approved")
+        self.session.add_all([self.order, self.payment])
+        await self.session.commit()
+
+    async def asyncTearDown(self):
+        await self.session.close()
+        await self.engine.dispose()
+
+    async def safe(self, exc: BaseException) -> bool:
+        from app.bot.handlers.payments import stars_refund_is_safe
+
+        return await stars_refund_is_safe(self.session, self.payment, exc)
+
+    async def test_lost_panel_response_after_approval_keeps_the_stars(self):
+        self.assertFalse(await self.safe(TimeoutError("lost panel response")))
+
+    async def test_renewal_under_review_keeps_the_stars(self):
+        from app.services.service_renewals import RenewalPendingReview
+
+        self.assertFalse(await self.safe(RenewalPendingReview()))
+
+    async def test_panel_refusal_of_an_open_order_refunds(self):
+        from app.services.pasarguard import PasarGuardError
+
+        self.assertTrue(await self.safe(PasarGuardError("denied", status_code=403)))
+
+    async def test_approval_that_never_happened_refunds(self):
+        self.payment.status = "pending"
+        await self.session.commit()
+        self.assertTrue(await self.safe(TimeoutError("db busy")))
+
+
 class SourceWiringTests(unittest.TestCase):
     def test_service_delete_fail_closed_in_source(self):
         src = (ROOT / "app/services/bot_user_admin.py").read_text(encoding="utf-8")

@@ -26,7 +26,7 @@ _SANDBOX_START = "https://sandbox.zarinpal.com/pg/StartPay/{authority}"
 class ZarinpalAdapter:
     name = "zarinpal"
 
-    def __init__(self, *, merchant_id: str, sandbox: bool = True):
+    def __init__(self, *, merchant_id: str, sandbox: bool = False):
         self.merchant_id = (merchant_id or "").strip()
         self.sandbox = bool(sandbox)
 

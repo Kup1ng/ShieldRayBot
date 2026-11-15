@@ -64,6 +64,8 @@ TOPUP_METHODS: dict[str, tuple[str, str]] = {
 # BezanBeCard needs its matching checkout screen, which only the bot has.
 OUTSIDE_BOT_METHODS = ("card", "gateway", "psp", "crypto")
 RECEIPT_METHODS = frozenset({"card", "gateway", "crypto"})
+# Payment.method values that are settled by a customer's receipt photo (orders and top-ups).
+RECEIPT_PAYMENT_METHODS = frozenset(TOPUP_METHODS[key][1] for key in RECEIPT_METHODS)
 METHOD_LABELS = {
     "card": ("btn_pay_card", "کارت به کارت"),
     "gateway": ("btn_pay_gateway", "درگاه پرداخت"),
@@ -362,7 +364,7 @@ async def _receipt_payment(session: AsyncSession, *, user_id: int, shop_id: int 
         or purse != shop_id
     ):
         raise TopupError("پرداخت پیدا نشد")
-    if payment.method not in {TOPUP_METHODS[key][1] for key in RECEIPT_METHODS}:
+    if payment.method not in RECEIPT_PAYMENT_METHODS:
         raise TopupError("این پرداخت رسید لازم ندارد")
     if payment.status != PaymentStatus.PENDING.value:
         raise TopupError("این پرداخت دیگر باز نیست")
