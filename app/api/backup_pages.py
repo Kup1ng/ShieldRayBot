@@ -55,7 +55,7 @@ async def _after_manual_backup(session: AsyncSession, result: dict) -> str:
     try:
         sent = await send_backup(
             session, Path(str(result.get("path"))), include_env=bool(result.get("include_env")),
-            caption=f"💾 بکاپ PGClockBot — {result.get('created_at', '')[:16]}",
+            caption=f"💾 بکاپ شیلدری — {result.get('created_at', '')[:16]}",
         )
     except Exception:  # noqa: BLE001 - a failed delivery must not hide a good backup
         logger.exception("manual backup telegram delivery failed")

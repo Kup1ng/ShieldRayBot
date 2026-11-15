@@ -1135,7 +1135,7 @@ async def provision_reseller(
         payload: dict = {
             "username": pg_username,
             "password": pg_password,
-            "note": f"PGClockBot reseller #{user.id}",
+            "note": f"ShieldRay reseller #{user.id}",
         }
         from app.services.platform_identity import deliverable_telegram_id
 

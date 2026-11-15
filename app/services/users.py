@@ -735,10 +735,10 @@ async def set_settings_bulk(
 
 
 DEFAULT_SETTINGS = {
-    "shop_title": "کلاک بات",
+    "shop_title": "ShieldRay",
     "welcome_text": (
         "سلام {name} 👋\n\n"
-        "به فروشگاه کلاک خوش آمدید.\n"
+        "به فروشگاه ShieldRay خوش آمدید.\n"
         "از منوی زیر می‌توانید سرویس بخرید، وضعیت را ببینید و پشتیبانی بگیرید."
     ),
     "payment_cards": "[]",

@@ -42,12 +42,15 @@ class PgUserCreateUiTests(unittest.TestCase):
         self.assertIn("T", str(p["expire"]))  # ISO datetime
 
     def test_nodes_reconnect_for_viewers(self):
+        from app.services.pg_nodes_panel import node_capabilities
+
+        viewer = {"role": "reseller", "pg_actions": {"nodes": {"reconnect": True}}}
+        can = node_capabilities(viewer)
+        self.assertTrue(can["reconnect"])
+        self.assertFalse(can["delete"])
+        self.assertFalse(node_capabilities({"role": "reseller", "pg_actions": {}})["reconnect"])
         src = Path("app/api/pg_pages.py").read_text(encoding="utf-8")
-        self.assertIn("can_reconnect", src)
         self.assertIn("reconnect_node", src)
-        tpl = Path("app/web/templates/pg_nodes.html").read_text(encoding="utf-8")
-        self.assertIn("اتصال مجدد", tpl)
-        self.assertIn("can_reconnect", tpl)
 
     def test_panel_settings_tabs(self):
         src = Path("app/web/templates/base.html").read_text(encoding="utf-8")

@@ -10,10 +10,10 @@ from urllib.parse import quote
 from fastapi import Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings, normalize_pg_base_url
+from app.api.spa_pages import spa_response
+from app.config import normalize_pg_base_url
 from app.db.models import BotUser, ResellerPlan, ResellerProfile, Role
 from app.services.miniapp_shop import (
     PERMISSION as MINIAPP_PERMISSION,
@@ -22,17 +22,15 @@ from app.services.miniapp_shop import (
     STATE_PLATFORM_OFF,
     STATE_SETUP,
     STATE_SHOP_OFF,
-    shop_miniapp_state,
 )
 from app.services.reseller_bots import schedule_shop_menu_sync
 from app.services.shop_scope import ShopScopeError, assert_bot_user_in_scope
-from app.services.db_safe import rollback_quiet
 from app.services.platform_identity import is_explicit_owner_staff
-from app.services.reseller_capacity_view import allocation_view_for_shop
-from app.services.volume_allocation import apply_create_form_oversell, apply_oversell_switch, list_oversold_shop_ids
+from app.services.reseller_panel_edit import load_shop
+from app.services.reseller_panel_list import SHOP_FORBIDDEN, SHOP_OK, load_scoped_shop
+from app.services.volume_allocation import apply_create_form_oversell, apply_oversell_switch
 from app.services.billing import require_positive_payg_rate
-from app.services.pasarguard import get_pg
-from app.services.pg_quota import limit_snapshot_cards, load_staff_limit_snapshot
+from app.services.pg_quota import load_staff_limit_snapshot
 from app.services.resellers import (
     DEFAULT_FEATURE_PERMS,
     FEATURE_PERMS,
@@ -40,10 +38,7 @@ from app.services.resellers import (
     format_credentials_message,
     get_application,
     get_reseller_panel_base_url,
-    get_reseller_pg_panel_base_url,
     join_perms,
-    list_active_reseller_plans,
-    list_applications,
     normalize_feature_perms,
     notify_reseller_revoked,
     has_perm,
@@ -51,7 +46,6 @@ from app.services.resellers import (
     provision_reseller,
     reject_application,
     revoke_reseller,
-    with_shop_settings,
 )
 
 logger = logging.getLogger(__name__)
@@ -73,7 +67,7 @@ def _require_rep_mgmt(staff: dict) -> None:
     try:
         assert_staff_can_manage_representatives(staff)
     except RepresentativeUnifyError:
-        raise HTTPException(status_code=403, detail="forbidden")
+        raise HTTPException(status_code=403, detail="forbidden") from None
 
 
 async def _validate_reseller_capacity_inputs(
@@ -218,225 +212,22 @@ def _parse_pg_group_ids(form) -> str | None:
 def register_reseller_pages(app, *, render, require_admin, get_db, require_staff=None):
     staff_dep = require_staff or require_admin
 
-    def _tabs(active: str) -> list[dict]:
-        # Plans live under unified /plans — no duplicate «پلن‌ها» tab here.
-        return [
-            {"href": "/resellers", "label": "لیست", "id": "list"},
-            {"href": "/resellers/applications", "label": "درخواست‌ها", "id": "apps"},
-        ]
-
     @app.get("/resellers", response_class=HTMLResponse)
     async def resellers_page(
-        request: Request,
         staff: dict = Depends(staff_dep),
         session: AsyncSession = Depends(get_db),
     ):
-        from app.services.pg_overview import admin_usage_snapshot
-        from app.services.platform_identity import is_explicit_owner_staff
         from app.services.representative_unification import (
             RepresentativeUnifyError,
             assert_live_parent_for_child,
-            descendant_shop_profile_ids,
         )
-        from app.services.setup_wizard import default_panel_base_url
-        from app.services.users import get_setting
         from fastapi import HTTPException
 
         try:
             await assert_live_parent_for_child(session, staff)
         except RepresentativeUnifyError:
-            raise HTTPException(status_code=403, detail="forbidden")
-
-        owner_view = is_explicit_owner_staff(staff)
-        l2_pg_roles: list[dict] = []
-        if not owner_view:
-            try:
-                from app.services.pasarguard import get_pg_for_principal
-
-                pid = int(staff.get("org_principal_id") or 0)
-                if pid > 0:
-                    pg = await get_pg_for_principal(session, principal_id=pid)
-                    raw_roles = await pg.get_admin_roles()
-                    l2_pg_roles = [
-                        r
-                        for r in (raw_roles or [])
-                        if isinstance(r, dict)
-                        and r.get("id") is not None
-                        and not bool(r.get("is_owner"))
-                    ]
-            except Exception:
-                l2_pg_roles = []
-
-        result = await session.execute(
-            select(BotUser, ResellerProfile)
-            .join(ResellerProfile, ResellerProfile.user_id == BotUser.id)
-            .order_by(ResellerProfile.id.desc())
-        )
-        rows = result.all()
-        if not owner_view:
-            allowed = await descendant_shop_profile_ids(session, staff)
-            rows = [pair for pair in rows if int(pair[1].id) in allowed]
-        from app.services.color_tags import (
-            color_tag_meta,
-            color_tags_for_ui,
-            effective_color_tag,
-            normalize_color_filter,
-        )
-
-        color_filter = normalize_color_filter(request.query_params.get("color"))
-        if color_filter:
-            rows = [
-                pair
-                for pair in rows
-                if effective_color_tag(pair[0]) == color_filter
-            ]
-
-        search_q = ""
-        try:
-            from app.services.list_query import filter_by_search, normalize_search_q
-            from app.services.user_search import clean_handle
-
-            search_q = normalize_search_q(request.query_params.get("q"))
-            if search_q:
-                rows = filter_by_search(
-                    rows,
-                    clean_handle(search_q),
-                    lambda pair: (
-                        pair[0].id,
-                        pair[0].telegram_id,
-                        pair[0].username,
-                        pair[0].full_name,
-                        pair[0].role,
-                        pair[1].web_username,
-                        pair[1].bot_username,
-                        pair[1].pg_admin_username,
-                        pair[1].billing_mode,
-                    ),
-                )
-        except Exception:
-            search_q = (request.query_params.get("q") or "").strip()
-        # One-time PAYG→wallet link; only auto-restore wrongful legacy suspend on first merge
-        try:
-            from app.services.billing import ensure_payg_shop_wallet, is_payg
-            from app.services.billing_suspend import restore_payg_reseller
-
-            touched = False
-            for _user, profile in rows:
-                if not is_payg(profile):
-                    continue
-                was_linked = bool(getattr(profile, "payg_wallet_linked", False))
-                _u, bal = await ensure_payg_shop_wallet(session, profile)
-                touched = True
-                if (
-                    (not was_linked)
-                    and bal > 0
-                    and profile.billing_suspended_at is not None
-                ):
-                    try:
-                        await restore_payg_reseller(session, profile, commit=False)
-                    except Exception:
-                        logging.getLogger(__name__).debug(
-                            "list auto-restore failed", exc_info=True
-                        )
-            if touched:
-                await session.commit()
-        except Exception:
-            try:
-                await session.rollback()
-            except Exception:
-                logger.debug("resellers_page: ignored failure", exc_info=True)
-        roles = []
-        reseller_usage: dict = {}
-        if owner_view:
-            try:
-                roles = await get_pg().get_admin_roles()
-            except Exception:
-                roles = []
-            try:
-                pg = get_pg()
-                admins = await pg.get_admins()
-                if not admins:
-                    admins = await pg.get_admins_simple()
-                roles_by_id = {
-                    int(r.get("id")): r
-                    for r in (roles or [])
-                    if isinstance(r, dict) and r.get("id") is not None
-                }
-                by_name = {
-                    str(a.get("username") or "").strip().lower(): a
-                    for a in (admins or [])
-                    if isinstance(a, dict) and a.get("username")
-                }
-                for _user, profile in rows:
-                    uname = str(profile.pg_admin_username or "").strip().lower()
-                    if not uname:
-                        continue
-                    admin = by_name.get(uname)
-                    if not isinstance(admin, dict):
-                        continue
-                    role = admin.get("role") if isinstance(admin.get("role"), dict) else None
-                    if role is None:
-                        rid = admin.get("role_id") or profile.pg_role_id
-                        try:
-                            role = roles_by_id.get(int(rid)) if rid is not None else None
-                        except (TypeError, ValueError):
-                            role = None
-                    reseller_usage[int(profile.user_id)] = admin_usage_snapshot(admin, role)
-            except Exception:
-                reseller_usage = {}
-        panel_url = await get_reseller_panel_base_url(session)
-        custom_url = (await get_setting(session, "reseller_panel_base_url") or "").strip()
-        default_url = default_panel_base_url()
-        pg_panel_url = await get_reseller_pg_panel_base_url(session)
-        custom_pg_url = (await get_setting(session, "reseller_pg_panel_base_url") or "").strip()
-        default_pg_url = normalize_pg_base_url(get_settings().pg_base_url or "")
-        show_reseller_apply = await get_setting(session, "show_reseller_apply", "1")
-        try:
-            reseller_plans = await list_active_reseller_plans(session)
-        except Exception:
-            reseller_plans = []
-        oversold_shop_ids: list[int] = []
-        if owner_view:
-            try:
-                oversold_shop_ids = await list_oversold_shop_ids(session)
-            except SQLAlchemyError:
-                # The warning is optional; the list page still renders without it.
-                logging.getLogger(__name__).warning("oversold shop list failed", exc_info=True)
-                await rollback_quiet(session)
-        return render(
-            request,
-            "resellers.html",
-            {
-                "staff": staff,
-                "rows": rows,
-                "reseller_usage": reseller_usage,
-                "oversold_shop_ids": oversold_shop_ids,
-                "tabs": _tabs("list"),
-                "tab": "list",
-                "feature_perms": FEATURE_PERMS,
-                "pg_roles": roles,
-                "reseller_plans": reseller_plans,
-                "panel_url": panel_url,
-                "custom_panel_url": custom_url,
-                "default_panel_url": default_url,
-                "using_custom_panel_url": bool(custom_url),
-                "pg_panel_url": pg_panel_url,
-                "custom_pg_panel_url": custom_pg_url,
-                "default_pg_panel_url": default_pg_url,
-                "using_custom_pg_panel_url": bool(custom_pg_url),
-                "show_reseller_apply": show_reseller_apply,
-                "flash_ok": request.query_params.get("ok"),
-                "flash_err": request.query_params.get("err"),
-                "open_edit": request.query_params.get("edit"),
-                "q": search_q,
-                "owner_view": owner_view,
-                "can_create_l2": not owner_view,
-                "l2_pg_roles": l2_pg_roles,
-                "color_filter": color_filter,
-                "color_tags": color_tags_for_ui(),
-                "color_tag_meta": color_tag_meta,
-            },
-        )
+            raise HTTPException(status_code=403, detail="forbidden") from None
+        return spa_response("resellers")
 
     @app.post("/resellers/panel-url")
     async def reseller_panel_url_save(
@@ -570,7 +361,7 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
         try:
             await assert_live_parent_for_child(session, staff)
         except RepresentativeUnifyError:
-            raise HTTPException(status_code=403, detail="forbidden")
+            raise HTTPException(status_code=403, detail="forbidden") from None
         form = await request.form()
         _ = form.get("parent_id")
         _ = form.get("depth")
@@ -607,174 +398,19 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
     @app.get("/resellers/{user_id}/edit", response_class=HTMLResponse)
     async def reseller_edit_page(
         user_id: int,
-        request: Request,
         staff: dict = Depends(require_admin),
         session: AsyncSession = Depends(get_db),
     ):
-        user = await session.get(BotUser, user_id)
-        profile = (
-            await session.execute(select(ResellerProfile).where(ResellerProfile.user_id == user_id))
-        ).scalar_one_or_none()
-        if not user or not profile:
+        if await load_shop(session, user_id) is None:
             return RedirectResponse(f"/resellers?err={_q('نماینده یافت نشد')}", status_code=303)
-        roles = []
-        try:
-            roles = await get_pg().get_admin_roles()
-        except Exception:
-            roles = []
-        from app.services.authz import resolve_shop_permissions_from_profile
-
-        perms = list(resolve_shop_permissions_from_profile(profile) or [])
-        from app.services.billing import (
-            is_payg,
-            list_billing_transactions,
-            rate_context_for_profile,
-            resolve_price_per_gb,
-        )
-        from app.services.formatting import format_toman
-        import secrets
-
-        billing_txs = []
-        billing_rate = 0
-        pg_limits = None
-        min_unsuspend = 0
-        wallet_balance = int(user.wallet_balance or 0)
-        wallet_txs = []
-        if is_payg(profile):
-            from app.services.billing import ensure_payg_shop_wallet, list_billing_transactions
-            from app.services.billing_suspend import restore_payg_reseller
-            from app.services.bot_user_admin import list_wallet_txs
-
-            was_linked = bool(getattr(profile, "payg_wallet_linked", False))
-            _u, wallet_balance = await ensure_payg_shop_wallet(session, profile)
-            await session.refresh(user)
-            wallet_balance = int(user.wallet_balance or 0)
-            # First-link only: lift legacy suspend caused by empty billing pot
-            if (
-                (not was_linked)
-                and wallet_balance > 0
-                and profile.billing_suspended_at is not None
-            ):
-                try:
-                    await restore_payg_reseller(session, profile, commit=True)
-                except Exception:
-                    logging.getLogger(__name__).debug(
-                        "edit auto-restore failed", exc_info=True
-                    )
-            else:
-                await session.commit()
-            billing_txs = await list_billing_transactions(session, int(user_id), limit=15)
-            # PAYG billing pot is the platform purse (reseller_id IS NULL).
-            wallet_txs = await list_wallet_txs(
-                session, int(user_id), limit=15, shop_id=None
-            )
-            billing_rate = await resolve_price_per_gb(session, rate_context_for_profile(profile))
-            if profile.billing_suspended_at is not None:
-                from app.services.billing_suspend import min_topup_to_unsuspend
-
-                min_unsuspend = await min_topup_to_unsuspend(session)
-        if profile.pg_admin_username:
-            from app.services.pg_overview import build_reseller_pg_overview
-
-            # Owner session + target reseller PG username — use platform client.
-            staff_view = dict(staff)
-            staff_view["pg_admin_username"] = profile.pg_admin_username
-            staff_view["pg_role_id"] = profile.pg_role_id
-            try:
-                ov = await build_reseller_pg_overview(staff_view, session=session)
-                if ov.get("ready"):
-                    pg_limits = ov
-            except Exception:
-                pg_limits = None
-        pg_subscription = None
-        if profile.pg_admin_username:
-            from app.services.formatting import format_expire_short
-            from app.services.pg_admin_subscription import get_subscription
-
-            from app.db.models import ResellerPlan
-            from app.services.pg_admin_subscription import is_current_capacity_plan
-            from app.services.reseller_capacity_view import build_capacity_view, live_capacity_from_overview
-
-            sub = await get_subscription(session, profile.pg_admin_username)
-            if sub is not None:
-                plan = await session.get(ResellerPlan, int(sub.plan_id)) if sub.plan_id else None
-                exp = sub.expires_at
-                alloc = await allocation_view_for_shop(session, int(user_id))
-                pg_subscription = {
-                    "expires_at": format_expire_short(exp) if exp else None,
-                    **build_capacity_view(
-                        sub,
-                        current_capacity=is_current_capacity_plan(plan),
-                        live=live_capacity_from_overview(pg_limits),
-                        allocation=alloc,
-                    ),
-                }
-        from app.services.color_tags import color_tags_for_ui
-
-        ctx = {
-            "staff": staff,
-            "user": user,
-            "profile": profile,
-            "feature_perms": FEATURE_PERMS,
-            "selected_perms": perms,
-            "miniapp_status": MINIAPP_STATUS_TEXT[await shop_miniapp_state(session, profile)],
-            "pg_roles": roles,
-            "is_payg": is_payg(profile),
-            "billing_txs": billing_txs,
-            "billing_rate": billing_rate,
-            "wallet_balance": wallet_balance,
-            "wallet_txs": wallet_txs,
-            "pg_limits": pg_limits,
-            "pg_subscription": pg_subscription,
-            "min_unsuspend": min_unsuspend,
-            "format_toman": format_toman,
-            "topup_nonce": secrets.token_hex(8),
-            "flash_ok": request.query_params.get("ok"),
-            "flash_err": request.query_params.get("err"),
-            "color_tags": color_tags_for_ui(),
-            "pg_api_key_ready": False,
-            "owner_can_toggle_oversell": is_explicit_owner_staff(staff),
-        }
-        if (getattr(profile, "pg_api_key_enc", None) or "").strip():
-            ctx["pg_api_key_ready"] = True
-        else:
-            from app.services.org_principals import get_principal_by_reseller_profile
-
-            linked = await get_principal_by_reseller_profile(session, int(profile.id))
-            if linked is not None and (getattr(linked, "pg_api_key_enc", None) or "").strip():
-                ctx["pg_api_key_ready"] = True
-        if request.query_params.get("fragment") == "1":
-            return render(request, "_reseller_edit_body.html", ctx)
-        return render(request, "reseller_edit.html", ctx)
-
-    async def _load_scoped_reseller(
-        session: AsyncSession, staff: dict, user_id: int
-    ):
-        from app.services.platform_identity import is_explicit_owner_staff
-        from app.services.representative_unification import descendant_shop_profile_ids
-
-        user = await session.get(BotUser, int(user_id))
-        profile = (
-            await session.execute(
-                select(ResellerProfile).where(ResellerProfile.user_id == int(user_id))
-            )
-        ).scalar_one_or_none()
-        if not user or not profile:
-            return None, None, "missing"
-        if not is_explicit_owner_staff(staff):
-            allowed = await descendant_shop_profile_ids(session, staff)
-            if int(profile.id) not in allowed:
-                return None, None, "forbidden"
-        return user, profile, "ok"
+        return spa_response("resellers/edit")
 
     @app.get("/resellers/{user_id}/color-tag", response_class=HTMLResponse)
     async def reseller_color_tag_page(
         user_id: int,
-        request: Request,
         staff: dict = Depends(staff_dep),
         session: AsyncSession = Depends(get_db),
     ):
-        from app.services.color_tags import color_tags_for_ui
         from app.services.representative_unification import (
             RepresentativeUnifyError,
             assert_live_parent_for_child,
@@ -785,23 +421,15 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
         try:
             await assert_live_parent_for_child(session, staff)
         except RepresentativeUnifyError:
-            raise HTTPException(status_code=403, detail="forbidden")
+            raise HTTPException(status_code=403, detail="forbidden") from None
 
-        user, _profile, status = await _load_scoped_reseller(session, staff, user_id)
-        if status == "forbidden":
+        user, _profile, status = await load_scoped_shop(session, staff, user_id)
+        if status == SHOP_FORBIDDEN:
             raise HTTPException(status_code=403, detail="forbidden")
-        if status != "ok" or user is None:
+        if status != SHOP_OK or user is None:
             return RedirectResponse(f"/resellers?err={_q('نماینده یافت نشد')}", status_code=303)
-        ctx = {
-            "staff": staff,
-            "user": user,
-            "color_tags": color_tags_for_ui(),
-            "flash_ok": request.query_params.get("ok"),
-            "flash_err": request.query_params.get("err"),
-        }
-        if request.query_params.get("fragment") == "1":
-            return render(request, "_reseller_color_tag_body.html", ctx)
-        return render(request, "_reseller_color_tag_body.html", ctx)
+        # The risk-tag picker is a dialog of the list page, not a page of its own.
+        return RedirectResponse("/resellers", status_code=303)
 
     @app.post("/resellers/{user_id}/color-tag")
     async def reseller_color_tag_save(
@@ -823,13 +451,13 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
         try:
             await assert_live_parent_for_child(session, staff)
         except RepresentativeUnifyError:
-            raise HTTPException(status_code=403, detail="forbidden")
+            raise HTTPException(status_code=403, detail="forbidden") from None
 
         form = await request.form()
-        user, _profile, status = await _load_scoped_reseller(session, staff, user_id)
-        if status == "forbidden":
+        user, _profile, status = await load_scoped_shop(session, staff, user_id)
+        if status == SHOP_FORBIDDEN:
             return RedirectResponse("/home", status_code=303)
-        if status != "ok" or user is None:
+        if status != SHOP_OK or user is None:
             return RedirectResponse(f"/resellers?err={_q('نماینده یافت نشد')}", status_code=303)
         apply_color_tag(user, str(form.get("color_tag") or ""))
         await session.commit()
@@ -1466,63 +1094,13 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
     @app.get("/resellers/plans/{plan_id}/edit", response_class=HTMLResponse)
     async def reseller_plan_edit_page(
         plan_id: int,
-        request: Request,
         staff: dict = Depends(require_admin),
         session: AsyncSession = Depends(get_db),
     ):
         plan = await session.get(ResellerPlan, plan_id)
         if not plan:
             return RedirectResponse(f"/plans?err={_q('یافت نشد')}#reseller-plans", status_code=303)
-        roles = []
-        try:
-            roles = await get_pg().get_admin_roles()
-        except Exception:
-            roles = []
-        groups = []
-        try:
-            groups = await get_pg().get_groups_simple()
-            if not isinstance(groups, list):
-                groups = []
-            groups = [g for g in groups if isinstance(g, dict)]
-        except Exception:
-            groups = []
-        plan_group_ids = {
-            x.strip()
-            for x in (plan.pg_group_ids or "").split(",")
-            if x.strip()
-        }
-        snap = await load_staff_limit_snapshot(staff, session=session)
-        from app.services.button_styles import PLAN_BUTTON_STYLE_OPTIONS
-        from app.services.plan_categories import (
-            AUDIENCE_RESELLERS,
-            list_categories,
-        )
-
-        plan_categories = await list_categories(
-            session, staff, audience=AUDIENCE_RESELLERS
-        )
-
-        return render(
-            request,
-            "reseller_plan_edit.html",
-            {
-                "staff": staff,
-                "plan": plan,
-                "feature_perms": FEATURE_PERMS,
-                "selected_perms": with_shop_settings(
-                    parse_perms(plan.web_permissions) or parse_perms(DEFAULT_FEATURE_PERMS)
-                ),
-                "pg_limit_snapshot": snap,
-                "pg_limit_cards": limit_snapshot_cards(snap),
-                "pg_roles": roles,
-                "groups": groups,
-                "plan_group_ids": plan_group_ids,
-                "plan_style_options": PLAN_BUTTON_STYLE_OPTIONS,
-                "plan_categories": plan_categories,
-                "flash_ok": request.query_params.get("ok"),
-                "flash_err": request.query_params.get("err"),
-            },
-        )
+        return spa_response("resellers/plans/edit")
 
     @app.post("/resellers/plans/{plan_id}/edit")
     async def reseller_plan_edit_save(
@@ -1822,30 +1400,9 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
 
     # ---- applications ----
     @app.get("/resellers/applications", response_class=HTMLResponse)
-    async def reseller_apps_page(
-        request: Request,
-        staff: dict = Depends(require_admin),
-        session: AsyncSession = Depends(get_db),
-    ):
+    async def reseller_apps_page(staff: dict = Depends(require_admin)):
         _require_rep_mgmt(staff)
-        from app.services.resellers import release_stale_pending_payment_apps
-
-        released = await release_stale_pending_payment_apps(session)
-        if released:
-            await session.commit()
-        apps = await list_applications(session)
-        return render(
-            request,
-            "reseller_applications.html",
-            {
-                "staff": staff,
-                "apps": apps,
-                "tabs": _tabs("apps"),
-                "tab": "apps",
-                "flash_ok": request.query_params.get("ok"),
-                "flash_err": request.query_params.get("err"),
-            },
-        )
+        return spa_response("resellers/applications")
 
     @app.post("/resellers/applications/{app_id}/approve")
     async def reseller_app_approve(

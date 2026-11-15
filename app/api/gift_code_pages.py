@@ -1,17 +1,16 @@
-"""Staff page for gift and discount codes (create, edit, enable/disable via the existing routes)."""
+"""Staff page for gift and discount codes; the React page reads /api/panel/gift-codes and posts the existing routes."""
 
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
 from urllib.parse import urlencode
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.gift_codes import describe_code, gift_code_scope, list_gift_codes
+from app.api.spa_pages import spa_response
+from app.services.gift_codes import gift_code_scope
 
-DONE_MESSAGE = "انجام شد"
 GIFT_CODES_PATH = "/gift-codes"
 
 
@@ -27,25 +26,9 @@ def register_gift_code_pages(
     app: FastAPI, *, render: Callable, require_staff: Callable, get_db: Callable,
 ) -> None:
     @app.get(GIFT_CODES_PATH)
-    async def gift_codes_page(
-        request: Request,
-        staff: dict = Depends(require_staff),
-        session: AsyncSession = Depends(get_db),
-    ) -> Response:
+    async def gift_codes_page(staff: dict = Depends(require_staff)) -> Response:
         try:
-            shop_id = gift_code_scope(staff)
+            gift_code_scope(staff)
         except PermissionError:
             return RedirectResponse("/home", status_code=303)
-        codes = await list_gift_codes(session, shop_id=shop_id)
-        flash_ok = request.query_params.get("ok")
-        return render(
-            request,
-            "gift_codes.html",
-            {
-                "staff": staff,
-                "gift_codes": codes,
-                "gift_code_details": {code.id: describe_code(code) for code in codes},
-                "flash_ok": DONE_MESSAGE if flash_ok == "1" else flash_ok,
-                "flash_err": request.query_params.get("err"),
-            },
-        )
+        return spa_response("gift-codes")

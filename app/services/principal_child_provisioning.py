@@ -277,7 +277,7 @@ async def _create_pg_admin_via_parent(
     payload: dict[str, Any] = {
         "username": username,
         "password": password,
-        "note": (note or "PGClockBot Level-2 Child").strip()[:255],
+        "note": (note or "ShieldRay Level-2 Child").strip()[:255],
         "is_sudo": False,
     }
     if role_id is not None:

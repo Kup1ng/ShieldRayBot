@@ -1,9 +1,6 @@
 "use strict";
 
 const assert = require("node:assert/strict");
-const fs = require("node:fs");
-const path = require("node:path");
-const vm = require("node:vm");
 const {groupMoneyDigits, formatMoneyInput, syncMoneyMode} = require("../app/web/static/money-inputs.js");
 
 for (const [raw, expected] of [
@@ -88,18 +85,5 @@ for (const [name, value] of [["reduction_kind", "amount"], ["reward_type", "wall
   assert.equal(input.value, "1250000");
 }
 
-const context = vm.createContext({URL, Intl});
-for (const file of ["catalog_price.js", "miniapp/core.js", "miniapp/render.js"]) {
-  vm.runInContext(fs.readFileSync(path.join(__dirname, "../app/web/static", file), "utf8"), context);
-}
-const {core, render} = context.PGMini;
-assert.equal(core.money(1250000), "۱,۲۵۰,۰۰۰ تومان");
-assert.equal(core.money(0), "۰ تومان");
-assert.ok(render.planOptionsHtml([{id: 1, price: 1250000, name: "<img>", days: 30}]).includes("۱,۲۵۰,۰۰۰"));
-assert.ok(render.planOptionsHtml([{id: 1, price: 0, name: "<img>"}]).includes("&lt;img&gt;"));
-assert.ok(render.activityHtml([{amount: -1250000}]).includes("۱,۲۵۰,۰۰۰"));
-core.setCurrency("<img>");
-assert.ok(render.planOptionsHtml([{id: 1, price: 1250000}]).includes("&lt;img&gt;"));
-assert.ok(!render.planOptionsHtml([{id: 1, price: 1250000}]).includes("<img>"));
-assert.ok(!render.activityHtml([{amount: 5}]).includes("<img>"));
-console.log("Web monetary inputs and Mini App price formatting passed");
+// The Mini App's money formatting is tested in frontend/src/miniapp (Vitest).
+console.log("Web monetary inputs passed");

@@ -346,35 +346,26 @@ class UserWalletRouteScopeTests(unittest.IsolatedAsyncioTestCase):
                 "org_parent_id": None,
                 "org_status": "active",
             }
-            with (
-                patch(
-                    "app.services.bot_user_admin.list_service_snapshots",
-                    new=AsyncMock(return_value=[]),
-                ),
-                patch(
-                    "app.services.bot_user_admin.list_wallet_txs",
-                    new=AsyncMock(return_value=[]),
-                ),
-            ):
-                # render returns None — endpoint still returns that after scope pass
-                from starlette.requests import Request
+            with patch("app.api.user_pages.spa_response", return_value="shell"):
+                resp = await self.edit_route.endpoint(user_id=user.id, staff=staff, session=session)
+            # A redirect would mean deny; the shell means the customer is in scope.
+            self.assertEqual(resp, "shell")
 
-                scope = {
-                    "type": "http",
-                    "method": "GET",
-                    "path": f"/users/{user.id}/edit",
-                    "headers": [],
-                    "query_string": b"",
-                }
-                request = Request(scope)
-                resp = await self.edit_route.endpoint(
-                    user_id=user.id,
-                    request=request,
-                    staff=staff,
-                    session=session,
-                )
-            # Redirect would mean deny; None means render() ran (in scope).
-            self.assertIsNone(resp)
+    async def test_owner_cannot_open_the_edit_screen_of_a_tenant_customer(self) -> None:
+        async with self.Session() as session:
+            user = await self._user(session, reseller_id=55, telegram_id=303)
+            staff = {
+                "role": "admin",
+                "org_principal_id": 1,
+                "org_depth": 0,
+                "org_parent_id": None,
+                "org_status": "active",
+            }
+            with patch("app.api.user_pages.spa_response", return_value="shell") as shell:
+                resp = await self.edit_route.endpoint(user_id=user.id, staff=staff, session=session)
+            self.assertEqual(resp.status_code, 303)
+            self.assertIn("err=", resp.headers.get("location", ""))
+            shell.assert_not_called()
 
     async def test_owner_cannot_credit_tenant_wallet(self) -> None:
         async with self.Session() as session:

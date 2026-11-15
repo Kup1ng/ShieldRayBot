@@ -147,7 +147,9 @@ class ManualUserProvisionUiTests(unittest.TestCase):
         pages = Path("app/api/user_pages.py").read_text(encoding="utf-8")
         self.assertIn("/users/create", pages)
         self.assertIn("/users/{user_id}/services", pages)
-        self.assertIn("list_catalog_plans", pages)
+        # The edit screen's plan list moved into the view the JSON endpoint serves.
+        edit_view = Path("app/services/user_edit_view.py").read_text(encoding="utf-8")
+        self.assertIn("list_catalog_plans", edit_view)
         self.assertIn("get_owned_plan", pages)
 
         users = Path("app/web/templates/users.html").read_text(encoding="utf-8")

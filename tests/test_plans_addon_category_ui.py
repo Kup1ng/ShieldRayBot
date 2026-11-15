@@ -25,8 +25,18 @@ class PlansAddonCategoryUiTests(unittest.TestCase):
         self.assertIn("plan-pg-warn-dot", html)
         self.assertIn('badge warn', html)
         self.assertIn("خالی", html)
-        app = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
-        self.assertIn("pg_live_template_ids", app)
+        from types import SimpleNamespace
+
+        from app.services.panel_catalog_plans import serialize_plan
+
+        plan = SimpleNamespace(
+            id=1, name="p", price=1, duration_days=30, data_limit_gb=None, pg_template_id=7, pg_group_ids=None,
+            category_id=None, is_active=True,
+        )
+        gone = serialize_plan(plan, category_map={}, live_template_ids={1, 2}, limit_issue=None)
+        self.assertTrue(gone["template_missing"])
+        live = serialize_plan(plan, category_map={}, live_template_ids={7}, limit_issue=None)
+        self.assertFalse(live["template_missing"])
 
     def test_reseller_addon_category_not_hidden(self):
         html = (ROOT / "app/web/templates/plans.html").read_text(encoding="utf-8")

@@ -33,22 +33,40 @@ class BillingModeMigrateTests(unittest.TestCase):
         pg_guard = src.find("SQLite-era additive migrator", upgrade_idx)
         self.assertGreater(pg_guard, upgrade_idx)
 
-    def test_plans_page_soft_fails_reseller_list(self):
-        src = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
-        fn = src[src.find("async def plans_page") : src.find("async def plans_create")]
-        self.assertIn("reseller_plans_err", fn)
-        self.assertIn("list_reseller_plans(session)", fn)
-        self.assertIn("except Exception", fn)
+    def test_plans_data_soft_fails_reseller_list(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from app.services import panel_catalog_plans
+
+        session = AsyncMock()
+        with patch("app.services.resellers.list_reseller_plans", AsyncMock(side_effect=RuntimeError("no column"))), patch(
+            "app.services.resellers.ensure_current_capacity_reseller_plan", AsyncMock()
+        ):
+            plans, error = asyncio.run(panel_catalog_plans._reseller_plan_section(session))
+        self.assertEqual(plans, [])
+        self.assertEqual(error, panel_catalog_plans.RESELLER_PLANS_LOAD_ERROR)
 
 
-class ResellerPlansTabRemovedTests(unittest.TestCase):
-    def test_tabs_no_longer_include_plans(self):
-        src = (ROOT / "app/api/reseller_pages.py").read_text(encoding="utf-8")
-        fn = src[src.find("def _tabs") : src.find("@app.get(\"/resellers\"")]
-        self.assertNotIn("/plans#reseller-plans", fn)
-        self.assertNotIn('"پلن‌ها"', fn)
-        self.assertIn("/resellers/applications", fn)
-        self.assertIn("لیست", fn)
+class ResellerPlansTabRemovedTests(unittest.IsolatedAsyncioTestCase):
+    """The reseller area has no «پلن‌ها» tab (its two tabs are checked in labels.test.ts); the old URL leads to the unified plans."""
+
+    async def test_old_reseller_plans_url_leads_to_the_unified_plans_page(self):
+        import httpx
+        from fastapi import FastAPI
+
+        from app.api.reseller_pages import register_reseller_pages
+
+        async def staff():
+            return {"role": "admin"}
+
+        app = FastAPI()
+        register_reseller_pages(app, render=None, require_admin=staff, get_db=staff)
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/resellers/plans", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/plans#reseller-plans")
 
     def test_unified_plans_still_has_reseller_section(self):
         html = (ROOT / "app/web/templates/plans.html").read_text(encoding="utf-8")

@@ -212,7 +212,7 @@ async def _create_pg_admin(
     payload: dict[str, Any] = {
         "username": username,
         "password": password,
-        "note": (note or "PGClockBot Level-1 Principal").strip()[:255],
+        "note": (note or "ShieldRay Level-1 Principal").strip()[:255],
         "is_sudo": False,
     }
     if role_id is not None:

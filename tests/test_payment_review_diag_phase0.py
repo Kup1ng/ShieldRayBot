@@ -279,10 +279,10 @@ class PayrevHandlerWiringTests(unittest.TestCase):
         self.assertIn("diagnose_payment_review", actions)
 
     def test_finance_delivery_surfaces_diag(self):
-        pages = Path("app/api/finance_pages.py").read_text(encoding="utf-8")
+        pages = Path("app/services/finance_panel.py").read_text(encoding="utf-8")
         tpl = Path("app/web/templates/finance.html").read_text(encoding="utf-8")
         self.assertIn("diagnose_order_delivery", pages)
-        self.assertIn("delivery_diag_by_order", pages)
+        self.assertIn('"diag": _diag_payload(diag)', pages)
         self.assertIn("delivery_diag_by_order", tpl)
         self.assertIn("تشخیص", tpl)
 

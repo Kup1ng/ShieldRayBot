@@ -20,6 +20,8 @@ from app.services.shop_scope import is_platform_admin, shop_owner_id
 
 DISPLAY_ZONE = ZoneInfo("Asia/Tehran")
 PAGE_SIZE = 50
+# Ids are bounded by the column range; anything else is ignored rather than trusted.
+MAX_ID = 2**31 - 1
 REASON_MAX = 255
 LABEL_MAX = 128
 
@@ -135,6 +137,15 @@ def staff_audit_scope(staff: dict) -> int | None:
     if shop_id is None:
         raise PermissionError("حساب شما به فروشگاه متصل نیست")
     return shop_id
+
+
+def parse_before_id(raw: str | None) -> int | None:
+    """The ``before`` cursor of a page request, or ``None`` when it is missing or not a valid id."""
+    # isdigit() also accepts digits such as "²" that int() refuses.
+    if not raw or not (raw.isascii() and raw.isdigit()):
+        return None
+    value = int(raw)
+    return value if 0 < value <= MAX_ID else None
 
 
 async def list_staff_actions(

@@ -25,6 +25,7 @@ from app.services.service_import_requests import approve_request, list_requests,
 from app.services.service_import_store import MAX_OPEN_PER_USER
 from app.services.users import clear_settings_cache, set_settings_bulk
 from tests.test_service_import import ImportCase
+from tests.settings_json import settings_fields, settings_url
 from tests.test_service_import_settings_tab import TabHarness
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION
 
@@ -318,10 +319,10 @@ class EndpointTests(TabHarness):
         principal = {"role": "principal", "org_principal_id": 2, "org_depth": 1}
         self.assertEqual((await self.call(principal, "GET", "/service-import/requests")).status_code, 303)
 
-    async def test_the_tab_shows_the_mode_and_the_requests_card(self):
-        owner = await self.call(OWNER_SESSION, "GET", "/settings?tab=service_import")
-        self.assertIn("s_service_import_mode", owner.text)
-        self.assertIn('id="si-requests"', owner.text)
+    async def test_the_tab_offers_the_mode_and_the_requests_endpoint_answers_the_owner(self):
+        owner = await self.call(OWNER_SESSION, "GET", settings_url("service_import"))
+        self.assertIn("service_import_mode", settings_fields(owner.json()))
+        self.assertEqual((await self.call(OWNER_SESSION, "GET", "/service-import/requests")).status_code, 200)
 
 
 class MigrationTests(unittest.TestCase):

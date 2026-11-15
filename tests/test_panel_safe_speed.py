@@ -84,19 +84,21 @@ class PanelDisplayTimeoutTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PanelShellFirstContractTests(unittest.TestCase):
-    def test_home_body_uses_require_staff(self):
-        src = (ROOT / "app/api/home_pages.py").read_text(encoding="utf-8")
-        self.assertIn('@app.get("/home/body"', src)
-        # Body route must re-run require_staff (not inherit shell auth).
-        body = src[src.find("async def home_dashboard_body") : src.find("def _degraded_home_shell")]
-        self.assertIn("Depends(require_staff)", body)
+    def test_home_widgets_use_require_staff(self):
+        src = (ROOT / "app/api/panel_home_api.py").read_text(encoding="utf-8")
+        self.assertIn('@app.get("/api/panel/home/widgets")', src)
+        # The widgets endpoint must re-run require_staff (not inherit the page's auth).
+        widgets = src[src.find("async def panel_home_widgets") : src.find("async def panel_dashboard")]
+        self.assertIn("Depends(require_staff)", widgets)
 
     def test_home_shell_after_require_staff(self):
         src = (ROOT / "app/api/home_pages.py").read_text(encoding="utf-8")
-        home = src[src.find("async def home_dashboard") : src.find("async def home_dashboard_body")]
-        # Depends must appear before fast shell work.
-        self.assertLess(home.find("Depends(require_staff)"), home.find("_fast_home_shell"))
-        self.assertIn("_wants_full_widgets", home)
+        home = src[src.find("async def home_dashboard(") : src.find("async def home_metrics_json")]
+        # Auth first, then the presentation router, then the shell page.
+        self.assertLess(home.find("Depends(require_staff)"), home.find("resolve_staff_home"))
+        api = (ROOT / "app/api/panel_home_api.py").read_text(encoding="utf-8")
+        shell = api[api.find("async def panel_home(") : api.find("async def panel_home_widgets")]
+        self.assertLess(shell.find("Depends(require_staff)"), shell.find("home_shell_context"))
 
     def test_no_panel_navigate(self):
         js = (ROOT / "app/web/static/panel.js").read_text(encoding="utf-8")
@@ -120,21 +122,6 @@ class PanelShellFirstContractTests(unittest.TestCase):
 
         self.assertTrue(should_skip_unread_count("/home/body", "GET"))
         self.assertFalse(should_skip_unread_count("/home", "GET"))
-
-    def test_pg_keeps_require_pg_perm_and_display_timeout(self):
-        src = (ROOT / "app/api/pg_pages.py").read_text(encoding="utf-8")
-        pg = src[src.find("async def pg_home") : src.find("async def pg_home_body")]
-        self.assertIn('Depends(require_pg_perm("pg_overview"))', pg)
-        self.assertIn("_pg_chrome_context", src)
-        self.assertIn("_pg_display_widgets", src)
-        self.assertIn('"/pg/body"', src)
-        self.assertIn("widgets_deferred", pg)
-        # Body route re-runs same perm.
-        body = src[src.find("async def pg_home_body") : src.find("async def pg_host_metrics_json")]
-        self.assertIn('Depends(require_pg_perm("pg_overview"))', body)
-        self.assertIn('"_pg_dash_body.html"', body)
-        # No SPA nav.
-        self.assertNotIn("panelNavigate", src)
 
     def test_pg_shell_first_templates(self) -> None:
         html = render_dashboard_shell("pg_home.html")
@@ -164,26 +151,32 @@ class PanelShellFirstContractTests(unittest.TestCase):
             src = (ROOT / rel).read_text(encoding="utf-8")
             self.assertNotIn("_panel_widgets_loading.html", src)
 
-    def test_pg_body_skips_ticket_chrome(self):
-        src = (ROOT / "app/api/pg_pages.py").read_text(encoding="utf-8")
-        body = src[src.find("async def pg_home_body") : src.find("async def pg_host_metrics_json")]
-        self.assertIn("resolve_pg_open_url", body)
-        self.assertIn("_pg_display_widgets", body)
-        self.assertNotIn("_pg_chrome_context", body)
-
     def test_pg_users_paginated(self):
-        src = (ROOT / "app/api/pg_pages.py").read_text(encoding="utf-8")
-        users_fn = src[src.find("async def pg_users") : src.find("async def pg_users_create")]
-        self.assertIn("parse_list_page", users_fn)
-        self.assertIn("DEFAULT_LIST_PAGE_SIZE", users_fn)
-        self.assertIn("build_list_pager", users_fn)
-        self.assertNotIn('"limit": 200', users_fn)
-        self.assertIn('Depends(require_pg_perm("pg_users"))', users_fn)
-        tmpl = (ROOT / "app/web/templates/pg_users.html").read_text(encoding="utf-8")
-        self.assertIn("list-pager", tmpl)
-        self.assertIn("pager.has_next", tmpl)
-        css = (ROOT / "app/web/static/panel.css").read_text(encoding="utf-8")
-        self.assertIn(".list-pager", css)
+        """The users list asks the panel for one bounded page and reports whether more exist."""
+        from unittest.mock import AsyncMock, patch
+
+        from app.services.list_query import DEFAULT_LIST_PAGE_SIZE
+        from app.services.pg_users_panel import users_page
+
+        pg = MagicMock()
+        pg.get_users = AsyncMock(return_value={"users": [], "total": 120})
+        pg.get_user_templates = AsyncMock(return_value=[])
+        pg.get_groups_simple = AsyncMock(return_value=[])
+        staff = {"role": "admin", "pg_is_owner": True}
+        with patch("app.services.pg_users_panel.staff_pg_read_client", AsyncMock(return_value=pg)):
+            body = asyncio.run(users_page(None, staff, q=None, page="2"))
+        params = pg.get_users.await_args.kwargs
+        self.assertEqual(params["limit"], DEFAULT_LIST_PAGE_SIZE)
+        self.assertEqual(params["offset"], DEFAULT_LIST_PAGE_SIZE)
+        self.assertLess(params["limit"], 200)
+        self.assertTrue(body["pager"]["has_prev"])
+        self.assertTrue(body["pager"]["has_next"])
+        self.assertEqual(body["pager"]["total"], 120)
+
+    def test_pg_users_endpoints_keep_require_pg_perm(self):
+        src = (ROOT / "app/api/panel_pg_users_api.py").read_text(encoding="utf-8")
+        for page in ("pg_users", "pg_templates", "pg_groups", "pg_hosts"):
+            self.assertIn(f'Depends(require_pg_perm("{page}"))', src)
 
     def test_pg_body_skips_sidebar_unread(self):
         from app.services.panel_tickets import should_skip_unread_count
@@ -233,3 +226,77 @@ class PanelShellFirstContractTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PgPagesShellTests(unittest.IsolatedAsyncioTestCase):
+    """The PasarGuard overview, nodes, inbounds and admins pages are the React shell: no panel read happens in them."""
+
+    PAGES = {"/pg": ("pg_overview", "pg"), "/pg/nodes": ("pg_nodes", "pg/nodes"), "/pg/inbounds": ("pg_inbounds", "pg/inbounds"), "/pg/admins": ("pg_admins", "pg/admins")}
+
+    async def asyncSetUp(self) -> None:
+        from unittest.mock import patch
+
+        import httpx
+        from fastapi import FastAPI, HTTPException
+        from fastapi.responses import HTMLResponse
+
+        from app.api import pg_pages
+
+        self.granted: list[str] = []
+        self.served: list[str] = []
+
+        def require_pg_perm(permission: str):
+            def dependency() -> dict:
+                if permission not in self.granted:
+                    raise HTTPException(403, "forbidden")
+                return {"role": "admin", "pg_is_owner": True}
+
+            return dependency
+
+        async def get_db():
+            yield None
+
+        def shell(page: str) -> HTMLResponse:
+            self.served.append(page)
+            return HTMLResponse(f"shell:{page}")
+
+        def no_panel_read(*args, **kwargs):
+            raise AssertionError("a page shell must not read from PasarGuard")
+
+        for target, replacement in (("app.api.pg_pages.spa_response", shell), ("app.api.pg_pages.get_pg", no_panel_read)):
+            patcher = patch(target, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        app = FastAPI()
+        pg_pages.register_pg_pages(app, render=None, require_pg_perm=require_pg_perm, get_db=get_db)
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def test_each_page_serves_its_shell_only_to_staff_holding_its_permission(self) -> None:
+        for path, (permission, page) in self.PAGES.items():
+            self.granted = []
+            self.assertEqual((await self.client.get(path)).status_code, 403, path)
+            self.granted = [permission]
+            response = await self.client.get(path)
+            self.assertEqual((response.status_code, response.text), (200, f"shell:{page}"), path)
+        self.assertEqual(self.served, [page for _perm, page in self.PAGES.values()])
+
+    async def test_the_deferred_html_body_endpoint_is_gone(self) -> None:
+        self.granted = ["pg_overview"]
+        self.assertEqual((await self.client.get("/pg/body")).status_code, 404)
+
+    async def test_the_live_metrics_poll_still_refuses_staff_who_are_not_the_panel_owner(self) -> None:
+        self.granted = ["pg_overview"]
+        from fastapi import FastAPI
+        import httpx
+
+        from app.api import pg_pages
+
+        app = FastAPI()
+        pg_pages.register_pg_pages(
+            app, render=None, require_pg_perm=lambda permission: (lambda: {"role": "reseller", "pg_is_owner": False}), get_db=lambda: None
+        )
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+            response = await client.get("/pg/metrics")
+        self.assertEqual(response.status_code, 403)
+

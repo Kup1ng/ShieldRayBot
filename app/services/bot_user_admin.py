@@ -505,7 +505,7 @@ async def admin_provision_service(
             )
 
     actor_label = (actor or "admin")[:64]
-    note = f"PGClockBot manual assign by {actor_label}"
+    note = f"ShieldRay manual assign by {actor_label}"
 
     username = await generate_pg_username(
         session,

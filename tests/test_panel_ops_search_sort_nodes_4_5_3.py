@@ -353,11 +353,16 @@ class PanelTemplateContractTests(unittest.TestCase):
         self.assertIn("cancel_order", app)
         self.assertIn("manual_fulfill_unpaid_order", app)
         self.assertIn("notify_payer", app)
-        self.assertIn("filter_by_search", app)
-        self.assertIn("normalize_search_q", app)
-        pg = (ROOT / "app/api/pg_pages.py").read_text(encoding="utf-8")
-        self.assertIn("enrich_nodes_with_traffic", pg)
-        self.assertIn("get_nodes_realtime", pg)
+        # The customer list search moved with the list data into users_list_view (the React /users page);
+        # tests/test_panel_users_api.py covers its behavior.
+        users_list = (ROOT / "app/services/users_list_view.py").read_text(encoding="utf-8")
+        self.assertIn("filter_by_search", users_list)
+        self.assertIn("normalize_search_q", users_list)
+        # The node list merges the live traffic figures (the React /pg/nodes page); the behavior is
+        # covered by tests/test_panel_pg_infra_api.py::NodesTests.
+        nodes = (ROOT / "app/services/pg_nodes_panel.py").read_text(encoding="utf-8")
+        self.assertIn("enrich_nodes_with_traffic", nodes)
+        self.assertIn("get_nodes_realtime", nodes)
 
     def test_cancel_keeps_shop_isolation(self):
         app = (ROOT / "app/api/app.py").read_text(encoding="utf-8")

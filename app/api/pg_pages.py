@@ -10,21 +10,18 @@ from fastapi import Depends, Form, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.formatting import data_limit_to_gb, pg_expire_fields
+from app.api.spa_pages import spa_response
 from app.services.numbers import normalize_number_text, parse_float, parse_int, parse_optional_float, parse_optional_int
 from app.services.pasarguard import (
     PasarGuardError,
-    as_list,
     build_user_create_payload,
     build_user_modify_payload,
     get_pg,
     get_pg_for_reseller,
-    user_group_ids,
     user_subscription_url,
 )
-from app.services.pg_overview_view import overview_view, owner_user_counts
 from app.services.pg_access import staff_pg_action, staff_pg_writes, staff_user_actions
-from app.services.pg_read_cache import DASHBOARD_COUNT_MAX_AGE_SEC, NODE_LIST_MAX_AGE_SEC
+from app.services.pg_read_cache import NODE_LIST_MAX_AGE_SEC
 from app.services.pg_quota import (
     PgQuotaError,
     assert_can_mutate_owned_users,
@@ -45,7 +42,6 @@ from app.services.volume_allocation import apply_create_form_oversell
 
 logger = logging.getLogger(__name__)
 
-PG_STATS_ERROR = "دریافت آمار پاسارگارد ممکن نشد؛ چند لحظهٔ دیگر صفحه را تازه کنید."
 
 def _q(msg: str) -> str:
     return quote(str(msg), safe="")
@@ -209,25 +205,6 @@ def _owner_of(user: dict) -> str:
     return pg_user_owner_username(user)
 
 
-def _filter_owned_users(users: list[dict], staff: dict) -> list[dict]:
-    """Scope PG user lists. Missing pg_username for non-owner → [] (M6)."""
-    from app.services.pg_user_scope import filter_pg_users_for_staff
-
-    return filter_pg_users_for_staff(users, staff)
-
-
-def _filter_templates(items: list[dict], staff: dict) -> list[dict]:
-    from app.services.plans_catalog import filter_templates_for_staff
-
-    return filter_templates_for_staff(items, staff)
-
-
-def _filter_groups(items: list[dict], staff: dict) -> list[dict]:
-    from app.services.plans_catalog import filter_groups_for_staff
-
-    return filter_groups_for_staff(items, staff)
-
-
 def _pg_ctx(staff: dict, **extra) -> dict:
     from app.services.pg_read import effective_pg_menu_keys
 
@@ -257,219 +234,10 @@ def register_pg_pages(
     require_pg_perm,
     get_db,
 ):
-    def _wants_full_pg_widgets(request: Request) -> bool:
-        return (request.query_params.get("full") or "").strip() == "1"
-
-    async def _pg_chrome_context(request: Request, staff: dict, session: AsyncSession) -> dict:
-        """Local/fast chrome after authz — ticket alert, remediation, open URL."""
-        ticket_alert = None
-        if not _is_admin(staff) and staff.get("role") in {"reseller", "pg_staff", "principal"}:
-            from app.api.panel_tickets_pages import panel_ticket_dashboard_alert
-
-            ticket_alert = await panel_ticket_dashboard_alert(
-                session,
-                staff,
-                unread=getattr(request.state, "panel_tickets_unread", None),
-            )
-
-        staff_remediation = None
-        if staff.get("role") == "pg_staff":
-            from app.services.pg_staff_access import (
-                access_by_web_username,
-                staff_remediation_flags,
-                staff_username_aligned,
-            )
-
-            login_u = (staff.get("username") or "").strip()
-            staff_row = await access_by_web_username(session, login_u) if login_u else None
-            if staff_row is not None:
-                flags = staff_remediation_flags(staff_row)
-                if flags["needs_remediation"]:
-                    staff_remediation = {
-                        **flags,
-                        "can_self_serve": staff_username_aligned(staff_row),
-                        "web_username": staff_row.web_username,
-                        "pg_username": staff_row.pg_username,
-                    }
-
-        from app.services.ux20 import resolve_pg_open_url
-
-        pg_external_url = await resolve_pg_open_url(
-            session, is_admin=_is_pg_owner_principal(staff)
-        )
-        return {
-            "ticket_alert": ticket_alert,
-            "staff_remediation": staff_remediation,
-            "pg_external_url": pg_external_url or None,
-        }
-
-    async def _pg_display_widgets(staff: dict, session: AsyncSession) -> dict:
-        """Decorative PG overview data — never used for allow/deny."""
-        from app.services.pg_overview import build_reseller_pg_overview
-
-        err = None
-        system_stats: dict | None = None
-        nodes: list = []
-        nodes_overview = None
-        counts = {"admins": 0, "groups": 0, "hosts": 0, "nodes": 0, "users": 0}
-        reseller_overview = None
-        host_gauges = None
-
-        async def _load():
-            nonlocal err, system_stats, nodes, nodes_overview, counts
-            nonlocal reseller_overview, host_gauges
-            if _is_pg_owner_principal(staff):
-                from app.services.host_gauges import gauges_from_pg_system_stats
-                from app.services.node_traffic import build_nodes_overview
-
-                pg = get_pg()
-                # Admin/group/host lists only feed the count tiles here. During an
-                # outage the tiles show the last good answer, flagged by the notice;
-                # live rates have no meaningful saved value.
-                raw, nodes_raw, admins, groups, hosts, realtime = await asyncio.gather(
-                    pg.get_system_stats(last_good_ok=True),
-                    pg.get_nodes(last_good_ok=True),
-                    pg.get_admins_simple(cache_max_age=DASHBOARD_COUNT_MAX_AGE_SEC, last_good_ok=True),
-                    pg.get_groups_simple(cache_max_age=DASHBOARD_COUNT_MAX_AGE_SEC, last_good_ok=True),
-                    pg.get_hosts(cache_max_age=DASHBOARD_COUNT_MAX_AGE_SEC, last_good_ok=True),
-                    pg.get_nodes_realtime(),
-                    return_exceptions=True,
-                )
-                if isinstance(raw, dict):
-                    host_gauges = gauges_from_pg_system_stats(raw)
-                    system_stats = raw
-                    counts["users"] = owner_user_counts(raw).total
-                elif isinstance(raw, Exception):
-                    logger.warning("pg system stats failed", exc_info=raw)
-                    err = PG_STATS_ERROR
-                nodes = nodes_raw if isinstance(nodes_raw, list) else []
-                rt = realtime if not isinstance(realtime, Exception) else None
-                try:
-                    nodes_overview = build_nodes_overview(nodes, rt)
-                    nodes = nodes_overview.get("nodes") or []
-                except Exception:
-                    nodes_overview = build_nodes_overview(nodes, None)
-                    nodes = nodes_overview.get("nodes") or []
-                counts["nodes"] = len(nodes)
-                counts["admins"] = len(admins) if isinstance(admins, list) else 0
-                counts["groups"] = len(groups) if isinstance(groups, list) else 0
-                counts["hosts"] = len(hosts) if isinstance(hosts, list) else 0
-            else:
-                reseller_overview = await build_reseller_pg_overview(staff, session=session)
-
-        try:
-            await asyncio.wait_for(_load(), timeout=3.0)
-        except asyncio.TimeoutError:
-            logger.info("pg display widgets timed out after 3.0s — serving partial data")
-        except Exception:
-            logger.warning("pg display widgets failed", exc_info=True)
-            err = PG_STATS_ERROR
-
-        owner = _is_pg_owner_principal(staff)
-        return {
-            "err": err,
-            "view": overview_view(
-                owner=owner,
-                system_stats=system_stats,
-                user_stats=(reseller_overview or {}).get("user_stats"),
-                nodes=(nodes_overview or {}).get("nodes") if owner else [],
-            ),
-            "nodes": nodes if owner else [],
-            "nodes_overview": nodes_overview,
-            "counts": counts,
-            "reseller_overview": reseller_overview,
-            "host_gauges": host_gauges,
-        }
-
     @app.get("/pg", response_class=HTMLResponse)
-    async def pg_home(
-        request: Request,
-        staff: dict = Depends(require_pg_perm("pg_overview")),
-        session: AsyncSession = Depends(get_db),
-    ):
-        """Authz via require_pg_perm before any HTML.
-
-        Default: fast chrome shell, then /pg/body fills decorative widgets.
-        ``?full=1`` keeps classic single-response behavior.
-        Live-metrics script stays in the shell and re-queries DOM after swap.
-        """
-        from app.services.panel_timing import mark
-
-        mark(request, "handler")
-        chrome = await _pg_chrome_context(request, staff, session)
-        want_full = _wants_full_pg_widgets(request)
-
-        if not want_full:
-            mark(request, "page_data")
-            ctx = _pg_ctx(
-                staff,
-                view=None,
-                nodes=[],
-                counts={"admins": 0, "groups": 0, "hosts": 0, "nodes": 0, "users": 0},
-                reseller_overview=None,
-                flash_err=None,
-                active="pg",
-                host_gauges=None,
-                nodes_overview=None,
-                **chrome,
-            )
-            ctx["widgets_deferred"] = True
-            ctx["widgets_body_url"] = "/pg/body"
-            return render(request, "pg_home.html", ctx)
-
-        widgets = await _pg_display_widgets(staff, session)
-        mark(request, "page_data")
-        ctx = _pg_ctx(
-            staff,
-            view=widgets["view"],
-            nodes=widgets["nodes"],
-            counts=widgets["counts"],
-            reseller_overview=widgets["reseller_overview"],
-            flash_err=widgets["err"],
-            active="pg",
-            host_gauges=widgets["host_gauges"],
-            nodes_overview=widgets["nodes_overview"],
-            **chrome,
-        )
-        ctx["widgets_deferred"] = False
-        return render(request, "pg_home.html", ctx)
-
-    @app.get("/pg/body", response_class=HTMLResponse)
-    async def pg_home_body(
-        request: Request,
-        staff: dict = Depends(require_pg_perm("pg_overview")),
-        session: AsyncSession = Depends(get_db),
-    ):
-        """Widget HTML only — re-runs the same require_pg_perm as /pg.
-
-        Skips ticket/remediation chrome (already in the shell); only needs
-        ``pg_external_url`` for the open-PasarGuard link inside the dash body.
-        """
-        from app.services.panel_timing import mark
-        from app.services.ux20 import resolve_pg_open_url
-
-        mark(request, "handler")
-        widgets = await _pg_display_widgets(staff, session)
-        pg_external_url = await resolve_pg_open_url(
-            session, is_admin=_is_pg_owner_principal(staff)
-        )
-        mark(request, "page_data")
-        ctx = _pg_ctx(
-            staff,
-            view=widgets["view"],
-            nodes=widgets["nodes"],
-            counts=widgets["counts"],
-            reseller_overview=widgets["reseller_overview"],
-            flash_err=widgets["err"],
-            active="pg",
-            host_gauges=widgets["host_gauges"],
-            nodes_overview=widgets["nodes_overview"],
-            ticket_alert=None,
-            staff_remediation=None,
-            pg_external_url=pg_external_url or None,
-        )
-        ctx["widgets_deferred"] = False
-        return render(request, "_pg_dash_body.html", ctx)
+    async def pg_home(staff: dict = Depends(require_pg_perm("pg_overview"))):
+        """The overview page; its figures come from /api/panel/pg and /api/panel/pg/widgets."""
+        return spa_response("pg")
 
     @app.get("/pg/metrics")
     async def pg_host_metrics_json(
@@ -506,166 +274,10 @@ def register_pg_pages(
     # ---- VPN users ----
     @app.get("/pg/users", response_class=HTMLResponse)
     async def pg_users(
-        request: Request,
         staff: dict = Depends(require_pg_perm("pg_users")),
-        session: AsyncSession = Depends(get_db),
     ):
-        from app.services.list_query import (
-            DEFAULT_LIST_PAGE_SIZE,
-            build_list_pager,
-            extract_list_total,
-            filter_by_search,
-            list_offset,
-            normalize_search_q,
-            parse_list_page,
-        )
-        from app.services.pg_read import PgReadDenied, staff_pg_read_client
-
-        err = request.query_params.get("err")
-        ok = request.query_params.get("ok")
-        form_err = request.query_params.get("form_err")
-        form_modal = (request.query_params.get("modal") or "").strip()
-        form_uid = (request.query_params.get("uid") or "").strip()
-        q = (request.query_params.get("q") or "").strip()
-        page = parse_list_page(request.query_params.get("page"))
-        page_size = DEFAULT_LIST_PAGE_SIZE
-        users: list[dict] = []
-        users_total: int | None = None
-        pager: dict = build_list_pager(
-            page=page, page_size=page_size, fetched=0, total=None
-        )
-        templates: list[dict] = []
-        groups: list[dict] = []
-        access = staff.get("pg_access") or {}
-        require_template = bool(access.get("require_template")) and not _is_pg_owner_principal(staff)
-        try:
-            search_q = normalize_search_q(q)
-            pg = await staff_pg_read_client(session, staff)
-            params: dict = {
-                "offset": list_offset(page, page_size),
-                "limit": page_size,
-            }
-            if search_q:
-                # Remote API may be exact/prefix; keep hint + local casefold substring
-                params["username"] = search_q
-            owner = _pg_owner(staff)
-            if not _is_admin(staff) and owner:
-                params["admin"] = owner
-            data, templates_raw, groups_raw = await asyncio.gather(
-                pg.get_users(**params),
-                pg.get_user_templates(),
-                pg.get_groups(),
-                return_exceptions=True,
-            )
-            if isinstance(data, Exception):
-                raise data
-            if isinstance(data, dict):
-                users = as_list(data, "users") or []
-                users_total = extract_list_total(data)
-            elif isinstance(data, list):
-                users = data
-            fetched = len(users)
-            users = _filter_owned_users(users, staff)
-            if search_q:
-
-                def _user_search_parts(u: dict):
-                    return (
-                        u.get("username"),
-                        u.get("note"),
-                        u.get("id"),
-                        u.get("status"),
-                        (u.get("admin") or {}).get("username")
-                        if isinstance(u.get("admin"), dict)
-                        else u.get("admin"),
-                        u.get("owner_username"),
-                    )
-
-                filtered = filter_by_search(users, search_q, _user_search_parts)
-                if not filtered:
-                    # Remote may be exact-only or case-sensitive — widen then filter locally
-                    params_wide = {k: v for k, v in params.items() if k != "username"}
-                    try:
-                        data_wide = await pg.get_users(**params_wide)
-                        if isinstance(data_wide, dict):
-                            users = as_list(data_wide, "users") or []
-                            users_total = extract_list_total(data_wide)
-                        elif isinstance(data_wide, list):
-                            users = data_wide
-                            users_total = None
-                        fetched = len(users)
-                        users = _filter_owned_users(users, staff)
-                        filtered = filter_by_search(users, search_q, _user_search_parts)
-                    except Exception:
-                        filtered = []
-                        fetched = 0
-                users = filtered
-            pager = build_list_pager(
-                page=page,
-                page_size=page_size,
-                fetched=fetched,
-                total=users_total,
-                scoped_len=len(users),
-            )
-            for u in users:
-                if not isinstance(u, dict):
-                    continue
-                u["_sub_url"] = user_subscription_url(u)
-                exp_fields = pg_expire_fields(u)
-                u["_days_left"] = exp_fields["days_left"]
-                u["_expire_text"] = exp_fields["expire_text"]
-                u["_data_gb"] = data_limit_to_gb(u.get("data_limit"))
-                u["_group_ids"] = user_group_ids(u)
-
-            if isinstance(templates_raw, list):
-                templates = templates_raw
-            elif isinstance(templates_raw, dict):
-                templates = as_list(templates_raw, "templates") or []
-            elif not isinstance(templates_raw, Exception):
-                templates = []
-            templates = _filter_templates(templates, staff)
-
-            if isinstance(groups_raw, list):
-                groups = groups_raw
-            elif isinstance(groups_raw, dict):
-                groups = as_list(groups_raw, "groups") or []
-            elif not isinstance(groups_raw, Exception):
-                groups = []
-            groups = _filter_groups(groups, staff)
-        except PgReadDenied as e:
-            err = e.message
-        except Exception as e:
-            err = str(e)
-        actions = staff_user_actions(staff)
-        can_custom = bool(actions["create"]) and (not require_template) and bool(groups)
-        can_template = bool(actions["create"]) and bool(templates)
-        return render(
-            request,
-            "pg_users.html",
-            _pg_ctx(
-                staff,
-                users=users,
-                templates=templates,
-                groups=groups,
-                q=q,
-                pager=pager,
-                flash_err=err,
-                flash_ok=ok,
-                form_err=form_err,
-                form_modal=form_modal,
-                form_uid=form_uid,
-                can_create=actions["create"],
-                can_custom_create=can_custom,
-                can_template_create=can_template,
-                require_template=require_template,
-                can_modify=actions["update"],
-                can_delete=actions["delete"],
-                can_reset=actions["reset_usage"],
-                can_revoke=actions["revoke_sub"],
-                can_disable=actions["disable"],
-                can_enable=actions["enable"],
-                active="pg_users",
-            ),
-        )
+        """The React page; its data comes from /api/panel/pg/... (app/api/panel_pg_users_api.py)."""
+        return spa_response("pg/users")
 
     @app.post("/pg/users")
     async def pg_users_create(
@@ -1058,49 +670,10 @@ def register_pg_pages(
     # ---- templates ----
     @app.get("/pg/templates", response_class=HTMLResponse)
     async def pg_templates(
-        request: Request,
         staff: dict = Depends(require_pg_perm("pg_templates")),
-        session: AsyncSession = Depends(get_db),
     ):
-        from app.services.pg_read import PgReadDenied, staff_pg_read_client
-
-        err = request.query_params.get("err")
-        ok = request.query_params.get("ok")
-        templates, groups = [], []
-        try:
-            pg = await staff_pg_read_client(session, staff)
-            templates_raw, groups_raw = await asyncio.gather(
-                pg.get_user_templates(),
-                pg.get_groups_simple(),
-                return_exceptions=True,
-            )
-            if isinstance(templates_raw, list):
-                templates = templates_raw
-            elif isinstance(templates_raw, dict):
-                templates = as_list(templates_raw, "templates") or []
-            elif isinstance(templates_raw, Exception):
-                raise templates_raw
-            templates = _filter_templates(templates, staff)
-            groups = _filter_groups(groups_raw if isinstance(groups_raw, list) else [], staff)
-        except PgReadDenied as e:
-            err = e.message
-        except Exception as e:
-            err = str(e)
-        return render(
-            request,
-            "pg_templates.html",
-            _pg_ctx(
-                staff,
-                templates=templates,
-                groups=groups,
-                flash_err=err,
-                flash_ok=ok,
-                can_create=staff_pg_action(staff, "templates", "create"),
-                can_update=staff_pg_action(staff, "templates", "update"),
-                can_delete=staff_pg_action(staff, "templates", "delete"),
-                active="pg_templates",
-            ),
-        )
+        """The React page; its data comes from /api/panel/pg/... (app/api/panel_pg_users_api.py)."""
+        return spa_response("pg/templates")
 
     @app.post("/pg/templates")
     async def pg_templates_create(
@@ -1219,53 +792,10 @@ def register_pg_pages(
     # ---- groups ----
     @app.get("/pg/groups", response_class=HTMLResponse)
     async def pg_groups(
-        request: Request,
         staff: dict = Depends(require_pg_perm("pg_groups")),
-        session: AsyncSession = Depends(get_db),
     ):
-        from app.services.pg_read import PgReadDenied, staff_pg_read_client
-
-        err = request.query_params.get("err")
-        ok = request.query_params.get("ok")
-        groups, inbound_tags = [], []
-        edit_id = request.query_params.get("edit")
-        edit_group = None
-        try:
-            pg = await staff_pg_read_client(session, staff)
-            full = await pg.get_groups()
-            groups = full if isinstance(full, list) else as_list(full, "groups")
-            if not groups:
-                groups = await pg.get_groups_simple()
-            groups = _filter_groups([g for g in groups if isinstance(g, dict)], staff)
-            inbound_tags = _inbound_tags(await pg.get_inbounds())
-            if edit_id and normalize_number_text(str(edit_id)).isdigit():
-                eid = parse_int(edit_id)
-                from app.services.plans_catalog import groups_allowed_for_staff
-
-                if groups_allowed_for_staff(staff, [eid]):
-                    edit_group = await pg.get_group(eid)
-                else:
-                    err = err or "گروه خارج از دسترسی شماست"
-        except PgReadDenied as e:
-            err = e.message
-        except Exception as e:
-            err = str(e)
-        return render(
-            request,
-            "pg_groups.html",
-            _pg_ctx(
-                staff,
-                groups=groups,
-                inbound_tags=inbound_tags,
-                edit_group=edit_group,
-                flash_err=err,
-                flash_ok=ok,
-                can_create=staff_pg_action(staff, "groups", "create"),
-                can_update=staff_pg_action(staff, "groups", "update"),
-                can_delete=staff_pg_action(staff, "groups", "delete"),
-                active="pg_groups",
-            ),
-        )
+        """The React page; its data comes from /api/panel/pg/... (app/api/panel_pg_users_api.py)."""
+        return spa_response("pg/groups")
 
     @app.post("/pg/groups")
     async def pg_groups_create(
@@ -1358,38 +888,10 @@ def register_pg_pages(
     # ---- hosts ----
     @app.get("/pg/hosts", response_class=HTMLResponse)
     async def pg_hosts(
-        request: Request,
         staff: dict = Depends(require_pg_perm("pg_hosts")),
-        session: AsyncSession = Depends(get_db),
     ):
-        from app.services.pg_read import PgReadDenied, staff_pg_read_client
-
-        err = request.query_params.get("err")
-        ok = request.query_params.get("ok")
-        hosts, inbound_tags = [], []
-        try:
-            pg = await staff_pg_read_client(session, staff)
-            hosts = await pg.get_hosts()
-            inbound_tags = _inbound_tags(await pg.get_inbounds())
-        except PgReadDenied as e:
-            err = e.message
-        except Exception as e:
-            err = str(e)
-        return render(
-            request,
-            "pg_hosts.html",
-            _pg_ctx(
-                staff,
-                hosts=hosts,
-                inbound_tags=inbound_tags,
-                flash_err=err,
-                flash_ok=ok,
-                can_create=staff_pg_action(staff, "hosts", "create"),
-                can_update=staff_pg_action(staff, "hosts", "update"),
-                can_delete=staff_pg_action(staff, "hosts", "delete"),
-                active="pg_hosts",
-            ),
-        )
+        """The React page; its data comes from /api/panel/pg/... (app/api/panel_pg_users_api.py)."""
+        return spa_response("pg/hosts")
 
     @app.post("/pg/hosts")
     async def pg_hosts_create(
@@ -1545,49 +1047,9 @@ def register_pg_pages(
 
     # ---- nodes / inbounds / admins ----
     @app.get("/pg/nodes", response_class=HTMLResponse)
-    async def pg_nodes(
-        request: Request,
-        staff: dict = Depends(require_pg_perm("pg_nodes")),
-        session: AsyncSession = Depends(get_db),
-    ):
-        from app.services.pg_read import PgReadDenied, staff_pg_read_client
-
-        err = request.query_params.get("err")
-        ok = request.query_params.get("ok")
-        nodes = []
-        try:
-            from app.services.node_traffic import enrich_nodes_with_traffic
-
-            pg = await staff_pg_read_client(session, staff)
-            nodes_raw = await pg.get_nodes()
-            if not isinstance(nodes_raw, list):
-                nodes_raw = []
-            realtime = None
-            try:
-                realtime = await pg.get_nodes_realtime()
-            except Exception:
-                realtime = None
-            nodes = enrich_nodes_with_traffic(nodes_raw, realtime)
-        except PgReadDenied as e:
-            err = e.message
-        except Exception as e:
-            err = str(e)
-        node_acts = (staff.get("pg_actions") or {}).get("nodes") or {}
-        return render(
-            request,
-            "pg_nodes.html",
-            _pg_ctx(
-                staff,
-                nodes=nodes,
-                flash_err=err,
-                flash_ok=ok,
-                can_reconnect=bool(node_acts.get("reconnect") or staff_pg_action(staff, "nodes", "reconnect")),
-                can_create=bool(node_acts.get("create") or staff_pg_action(staff, "nodes", "create")),
-                can_update=bool(node_acts.get("update") or staff_pg_action(staff, "nodes", "update")),
-                can_delete=bool(node_acts.get("delete") or staff_pg_action(staff, "nodes", "delete")),
-                active="pg_nodes",
-            ),
-        )
+    async def pg_nodes(staff: dict = Depends(require_pg_perm("pg_nodes"))):
+        """The nodes page; its rows come from /api/panel/pg/nodes."""
+        return spa_response("pg/nodes")
 
     @app.post("/pg/nodes/{node_id}/reconnect")
     async def pg_node_reconnect(
@@ -1770,143 +1232,14 @@ def register_pg_pages(
         return RedirectResponse(f"/pg/nodes?ok={_q('نود ساخته شد')}", status_code=303)
 
     @app.get("/pg/inbounds", response_class=HTMLResponse)
-    async def pg_inbounds(
-        request: Request,
-        staff: dict = Depends(require_pg_perm("pg_inbounds")),
-        session: AsyncSession = Depends(get_db),
-    ):
-        from app.services.pg_read import PgReadDenied, staff_pg_read_client
-
-        err = request.query_params.get("err")
-        inbounds, details = [], None
-        try:
-            pg = await staff_pg_read_client(session, staff)
-            inbounds = await pg.get_inbounds()
-            details = await pg.get_inbounds_details()
-        except PgReadDenied as e:
-            err = e.message
-        except Exception as e:
-            err = str(e)
-        return render(
-            request,
-            "pg_inbounds.html",
-            _pg_ctx(staff, inbounds=inbounds, details=details, flash_err=err, active="pg_inbounds"),
-        )
+    async def pg_inbounds(staff: dict = Depends(require_pg_perm("pg_inbounds"))):
+        """The inbounds page; its data comes from /api/panel/pg/inbounds."""
+        return spa_response("pg/inbounds")
 
     @app.get("/pg/admins", response_class=HTMLResponse)
-    async def pg_admins(
-        request: Request,
-        staff: dict = Depends(require_pg_perm("pg_admins")),
-        session=Depends(get_db),
-    ):
-        from app.services.pg_overview import admin_usage_snapshot
-        from app.services.pg_staff_access import (
-            purge_orphaned_staff_access,
-            web_access_status_map,
-        )
-        from app.services.resellers import (
-            FEATURE_PERMS,
-            ensure_current_capacity_reseller_plan,
-            list_reseller_plans,
-        )
-
-        err = request.query_params.get("err")
-        ok = request.query_params.get("ok")
-        admins = []
-        roles = []
-        web_status: dict = {}
-        reseller_plans = []
-        admin_usage: dict = {}
-        try:
-            try:
-                await ensure_current_capacity_reseller_plan(session)
-                await session.commit()
-            except Exception:
-                import logging
-
-                logging.getLogger(__name__).exception(
-                    "ensure current_capacity plan failed on /pg/admins"
-                )
-                try:
-                    await session.rollback()
-                except Exception:
-                    logger.debug("pg_admins: ignored failure", exc_info=True)
-            # Drop web rows for PG admins that no longer exist in PasarGuard
-            try:
-                await purge_orphaned_staff_access(session)
-            except Exception:
-                logger.debug("pg_admins: ignored failure", exc_info=True)
-            pg = get_pg()
-            admins = await pg.get_admins()
-            if not admins:
-                admins = await pg.get_admins_simple()
-            roles = await pg.get_admin_roles()
-            roles_by_id = {
-                int(r.get("id")): r
-                for r in (roles or [])
-                if isinstance(r, dict) and r.get("id") is not None
-            }
-            names = [
-                str(a.get("username") or "").strip()
-                for a in (admins or [])
-                if a.get("username")
-            ]
-            web_status = await web_access_status_map(session, names)
-            reseller_plans = [p for p in await list_reseller_plans(session) if p.is_active]
-            for a in admins or []:
-                if not isinstance(a, dict):
-                    continue
-                uname = str(a.get("username") or "").strip().lower()
-                if not uname:
-                    continue
-                payload = a
-                # Simple list often omits usage — fetch full admin when metrics missing
-                has_usage = any(
-                    payload.get(k) is not None
-                    for k in (
-                        "used_traffic",
-                        "traffic_used",
-                        "lifetime_used_traffic",
-                        "total_users",
-                        "users_count",
-                        "data_limit",
-                        "max_users",
-                    )
-                )
-                if not has_usage:
-                    try:
-                        full = await pg.get_admin(uname)
-                        if isinstance(full, dict):
-                            payload = full
-                    except Exception:
-                        logger.debug("pg_admins: ignored failure", exc_info=True)
-                role = payload.get("role") if isinstance(payload.get("role"), dict) else None
-                if role is None:
-                    rid = payload.get("role_id") or a.get("role_id")
-                    try:
-                        role = roles_by_id.get(int(rid)) if rid is not None else None
-                    except (TypeError, ValueError):
-                        role = None
-                admin_usage[uname] = admin_usage_snapshot(payload, role)
-        except Exception as e:
-            err = str(e)
-        return render(
-            request,
-            "pg_admins.html",
-            _pg_ctx(
-                staff,
-                admins=admins,
-                pg_roles=roles,
-                web_status=web_status,
-                admin_usage=admin_usage,
-                reseller_plans=reseller_plans,
-                feature_perms=FEATURE_PERMS,
-                owner_can_toggle_oversell=is_explicit_owner_staff(staff),
-                flash_err=err,
-                flash_ok=ok,
-                active="pg_admins",
-            ),
-        )
+    async def pg_admins(staff: dict = Depends(require_pg_perm("pg_admins"))):
+        """The admins page; its rows come from /api/panel/pg/admins."""
+        return spa_response("pg/admins")
 
     @app.post("/pg/admins")
     async def pg_admins_create(
@@ -1968,7 +1301,7 @@ def register_pg_pages(
         payload: dict = {
             "username": uname,
             "password": password,
-            "note": note or "created from PGClockBot",
+            "note": note or "created from ShieldRay",
         }
         if role_raw.isdigit():
             rid = int(role_raw)

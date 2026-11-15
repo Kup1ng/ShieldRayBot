@@ -81,6 +81,25 @@ class NodeOverviewBuilderTests(unittest.TestCase):
         self.assertNotIn("mem_used", dumped)  # absolute bytes not in poll JSON
         self.assertEqual(payload["nodes"][0]["traffic_up"]["num"], n1["traffic_up"]["num"])
 
+    def test_node_status_is_labelled_in_persian_for_cards_rows_and_polling(self):
+        from app.services.node_traffic import build_nodes_overview, nodes_overview_json
+        from app.services.pg_nodes_panel import node_row
+
+        nodes = [
+            {"id": 1, "name": "de-1", "status": "connected"},
+            {"id": 2, "name": "ae-1", "status": "error"},
+            {"id": 3, "name": "ir-1", "status": "disabled"},
+            {"id": 4, "name": "x-1", "status": ""},
+        ]
+        cards = build_nodes_overview(nodes)["nodes"]
+        self.assertEqual([c["status_label"] for c in cards], ["متصل", "خطا", "غیرفعال", "—"])
+        self.assertEqual(cards[0]["status"], "connected")
+        polled = nodes_overview_json({"nodes": cards, "live": {}})["nodes"]
+        self.assertEqual([c["status_label"] for c in polled], ["متصل", "خطا", "غیرفعال", "—"])
+        rows = [node_row(n) for n in nodes]
+        self.assertEqual([r["status_label"] for r in rows], ["متصل", "خطا", "غیرفعال", ""])
+        self.assertEqual(rows[1]["status"], "error")
+
     def test_missing_realtime_shows_dashes(self):
         from app.services.node_traffic import build_nodes_overview
 

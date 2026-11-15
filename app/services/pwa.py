@@ -14,8 +14,8 @@ from app.config import DATA_DIR, ROOT_DIR
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_NAME = "MrClockBot"
-DEFAULT_SHORT_NAME = "MrClockBot"
+DEFAULT_NAME = "ShieldRay"
+DEFAULT_SHORT_NAME = "ShieldRay"
 DEFAULT_DESCRIPTION = "پنل مدیریت فروشگاه"
 PWA_DIR = DATA_DIR / "pwa"
 ICON_NAME = "icon.png"
@@ -292,7 +292,7 @@ def build_manifest(cfg: dict[str, Any]) -> dict[str, Any]:
 
 
 def service_worker_js() -> str:
-    return """/* PGClockBot panel service worker — static shell only */
+    return """/* ShieldRay panel service worker — static shell only */
 const CACHE = 'pgclock-shell-v52';
 const PRECACHE = [
   '/static/logo.png',

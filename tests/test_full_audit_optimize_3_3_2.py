@@ -75,8 +75,12 @@ class UnreadSkipTests(unittest.TestCase):
         self.assertIn("should_skip_unread_count", app_src)
 
     def test_tickets_page_derives_unread(self):
-        src = (ROOT / "app/api/panel_tickets_pages.py").read_text(encoding="utf-8")
-        self.assertIn("tickets_unread = unread_from_tickets(panel_tickets, staff)", src)
+        # /tickets is the React page shell, which renders no sidebar: it must not pay for the
+        # sidebar's unread COUNT (the sidebar badge comes from /api/panel/session).
+        from app.services.panel_tickets import should_skip_unread_count
+
+        self.assertTrue(should_skip_unread_count("/tickets", "GET"))
+        self.assertFalse(should_skip_unread_count("/api/panel/session", "GET"))
 
 
 class TicketLoadMessagesTests(unittest.TestCase):

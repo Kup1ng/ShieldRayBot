@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
@@ -13,6 +15,8 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from app.api import spa_pages
+from app.api.panel_resellers_api import register_panel_resellers_api
 from app.api.reseller_subscription_pages import register_reseller_subscription_pages
 from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan, ResellerProfile
 from app.services.billing import GB
@@ -54,7 +58,6 @@ class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
             modify_admin=AsyncMock(return_value={}),
             get_users=AsyncMock(return_value={"users": []}),
         )
-        self.rendered: list[tuple[str, dict]] = []
         self.patches = [
             patch("app.services.pasarguard.get_pg", return_value=self.pg),
             patch("app.services.billing_suspend._set_admin_enabled", AsyncMock()),
@@ -65,7 +68,6 @@ class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
             p.start()
 
         def render(request: Request, template: str, ctx: dict):
-            self.rendered.append((template, ctx))
             return HTMLResponse("ok")
 
         async def require_staff():
@@ -77,12 +79,22 @@ class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
 
         app = FastAPI()
         register_reseller_subscription_pages(app, render=render, require_staff=require_staff, get_db=get_db)
+        register_panel_resellers_api(
+            app, require_staff=require_staff, require_admin=require_staff, require_perm=lambda _perm: require_staff,
+            require_pg_perm=lambda _perm: require_staff, get_db=get_db,
+        )
+        self.spa = tempfile.TemporaryDirectory()
+        (Path(self.spa.name) / "my-subscription").mkdir()
+        (Path(self.spa.name) / "my-subscription" / "index.html").write_text("<html>my-subscription</html>", encoding="utf-8")
+        self.patches.append(patch.object(spa_pages, "SPA_DIR", Path(self.spa.name)))
+        self.patches[-1].start()
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
         for p in reversed(self.patches):
             p.stop()
+        self.spa.cleanup()
         await self.engine.dispose()
 
     async def wallet(self, user_id: int = 3) -> int:
@@ -99,19 +111,21 @@ class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
         return parse_qs(urlsplit(response.headers["location"]).query)
 
     async def test_page_shows_the_owners_packages(self) -> None:
-        self.assertEqual((await self.client.get("/my-subscription")).status_code, 200)
-        template, ctx = self.rendered[-1]
-        self.assertEqual(template, "my_subscription.html")
-        self.assertEqual(ctx["overview"].generation, 2)
-        self.assertEqual(ctx["wallet"], 1_000_000)
-        self.assertEqual([int(c.plan.id) for c in ctx["overview"].choices][:2], [1, 2])
-        self.assertIsNotNone(ctx["extras"])
+        shell = await self.client.get("/my-subscription")
+        self.assertEqual(shell.status_code, 200)
+        self.assertIn("my-subscription", shell.text)
+        data = (await self.client.get("/api/panel/my-subscription")).json()
+        self.assertEqual(data["overview"]["generation"], 2)
+        self.assertEqual(data["wallet"], 1_000_000)
+        self.assertEqual([c["plan_id"] for c in data["overview"]["choices"]][:2], [1, 2])
+        self.assertIsNotNone(data["extras"])
 
     async def test_only_the_shop_owner_reaches_it(self) -> None:
         for staff in ({"role": "principal", "bot_user_id": 3}, {"role": "admin"}, {"role": "reseller"}):
             with self.subTest(staff=staff):
                 self.staff = staff
                 self.assertEqual((await self.client.get("/my-subscription")).status_code, 403)
+                self.assertEqual((await self.client.get("/api/panel/my-subscription")).status_code, 403)
                 self.assertEqual((await self.client.post("/my-subscription/renew", data={"plan_id": "2", "generation": "2"})).status_code, 403)
         self.assertEqual(await self.wallet(), 1_000_000)
 
@@ -122,8 +136,8 @@ class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(again["err"], [STALE_PAGE])
         self.assertEqual(await self.wallet(), 800_000)
         self.assertEqual((await self.sub()).plan_id, 2)
-        await self.client.get("/my-subscription")
-        self.assertTrue(self.rendered[-1][1]["overview"].expires_at_iso.endswith("+00:00"), "expiry is shown as UTC")
+        data = (await self.client.get("/api/panel/my-subscription")).json()
+        self.assertTrue(data["overview"]["expires_at"] is None or data["overview"]["expires_at"].endswith("+00:00"), "expiry is shown as UTC")
 
     async def test_renewal_touches_only_the_callers_shop(self) -> None:
         await self.post("/renew", plan_id=1, generation=2)

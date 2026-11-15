@@ -40,7 +40,7 @@ class WebShopOrderIsolationTests(unittest.TestCase):
         # doesn't silently bit-rot into a brittle no-op on the next move, and
         # actually assert the platform-admin branch filters reseller_id IS NULL.
         candidates = [
-            ROOT / "app/api/finance_pages.py",
+            ROOT / "app/services/finance_panel.py",
             ROOT / "app/api/app.py",
         ]
         found = False

@@ -13,7 +13,7 @@ GET = ROOT / "get.sh"
 class InstallMenuChannelTests(unittest.TestCase):
     def test_brand_orange_mrclockbot_menu(self):
         src = SH.read_text(encoding="utf-8")
-        self.assertIn("MrClockBot", src)
+        self.assertIn("ShieldRay", src)
         self.assertIn("38;5;208m", src)  # orange accent
         self.assertIn("print_status_box", src)
         self.assertIn("Not installed", src)

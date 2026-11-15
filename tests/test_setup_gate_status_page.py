@@ -8,7 +8,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 APP_PY = ROOT / "app" / "api" / "app.py"
 TPL = ROOT / "app" / "web" / "templates" / "panel_status.html"
-CSS = ROOT / "app" / "web" / "static" / "panel.css"
+CSS = ROOT / "app" / "web" / "static" / "panel-status.css"
 
 
 class SetupGateStatusPageTests(unittest.TestCase):
@@ -62,7 +62,7 @@ class SetupGateStatusPageTests(unittest.TestCase):
             guide_note='از <code dir="ltr">127.0.0.1</code> بدون لینک.',
             footer="بعد از اتمام راه‌اندازی…",
             app_version="0.1.10",
-            pwa_name="MrClockBot",
+            pwa_name="ShieldRay",
         )
         self.assertIn("panel-status--guided", html)
         self.assertIn("panel-status-guide", html)

@@ -63,30 +63,12 @@ class MiniAppAuthUnitTests(unittest.TestCase):
             self.assertEqual(resolve_mini_persona(user), "user")
 
 
-class MiniAppSourceTests(unittest.TestCase):
-    # Escaping, link safety, copy feedback and actions are behavior-tested in
-    # tests/miniapp_app.test.cjs (run by tests/test_miniapp_frontend.py).
+class MiniAppPageTests(unittest.TestCase):
+    """The page FastAPI serves for /miniapp: the exported React app (see app/api/spa_pages.py)."""
 
-    def test_template_loads_scripts_in_dependency_order(self):
-        from jinja2 import Environment, FileSystemLoader, select_autoescape
-
-        env = Environment(loader=FileSystemLoader(ROOT / "app/web/templates"), autoescape=select_autoescape())
-        html = env.get_template("miniapp.html").render(app_version="t")
-        order = [html.index(path) for path in (
-            "/static/catalog_price.js", "/static/miniapp/core.js",
-            "/static/miniapp/render.js", "/static/miniapp/app.js",
-        )]
-        self.assertEqual(order, sorted(order))
-        self.assertIn("/static/miniapp.css", html)
-        for element_id in ('id="root"', 'id="nav"', 'id="sheet"', 'id="sheet-body"', 'id="sheet-close"'):
-            self.assertIn(element_id, html)
-        for name in ("core.js", "render.js", "app.js"):
-            self.assertTrue((ROOT / "app/web/static/miniapp" / name).is_file())
-
-    def test_a_blocked_telegram_sdk_cannot_hold_the_page(self):
+    @staticmethod
+    def _scripts(html: str) -> list[dict]:
         from html.parser import HTMLParser
-
-        from jinja2 import Environment, FileSystemLoader, select_autoescape
 
         class Scripts(HTMLParser):
             def __init__(self) -> None:
@@ -97,25 +79,32 @@ class MiniAppSourceTests(unittest.TestCase):
                 if tag == "script":
                     self.tags.append(dict(attrs))
 
-        env = Environment(loader=FileSystemLoader(ROOT / "app/web/templates"), autoescape=select_autoescape())
         parser = Scripts()
-        parser.feed(env.get_template("miniapp.html").render(app_version="t"))
-        srcs = [t.get("src", "") for t in parser.tags]
-        sdk = next(t for t in parser.tags if "telegram-web-app.js" in t.get("src", ""))
-        self.assertIn("async", sdk)
-        self.assertEqual(sdk.get("id"), "tg-sdk")
-        launch = next(i for i, s in enumerate(srcs) if "/static/miniapp/launch.js" in s)
-        # Right after the SDK tag and before every app script, so it reads the address first.
-        self.assertEqual(launch, srcs.index(sdk["src"]) + 1)
-        self.assertTrue(all(launch < i for i, s in enumerate(srcs) if "/static/miniapp/" in s and i != launch))
-        self.assertNotIn("defer", parser.tags[launch])
-        self.assertNotIn("async", parser.tags[launch])
+        parser.feed(html)
+        return parser.tags
 
-    def test_css_matches_panel_brand_tokens(self):
-        css = (ROOT / "app/web/static/miniapp.css").read_text(encoding="utf-8")
-        self.assertIn("--brand: #f97316", css)
-        self.assertIn("--background: #09090b", css)
-        self.assertIn("Vazirmatn", css)
+    def test_a_blocked_telegram_sdk_cannot_hold_the_page(self):
+        from app.api.spa_pages import spa_html
+
+        tags = self._scripts(spa_html("miniapp"))
+        sdk = next(t for t in tags if "telegram-web-app.js" in t.get("src", ""))
+        self.assertIn("async", sdk)
+        self.assertEqual(sdk["src"], "https://telegram.org/js/telegram-web-app.js")
+
+    def test_every_script_carries_the_request_nonce(self):
+        from app.api.spa_pages import spa_html
+        from app.services.csp_nonce import inject_script_nonces
+
+        tags = self._scripts(inject_script_nonces(spa_html("miniapp"), "n0nce"))
+        self.assertTrue(tags)
+        self.assertTrue(all(t.get("nonce") == "n0nce" for t in tags))
+
+    def test_app_files_load_from_the_static_mount(self):
+        from app.api.spa_pages import spa_html
+
+        local = [t["src"] for t in self._scripts(spa_html("miniapp")) if t.get("src", "").startswith("/")]
+        self.assertTrue(local)
+        self.assertTrue(all(src.startswith("/static/spa/") for src in local))
 
     def test_api_routes_registered(self):
         from app.api.app import create_api_app

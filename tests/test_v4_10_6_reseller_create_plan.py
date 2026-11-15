@@ -37,11 +37,35 @@ class ResellerCreatePlanUiTests(unittest.TestCase):
         self.assertIn("هنوز پلن نمایندگی فعالی ندارید", modal)
 
 
-class ResellerCreatePlanApiTests(unittest.TestCase):
-    def test_list_passes_active_plans(self):
-        self.assertIn("list_active_reseller_plans", RESELLER_API)
-        self.assertIn('"reseller_plans": reseller_plans', RESELLER_API)
+class ResellerCreateOptionsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_create_form_offers_only_active_subscription_plans(self):
+        from unittest.mock import AsyncMock, patch
 
+        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+        from app.db import Base
+        from app.db.models import ResellerPlan
+        from app.services.reseller_panel_list import create_options_payload
+
+        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+            session.add_all([
+                ResellerPlan(id=1, name="active", price=1, plan_kind="subscription", billing_mode="fixed", is_active=True),
+                ResellerPlan(id=2, name="inactive", price=1, plan_kind="subscription", billing_mode="fixed", is_active=False),
+                ResellerPlan(id=3, name="pack", price=1, plan_kind="addon_volume", billing_mode="fixed", is_active=True),
+            ])
+            await session.commit()
+            owner = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
+            fake_pg = type("Pg", (), {"get_admin_roles": AsyncMock(return_value=[])})()
+            with patch("app.services.reseller_panel_list.get_pg", return_value=fake_pg):
+                options = await create_options_payload(session, owner)
+        await engine.dispose()
+        self.assertEqual([plan["name"] for plan in options["plans"]], ["active"])
+
+
+class ResellerCreatePlanApiTests(unittest.TestCase):
     def test_create_requires_active_plan(self):
         fn = RESELLER_API[
             RESELLER_API.find("async def reseller_create") : RESELLER_API.find(
@@ -88,7 +112,11 @@ class PgAdminCreateResellerGateTests(unittest.TestCase):
         self.assertIn("display: none !important", CSS)
 
     def test_page_passes_feature_perms(self):
-        self.assertIn("feature_perms=FEATURE_PERMS", PG_API)
+        from app.services.pg_admins_panel import feature_perm_options
+        from app.services.resellers import FEATURE_PERMS
+
+        # The create form (React /pg/admins) is offered every reseller permission, in the same order.
+        self.assertEqual([(p["key"], p["label"]) for p in feature_perm_options()], list(FEATURE_PERMS))
 
     def test_create_admin_applies_perm_overrides(self):
         fn = PG_API[

@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from html import unescape
 from pathlib import Path
 from unittest.mock import patch
 
@@ -133,18 +130,17 @@ class ReportsTabChartTests(RoutesHarness):
             ])
             await session.commit()
 
-    async def test_the_reports_tab_draws_daily_charts_and_the_share_bar(self) -> None:
+    async def test_the_reports_data_has_daily_charts_for_both_ranges_and_the_share_segments(self) -> None:
         cookie = f"session={self.signer.dumps(OWNER_SESSION)}; csrf=token"
-        page = await self.client.get("/finance?tab=reports", headers={"cookie": cookie})
+        page = await self.client.get("/api/panel/finance/reports", headers={"cookie": cookie})
         self.assertEqual(page.status_code, 200)
-        cards = re.findall(r"<section[^>]*data-metric=\"value\"[^>]*>", page.text)
-        self.assertEqual(len(cards), 2, "orders and new users use the dashboard chart")
-        orders = json.loads(unescape(re.search(r"data-trend='([^']*)'", cards[0]).group(1)))
+        charts = page.json()["charts"]
+        self.assertEqual(set(charts), {"orders", "new_users"}, "orders and new users each get a daily chart")
+        orders = charts["orders"]["7"]
         self.assertEqual(orders["total"], 2, "the shop's order is not in the platform chart")
-        self.assertIn("data-trend-30=", cards[0])
-        self.assertIn('data-extra="extra"', cards[0])
-        self.assertIn('class="fin-share"', page.text)
-        self.assertEqual(page.text.count('class="fin-share-seg"'), 2)
+        self.assertEqual(len(charts["orders"]["30"]["days"]), 30)
+        self.assertEqual(sum(day["extra"] for day in orders["days"]), 2, "delivered orders ride along as the extra figure")
+        self.assertEqual(len(page.json()["method_segments"]), 2)
 
 
 if __name__ == "__main__":

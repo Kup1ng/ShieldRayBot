@@ -46,12 +46,14 @@ NO_INIT_DATA = "no_init_data"
 BAD_SIGNATURE = "bad_signature"
 EXPIRED = "expired"
 NOT_STARTED = "not_started"
+TERMS = "terms"
 
 _REJECT_TEXT = {
     NO_INIT_DATA: "اطلاعات ورود تلگرام دریافت نشد؛ مینی‌اپ را از داخل تلگرام باز کنید",
     BAD_SIGNATURE: "اعتبار ورود تأیید نشد؛ مینی‌اپ را از دکمهٔ «Open» همین ربات باز کنید",
     EXPIRED: "نشست مینی‌اپ منقضی شده؛ مینی‌اپ را ببندید و دوباره باز کنید",
     NOT_STARTED: "ابتدا ربات را استارت کنید، سپس مینی‌اپ را دوباره باز کنید",
+    TERMS: "برای ادامه، ابتدا قوانین را بپذیرید",
 }
 
 
@@ -123,8 +125,11 @@ def assert_miniapp_feature_enabled() -> None:
         raise HTTPException(404, "مینی‌اپ فعال نیست")
 
 
-async def load_mini_user(session: AsyncSession, request: Request) -> BotUser:
+async def load_mini_user(session: AsyncSession, request: Request, *, terms_gate: bool = True) -> BotUser:
     """Validate initData and load the BotUser row (must have /start'd).
+
+    ``terms_gate=False`` is only for the access routes that show and accept the entry terms;
+    every other route keeps the person at the gate until they accept.
 
     A shop's Mini App (``X-Mini-Shop``) is verified with that shop bot's token, admits only
     the shop's customers and staff, and reaches only the routes opened for shops; the
@@ -153,7 +158,8 @@ async def load_mini_user(session: AsyncSession, request: Request) -> BotUser:
     assert_shop_route(scope, request)
     # Parity with bot: users cannot use the app until channel membership is confirmed.
     await assert_mini_force_join(session, user, scope=scope)
-    await assert_mini_terms_entry(session, user, scope=scope)
+    if terms_gate:
+        await assert_mini_terms_entry(session, user, scope=scope)
     request.state.mini_scope = scope
     # The order, catalog and wallet services read the shop from the same context the shop
     # bot sets per update; it is set only after the shop and the person were verified.
@@ -170,7 +176,7 @@ def resolve_mini_persona(user: BotUser) -> str:
     return "user"
 
 
-def _is_gated_customer(user: BotUser, scope: MiniScope) -> bool:
+def is_gated_customer(user: BotUser, scope: MiniScope) -> bool:
     """Customers pass force-join and terms; staff (platform, or this shop's) do not."""
     if scope.is_shop:
         return not is_shop_staff(scope, user)
@@ -183,7 +189,7 @@ async def assert_mini_force_join(session: AsyncSession, user: BotUser, *, scope:
     Admin/reseller personas are not gated (same as Telegram middleware). In a shop's Mini
     App the shop's channels apply, checked through the shop's bot.
     """
-    if not _is_gated_customer(user, scope):
+    if not is_gated_customer(user, scope):
         return
     from aiogram import Bot
 
@@ -226,7 +232,7 @@ async def assert_mini_force_join(session: AsyncSession, user: BotUser, *, scope:
 
 async def assert_mini_terms_entry(session: AsyncSession, user: BotUser, *, scope: MiniScope = PLATFORM_SCOPE) -> None:
     """Mirror bot TermsEntryMiddleware for Mini App (users only); a shop's own terms in its Mini App."""
-    if not _is_gated_customer(user, scope):
+    if not is_gated_customer(user, scope):
         return
     from app.services.terms import needs_entry_gate
     from app.services.users import get_all_settings
@@ -240,12 +246,9 @@ async def assert_mini_terms_entry(session: AsyncSession, user: BotUser, *, scope
         reseller_owner_id=scope.shop_id,
     )
     if prompt is not None:
-        from fastapi import HTTPException
+        # The page shows the terms (GET /api/mini/access) and reloads after they are accepted.
+        raise mini_reject(403, TERMS)
 
-        raise HTTPException(
-            403,
-            "ابتدا قوانین ربات را در تلگرام بپذیرید",
-        )
 
 async def load_reseller_profile(
     session: AsyncSession, user: BotUser

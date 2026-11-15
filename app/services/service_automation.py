@@ -7,6 +7,7 @@ import logging
 import math
 import secrets
 from datetime import datetime, timedelta, timezone
+from typing import TypedDict
 
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from sqlalchemy import or_, select, update
@@ -139,6 +140,22 @@ async def automation_settings(
         )
     await session.commit()
     return result
+
+
+class RenewSwitch(TypedDict):
+    enabled: bool
+    blocked: bool
+
+
+async def renew_switch_state(session: AsyncSession, service_id: int) -> RenewSwitch:
+    """Automatic renewal as the service page's switch shows it; reads only, so a page view never adds a row.
+
+    ``blocked``: an earlier automatic purchase waits for support, so the switch may go off but not on.
+    """
+    row = await session.get(ServiceAutomation, service_id)
+    if row is None:
+        return {"enabled": False, "blocked": False}
+    return {"enabled": bool(row.renew_enabled), "blocked": bool(row.needs_review or row.pending_order_id)}
 
 
 def valid_pack(pack: ServiceAddonPack) -> bool:

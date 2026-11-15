@@ -10,6 +10,7 @@ from app.db.models import ResellerSetting, Setting
 from app.services.rich_text import pack_rich_text
 from app.services.screen_titles import caption_setting_key, title_setting_key
 from app.services.users import DEFAULT_SETTINGS, clear_settings_cache
+from tests.settings_json import settings_fields, settings_url
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
 
 OPS_TITLE = title_setting_key("a.ops")
@@ -46,11 +47,12 @@ class MenuTextsTabTests(RoutesHarness):
         clear_settings_cache()
 
     async def test_the_owner_sees_every_menu_and_the_editor_switch(self) -> None:
-        page = await self.request(OWNER_SESSION, "GET", "/settings?tab=screens")
+        page = await self.request(OWNER_SESSION, "GET", settings_url("screens"))
         self.assertEqual(page.status_code, 200)
-        for name in (f"s_{OPS_TITLE}", f"s_{OPS_CAPTION}", f"s_{WALLET_TITLE}", "s_screen_editor_enabled"):
-            self.assertIn(name, page.text)
-        self.assertIn("بازگردانی همه به پیش‌فرض", page.text)
+        keys = set(settings_fields(page.json()))
+        for name in (OPS_TITLE, OPS_CAPTION, WALLET_TITLE, "screen_editor_enabled"):
+            self.assertIn(name, keys)
+        self.assertTrue(page.json()["can_reset"])
 
     async def test_the_owner_saves_a_title_and_hides_a_caption(self) -> None:
         saved = await self.request(OWNER_SESSION, "POST", "/settings?tab=screens", {f"s_{OPS_TITLE}": "🚀 کارهای امروز", f"s_{OPS_CAPTION}": "-"})
@@ -67,16 +69,16 @@ class MenuTextsTabTests(RoutesHarness):
     async def test_a_premium_title_shows_as_text_and_survives_an_unchanged_save(self) -> None:
         packed = pack_rich_text("👍 کارهای امروز", PREMIUM)
         await self.store(OPS_TITLE, packed)
-        page = await self.request(OWNER_SESSION, "GET", "/settings?tab=screens")
-        self.assertIn('value="👍 کارهای امروز"', page.text)
+        page = await self.request(OWNER_SESSION, "GET", settings_url("screens"))
+        self.assertEqual(settings_fields(page.json())[OPS_TITLE]["value"], "👍 کارهای امروز")
         self.assertNotIn("RICH1", page.text)
         await self.request(OWNER_SESSION, "POST", "/settings?tab=screens", {f"s_{OPS_TITLE}": "👍 کارهای امروز"})
         self.assertEqual(await self.stored(OPS_TITLE), packed)
 
     async def test_a_premium_button_label_shows_as_text_on_the_buttons_tab(self) -> None:
         await self.store("btn_wallet", pack_rich_text("👍 کیف پول من", PREMIUM))
-        page = await self.request(OWNER_SESSION, "GET", "/settings?tab=buttons")
-        self.assertIn("کیف پول من", page.text)
+        page = await self.request(OWNER_SESSION, "GET", settings_url("buttons"))
+        self.assertEqual(settings_fields(page.json())["btn_wallet"]["value"], "👍 کیف پول من")
         self.assertNotIn("RICH1", page.text)
 
     async def test_reset_puts_texts_back_and_keeps_the_switch(self) -> None:
@@ -90,11 +92,12 @@ class MenuTextsTabTests(RoutesHarness):
         self.assertEqual(await self.stored("screen_editor_enabled"), "1")
 
     async def test_a_shop_sees_and_saves_only_its_own_menus(self) -> None:
-        page = await self.request(SHOP_SESSION, "GET", "/shop-settings?tab=screens")
+        page = await self.request(SHOP_SESSION, "GET", "/api/panel/shop-settings?tab=screens")
         self.assertEqual(page.status_code, 200)
-        self.assertIn(f"s_{WALLET_TITLE}", page.text)
-        self.assertNotIn(f"s_{OPS_TITLE}", page.text)
-        self.assertNotIn("s_screen_editor_enabled", page.text)
+        keys = {field["key"] for section in page.json()["sections"] for field in section["fields"]}
+        self.assertIn(WALLET_TITLE, keys)
+        self.assertNotIn(OPS_TITLE, keys)
+        self.assertNotIn("screen_editor_enabled", keys)
         await self.request(SHOP_SESSION, "POST", "/shop-settings?tab=screens", {
             f"s_{WALLET_TITLE}": "💰 حساب من", f"s_{OPS_TITLE}": "نفوذ", "s_screen_editor_enabled": "1",
         })

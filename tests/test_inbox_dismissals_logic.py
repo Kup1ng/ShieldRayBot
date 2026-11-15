@@ -93,7 +93,7 @@ class InboxDismissalsLogicTests(unittest.TestCase):
         from pathlib import Path
 
         src = Path("app/api/home_pages.py").read_text(encoding="utf-8")
-        self.assertIn("_flash_from_query", src)
+        self.assertIn("redirect_bulk(return_to, ok=", src)
         self.assertIn("invalidate_sidebar_counts", src)
         self.assertIn("sidebar_cache_key", src)
         inbox = Path("app/web/templates/inbox.html").read_text(encoding="utf-8")

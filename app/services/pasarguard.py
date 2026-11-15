@@ -9,6 +9,7 @@ import asyncio
 import secrets
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Optional
 from urllib.parse import quote
 
@@ -727,8 +728,20 @@ class PasarGuardClient:
             params={"admin_username": admin_username},
         )
 
-    async def get_user_usage(self, user_id: int) -> Any:
-        return await self.request("GET", f"/api/user/by-id/{user_id}/usage")
+    async def get_user_usage(
+        self,
+        user_id: int,
+        *,
+        period: str,
+        start: datetime,
+        end: datetime,
+        cache_max_age: float | None = None,
+    ) -> Any:
+        """Traffic of one user per ``period`` (minute, hour, day, month) between two aware datetimes."""
+        params = {"period": period, "start": start.isoformat(), "end": end.isoformat()}
+        return await self.request(
+            "GET", f"/api/user/by-id/{int(user_id)}/usage", params=params, cache_max_age=cache_max_age
+        )
 
     async def get_user_templates(self) -> Any:
         return await self.request("GET", "/api/user_templates")

@@ -115,16 +115,15 @@ class SafeHelpersRollbackTests(unittest.IsolatedAsyncioTestCase):
         session.rollback.assert_awaited()
 
     async def test_finance_page_keeps_fail_soft_delivery_failures(self):
-        src = Path("app/api/finance_pages.py").read_text(encoding="utf-8")
+        src = Path("app/services/finance_panel.py").read_text(encoding="utf-8")
         self.assertIn("rollback_quiet", src)
         self.assertIn("list_open_delivery_failures", src)
 
-    async def test_funnel_page_renders_when_the_funnel_query_fails(self):
+    async def test_funnel_data_answers_when_the_funnel_query_fails(self):
         import httpx
         from fastapi import FastAPI
 
-        from app.api.app import render
-        from app.api.funnel_pages import register_funnel_pages
+        from app.api.panel_marketing_api import register_panel_marketing_api
 
         session = AsyncMock()
         owner = {
@@ -139,17 +138,24 @@ class SafeHelpersRollbackTests(unittest.IsolatedAsyncioTestCase):
         async def get_db():
             yield session
 
+        async def require_owner():
+            return owner
+
         app = FastAPI()
-        register_funnel_pages(app, render=render, require_staff=lambda: owner, get_db=get_db)
+        register_panel_marketing_api(
+            app, require_staff=require_owner, require_admin=require_owner, require_perm=lambda perm: require_owner,
+            require_pg_perm=lambda perm: require_owner, get_db=get_db,
+        )
         client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
         self.addAsyncCleanup(client.aclose)
-        with patch("app.services.db_safe.recover_session", AsyncMock()), patch(
-            "app.services.ux20.funnel_summary",
+        with patch(
+            "app.services.marketing_panel.funnel_summary",
             new_callable=AsyncMock,
             side_effect=RuntimeError("missing table"),
         ):
-            response = await client.get("/funnel")
+            response = await client.get("/api/panel/marketing/funnel")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(set(response.json()["counts"].values()), {0})
         session.rollback.assert_awaited()
 
     async def test_funnel_page_uses_shared_panel(self):

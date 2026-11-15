@@ -5,15 +5,12 @@ from __future__ import annotations
 from collections.abc import Callable
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Form, Request
+from fastapi import Depends, FastAPI, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.services.service_shop_review import (
-    assign_service_shop,
-    list_assignable_shops,
-    list_services_under_review,
-)
+from app.api.spa_pages import spa_response
+from app.services.service_shop_review import assign_service_shop
 
 PAGE_URL = "/service-shop-review"
 PLATFORM_CHOICE = "platform"
@@ -39,22 +36,8 @@ def register_service_shop_review_pages(
     app: FastAPI, *, render: Callable, require_admin: Callable, get_db: Callable
 ) -> None:
     @app.get(PAGE_URL, response_class=HTMLResponse)
-    async def service_shop_review_page(
-        request: Request,
-        staff: dict = Depends(require_admin),
-        session: AsyncSession = Depends(get_db),
-    ):
-        return render(
-            request,
-            "service_shop_review.html",
-            {
-                "staff": staff,
-                "rows": await list_services_under_review(session),
-                "shops": await list_assignable_shops(session),
-                "flash_ok": request.query_params.get("ok"),
-                "flash_err": request.query_params.get("err"),
-            },
-        )
+    async def service_shop_review_page(staff: dict = Depends(require_admin)):
+        return spa_response("service-shop-review")
 
     @app.post(PAGE_URL + "/{service_id}/assign")
     async def service_shop_review_assign(

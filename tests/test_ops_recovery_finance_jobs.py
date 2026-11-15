@@ -15,18 +15,20 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class OpsRecoveryStaticContracts(unittest.TestCase):
     def test_finance_sql_search_and_pager_wired(self):
-        src = (ROOT / "app/api/finance_pages.py").read_text(encoding="utf-8")
+        src = (ROOT / "app/services/finance_panel.py").read_text(encoding="utf-8")
         self.assertIn("ilike_pattern", src)
         self.assertIn("build_list_pager", src)
         self.assertIn("parse_list_page", src)
         self.assertIn("_order_search_clause", src)
         self.assertIn("_payment_search_clause", src)
         self.assertIn("list_stuck_paid_orders", src)
-        self.assertIn("stuck_order_ids", src)
+        self.assertIn('"stuck": stuck', src)
         # Must not fall back to fetch-all + Python filter for list tabs.
-        orders_block = src[src.find('elif tab == "orders"') : src.find('elif tab == "payments"')]
+        orders_block = src[src.find("async def orders_page") : src.find("async def payments_page")]
+        self.assertTrue(orders_block)
         self.assertNotIn("filter_by_search", orders_block)
-        payments_block = src[src.find('elif tab == "payments"') : src.find('elif tab == "delivery"')]
+        payments_block = src[src.find("async def payments_page") : src.find("async def delivery_queue")]
+        self.assertTrue(payments_block)
         self.assertNotIn("filter_by_search", payments_block)
 
     def test_finance_template_stuck_and_pager(self):
@@ -289,7 +291,7 @@ class BroadcastChunkTests(unittest.IsolatedAsyncioTestCase):
 
 class FinanceSearchClauseUnit(unittest.TestCase):
     def test_order_and_payment_clauses_compile(self):
-        from app.api.finance_pages import _order_search_clause, _payment_search_clause
+        from app.services.finance_panel import _order_search_clause, _payment_search_clause
         from app.services.list_query import ilike_pattern
 
         pat = ilike_pattern("ali")

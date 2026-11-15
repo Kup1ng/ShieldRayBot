@@ -349,6 +349,7 @@ tests/test_customer_notes_permission.py
 tests/test_gift_codes_permission.py
 # Shop staff action log: written with the change, read only by the shop it belongs to.
 tests/test_staff_audit.py
+tests/test_panel_home_api.py
 # Manual shop wallet changes by shop staff: own shop purse only, capped, once per request.
 tests/test_shop_wallet_adjust.py
 # Manual loyalty-point changes by shop staff: own shop only, capped, once per request.
@@ -359,11 +360,38 @@ tests/test_shop_customer_block.py
 tests/test_campaign_broad_audiences.py
 # Shop bot customer card tools: same keys and checks as the web, own shop only, once per flow.
 tests/test_shop_bot_customer_tools.py
+# Mini App order payments: shop/customer isolation, request-key idempotency, receipt ownership.
+tests/test_miniapp_order_payments.py
+# Mini App entry gate: per-shop entry terms and referral code scope.
+tests/test_miniapp_access.py
+# React marketing pages: loyalty, campaigns, funnel and broadcast data endpoints keep permission and shop scope.
+tests/test_panel_marketing_api.py
+# React customer pages: users list, card, edit and trial users data keep permission, shop scope and hide subscription links.
+tests/test_panel_users_api.py
+# React catalog pages: plan, discount, gift-code and message-variable data keep permission and shop scope and hide secrets.
+tests/test_panel_catalog_api.py
+# React finance hub: orders, payments, delivery, cancellation, automation, report and settings data keep permission, shop scope and hide receipts and secrets.
+tests/test_panel_finance_api.py
+# React PasarGuard pages: users, templates, groups and hosts data keep permission and shop scope, hide subscription links and secrets, and degrade when the panel is down.
+tests/test_panel_pg_users_api.py
+# React panel-system settings tabs (general, backup, PWA, SSL, update): Owner only, no secrets or server paths in the JSON.
+tests/test_panel_system_api.py
+# React reseller pages: shop list, edit, applications, my subscription and shop review data keep owner and representative scope, guards and hide credentials.
+tests/test_panel_resellers_api.py
+# React bot-settings screens: Owner-only data endpoint, no secrets or media ids, shop settings never mixed in.
+tests/test_panel_settings_api.py
+# React PasarGuard overview, nodes, inbounds and admins: per-page permission, read-client scope, no node keys or password hashes, bounded and degraded reads.
+tests/test_panel_pg_infra_api.py
+
+# React shop settings, support and setup pages: permission, shop isolation, no bot token or setup secret, bounded ticket lists, panel status page.
+tests/test_panel_ops_api.py
+
 # Wallet purchases: an unknown panel outcome keeps the payment and a retry reuses the saved add-on target; a refused write refunds.
 tests/test_wallet_delivery_unknown_outcome.py
 
 # Wallet gift codes: the default once-per-customer rule is counted after the code lock, so parallel redeems credit once.
 tests/test_gift_code_redeem_race.py
+tests/test_panel_fetch.py
 
 # Reseller capacity packs and package renewals: a refused purchase changes neither money nor capacity; one that reached the panel is never refunded.
 tests/test_reseller_addon_purchase_failure.py
@@ -395,7 +423,9 @@ tests/test_psp_sandbox_default.py
 tests/test_loyalty_reward_unknown_outcome.py
 tests/test_custom_order_volume_hold.py
 
-# Hardening: current-password checks share the login limit; backup uploads stream to disk and refuse zip bombs before decompressing; the payment-check throttle is per customer.
+# Hardening: current-password checks share the login limit; URL ids and cursors are bounded; backup uploads stream to disk and refuse zip bombs before decompressing; the payment-check throttle is per customer.
 tests/test_security_current_password_limit.py
+tests/test_panel_id_bounds.py
 tests/test_backup_upload_limits.py
 tests/test_small_low_fixes.py
+tests/test_service_usage_chart.py

@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
-import re
 from datetime import datetime, timedelta, timezone
-from html import unescape
 from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -67,14 +64,14 @@ class TrendFallbackTests(FinanceChartCase):
 
 
 class ReportsTabTests(FinanceChartCase):
-    async def test_the_reports_tab_draws_the_sales_chart_with_this_scope(self):
+    async def test_the_reports_data_has_the_sales_trend_with_this_scope(self):
         cookie = f"session={self.signer.dumps(OWNER_SESSION)}; csrf=token"
-        page = await self.client.get("/finance?tab=reports", headers={"cookie": cookie})
+        page = await self.client.get("/api/panel/finance/reports", headers={"cookie": cookie})
         self.assertEqual(page.status_code, 200)
-        self.assertIn("data-sales-chart", page.text)
-        self.assertIn("/static/sales-chart.js", page.text)
-        trend = json.loads(unescape(re.search(r"data-trend='([^']*)'", page.text).group(1)))
+        data = page.json()
         # Platform view: only platform orders, never the shop's 50,000.
-        self.assertEqual(trend["total"], 40000)
-        self.assertIn("سهم از فروش", page.text)
-        self.assertIn("--p: 75", page.text)
+        self.assertEqual(data["sales_trend"]["7"]["total"], 40000)
+        self.assertEqual(data["sales_trend"]["30"]["total"], 40000)
+        shares = {m["label"]: m["share_pct"] for m in data["payment_methods"]}
+        self.assertEqual(shares, {"کارت": 75, "کیف پول": 25})
+        self.assertEqual(sorted(s["share_pct"] for s in data["method_segments"]), [25, 75])

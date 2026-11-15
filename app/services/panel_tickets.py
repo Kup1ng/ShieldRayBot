@@ -81,7 +81,7 @@ SKIP_UNREAD_PATHS = frozenset(
         "/update/status",
         "/settings/ssl/progress",
         "/backup/status",
-        "/tickets",  # derived from list_tickets via unread_from_tickets
+        "/tickets",  # the React page: its list and badges come from /api/panel/... JSON
     }
 )
 
@@ -426,19 +426,6 @@ async def mark_viewed(
     if changed:
         await session.commit()
     return changed
-
-
-def unread_from_tickets(tickets: list[PanelTicket], staff: dict) -> int:
-    """Derive unread count from an already-loaded list (same scope as sidebar)."""
-    try:
-        actor = actor_from_staff(staff)
-    except PermissionError:
-        return 0
-    if actor["is_owner"]:
-        return sum(1 for t in tickets if t.owner_unread)
-    if actor["is_opener"]:
-        return sum(1 for t in tickets if t.answered_unread)
-    return 0
 
 
 async def count_answered_unread(session: AsyncSession, staff: dict) -> int:

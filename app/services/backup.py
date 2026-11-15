@@ -1,4 +1,4 @@
-"""Full data backup / restore for PGClockBot (DB, uploads, credentials, env).
+"""Full data backup / restore for ShieldRay (DB, uploads, credentials, env).
 
 Archive format (ZIP):
   manifest.json

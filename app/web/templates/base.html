@@ -1,7 +1,7 @@
 {% from "macros.html" import modal_title %}
 {# Header brand; pages rendered without a signed-in person (or by a bare template environment) keep the default. #}
 {% set brand = panel_brand if panel_brand is defined and panel_brand else none %}
-{% set brand_name = brand.name if brand and brand.name else (pwa_name|default('MrClockBot')) %}
+{% set brand_name = brand.name if brand and brand.name else (pwa_name|default('ShieldRay')) %}
 {% set brand_logo = brand.logo_url if brand else '/static/logo-64.png' %}
 {% set brand_custom_logo = brand.has_custom_logo if brand else false %}
 {% set brand_color = brand.color if brand else '' %}
@@ -401,7 +401,7 @@
       </div>
       <footer class="site-footer">
         <div class="footer-meta">
-          <span>© ۲۰۲۶ MrClockBot</span>
+          <span>© ۲۰۲۶ ShieldRay</span>
         </div>
         <div class="footer-actions">
           <a class="btn btn-star" href="https://github.com/Mrclocks/PGClockBot" target="_blank" rel="noopener noreferrer">

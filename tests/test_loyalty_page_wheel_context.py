@@ -17,9 +17,8 @@ from app.services.message_variables import template_variable_specs
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "app/web/templates"
-LOYALTY_PAGES = ROOT / "app/api/loyalty_pages.py"
 APP_PY = ROOT / "app/api/app.py"
-CSS = ROOT / "app/web/static/panel.css"
+CSS = ROOT / "app/web/static/panel-status.css"
 
 
 def _jinja_env() -> Environment:
@@ -72,7 +71,7 @@ def _base_loyalty_ctx(**extra):
         "referral_groups": {},
         "referral_text_action": "",
         "app_version": "9.0.0",
-        "pwa_name": "MrClockBot",
+        "pwa_name": "ShieldRay",
         "tickets_unread": 0,
         "inbox_alert": False,
         "lucky_wheel_enabled": "0",
@@ -107,38 +106,32 @@ class LoyaltyPageRenderTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.dispose()
         self._tmpdir.cleanup()
 
-    def test_handler_passes_wheel_context_keys(self):
-        src = LOYALTY_PAGES.read_text(encoding="utf-8")
-        self.assertIn("_wheel_panel_context", src)
-        self.assertIn('"wheel_metrics"', src)
-        self.assertIn('"wheel_prizes"', src)
-        self.assertIn('"wheel_spins"', src)
-        self.assertIn('"lucky_wheel_enabled"', src)
-        self.assertIn('"loyalty_submenu_order"', src)
-        self.assertIn('"wheel_prize_type_labels"', src)
-        self.assertIn('"wheel"', src)
-
-    async def test_wheel_panel_context_shape(self):
-        from app.api.loyalty_pages import _wheel_panel_context
+    async def test_wheel_settings_payload_shape(self):
+        from app.services.loyalty_panel import wheel_settings
 
         async with self.Session() as session:
-            ctx = await _wheel_panel_context(session, reseller_id=None)
+            wheel = await wheel_settings(session, None)
         for key in (
-            "wheel_metrics",
-            "lucky_wheel_enabled",
-            "lucky_wheel_spin_cost_points",
-            "lucky_wheel_daily_limit",
-            "lucky_wheel_cooldown_seconds",
-            "lucky_wheel_free_spins_daily",
-            "loyalty_submenu_order",
-            "wheel_prizes",
-            "wheel_spins",
-            "wheel_prize_type_labels",
+            "degraded",
+            "enabled",
+            "spin_cost",
+            "daily_limit",
+            "cooldown_seconds",
+            "free_spins_daily",
+            "submenu_active",
+            "submenu_hidden",
+            "prizes",
+            "spins",
         ):
-            self.assertIn(key, ctx)
-        self.assertIn("wheel_enabled", ctx["wheel_metrics"])
-        self.assertIn("active_prizes", ctx["wheel_metrics"])
-        self.assertIn("total_spins", ctx["wheel_metrics"])
+            self.assertIn(key, wheel)
+        self.assertFalse(wheel["degraded"])
+
+    async def test_wheel_summary_for_the_overview_card(self):
+        from app.services.loyalty_panel import loyalty_overview
+
+        async with self.Session() as session:
+            overview = await loyalty_overview(session, {"role": "admin", "permissions": ["loyalty"]}, None)
+        self.assertEqual(set(overview["wheel"]), {"wheel_enabled", "active_prizes", "total_spins", "spin_cost"})
 
     def test_loyalty_template_renders_with_full_wheel_context(self):
         env = _jinja_env()
@@ -180,15 +173,17 @@ class PanelStatusPageTests(unittest.TestCase):
             secondary_href="/logout",
             secondary_label="خروج",
             app_version="9.0.0",
-            pwa_name="MrClockBot",
+            pwa_name="ShieldRay",
         )
         self.assertIn("panel-status", html)
         self.assertIn("panel-status-card", html)
         self.assertIn("خطای داخلی سرور", html)
         self.assertIn("abc12345", html)
         self.assertIn(">ref<", html)
-        self.assertIn("fonts.css", html)
-        self.assertIn("panel.css", html)
+        # The status page is self-contained: it loads its own stylesheet and script, and no inline script.
+        self.assertIn("panel-status.css", html)
+        self.assertIn("panel-status.js", html)
+        self.assertNotIn("<script>", html)
 
     def test_status_css_tokens(self):
         css = CSS.read_text(encoding="utf-8")

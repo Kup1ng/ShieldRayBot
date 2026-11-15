@@ -21,6 +21,7 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.api.panel_users_api import register_panel_users_api
 from app.api.user_pages import register_user_pages
 from app.db.models import Base, BotUser, ResellerProfile
 from app.services import user_photo
@@ -84,7 +85,17 @@ class UserPhotoRouteTests(unittest.IsolatedAsyncioTestCase):
         def render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
             return HTMLResponse(env.get_template(name).render(**context, csrf_token="fake-csrf"))
 
+        def require_perm(perm: str):
+            async def dependency() -> dict[str, Any]:
+                return self.staff
+
+            return dependency
+
         register_user_pages(app, render=render, require_admin=require_staff, get_db=get_db)
+        register_panel_users_api(
+            app, require_staff=require_staff, require_admin=require_staff, require_perm=require_perm,
+            require_pg_perm=require_perm, get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
@@ -169,10 +180,14 @@ class UserPhotoRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.status_code, 404)
         self.fetch.assert_not_awaited()
 
-    async def test_the_card_shows_the_initial_and_points_at_the_scoped_photo(self) -> None:
-        response = await self.client.get(f"/users/{CUSTOMER}/card")
-        self.assertIn(f'src="/users/{CUSTOMER}/photo"', response.text)
-        self.assertIn("<span>C</span>", response.text)
+    async def test_the_card_names_the_customer_whose_scoped_photo_the_page_loads(self) -> None:
+        response = await self.client.get(f"/api/panel/users/{CUSTOMER}/card")
+        self.assertEqual(response.status_code, 200)
+        user = response.json()["user"]
+        # The page shows the initial and loads /users/{id}/photo, which is scoped like the card.
+        self.assertEqual((user["id"], user["name"]), (CUSTOMER, "Customer"))
+        self.assertNotIn(PLATFORM_TOKEN, response.text)
+        self.assertNotIn(SHOP_A_TOKEN, response.text)
 
 
 class FakeBot:

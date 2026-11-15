@@ -8,8 +8,9 @@ from fastapi.responses import Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.customer_features import redirect
+from app.api.spa_pages import spa_response
 from app.services.catalog_discounts import (
-    MODES, SCOPES, DiscountInput, create_discount, discount_dashboard, discount_scope, new_request_key, stop_discount,
+    DiscountInput, create_discount, discount_scope, stop_discount,
 )
 from app.services.shop_scope import ShopScopeError
 
@@ -41,20 +42,9 @@ def register_catalog_discounts(
     app: FastAPI, *, render: Callable, require_staff: Callable, get_db: Callable,
 ) -> None:
     @app.get("/catalog-discounts")
-    async def discount_page(
-        request: Request, staff: dict = Depends(require_staff), session: AsyncSession = Depends(get_db),
-    ) -> Response:
+    async def discount_page(staff: dict = Depends(require_staff)) -> Response:
         authorized_scope(staff)
-        try:
-            raw = request.query_params.get("before")
-            data = await discount_dashboard(session, staff, before=int(raw) if raw else None)
-        except ValueError:
-            raise HTTPException(400, "صفحه نامعتبر است") from None
-        return render(request, "catalog_discounts.html", {
-            "staff": staff, "discounts": data.discounts, "plans": data.plans, "categories": data.categories,
-            "announcement_status": data.announcement_status, "deadlines": data.deadlines, "next_before": data.next_before,
-            "scopes": SCOPES, "modes": MODES, "request_key": new_request_key(),
-        })
+        return spa_response("catalog-discounts")
 
     @app.post("/catalog-discounts")
     async def discount_create(

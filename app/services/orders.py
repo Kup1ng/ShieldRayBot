@@ -2436,7 +2436,7 @@ async def deliver_order(
                 # Frozen before the panel call: a retry after a lost response reuses this name.
                 order.renewal_snapshot = json.dumps({"kind": CREATE_SNAPSHOT_KIND, "usernames": saved_names})
                 await session.commit()
-            note = f"PGClockBot order #{order.id}"
+            note = f"ShieldRay order #{order.id}"
             if qty > 1:
                 note = f"{note} ({index}/{qty})"
             panel["touched"] = True

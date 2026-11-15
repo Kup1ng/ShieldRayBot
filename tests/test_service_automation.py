@@ -29,6 +29,7 @@ from app.services.service_automation import (
     configure_automation,
     exhausted_dimensions,
     process_service_automation,
+    renew_switch_state,
 )
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
 
@@ -527,6 +528,43 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(response.status_code, 200)
         self.assertTrue((await self.snapshot())[1].renew_enabled)
+
+    async def test_service_page_switch_reads_renewal_state_without_creating_a_row(self):
+        async with self.Session() as session:
+            self.assertEqual(await renew_switch_state(session, self.service_id), {"enabled": False, "blocked": False})
+            self.assertIsNone(await session.get(ServiceAutomation, self.service_id))
+        await self.enable()
+        async with self.Session() as session:
+            self.assertEqual(await renew_switch_state(session, self.service_id), {"enabled": True, "blocked": False})
+            row = await session.get(ServiceAutomation, self.service_id)
+            row.needs_review = True
+            await session.commit()
+            self.assertEqual(await renew_switch_state(session, self.service_id), {"enabled": True, "blocked": True})
+
+    async def test_service_page_payload_carries_the_renewal_switch(self):
+        import httpx
+        from fastapi import FastAPI
+        from app.api.miniapp_pages import register_miniapp_pages
+
+        await self.enable()
+
+        async def get_db():
+            async with self.Session() as session:
+                yield session
+
+        async def load_user(session, request):
+            return await session.get(BotUser, self.user_id)
+
+        app = FastAPI()
+        register_miniapp_pages(app, render=AsyncMock(), get_db=get_db)
+        with (
+            patch("app.api.miniapp_pages.load_mini_user", new=load_user),
+            patch("app.api.miniapp_pages._fetch_pg_info", new=AsyncMock(return_value={})),
+        ):
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+                response = await client.get(f"/api/mini/service/{self.service_id}")
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["service"]["auto_renew"], {"enabled": True, "blocked": False})
 
     async def test_lease_can_only_be_claimed_once(self):
         await self.enable()

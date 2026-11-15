@@ -5,29 +5,23 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from fastapi import Depends, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
+from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.spa_pages import spa_response
 from app.db.models import (
     BotUser,
     LoyaltyReward,
     LoyaltyTier,
     LuckyWheelPrize,
     PointsRule,
-    PointsTransaction,
 )
-from app.services.formatting import bot_user_panel_label
 from app.services.loyalty import (
-    EVENT_LABELS,
     REWARD_TYPE_LABELS,
     admin_adjust_points,
-    ensure_loyalty_defaults,
-    overview_metrics,
 )
 from app.services.lucky_wheel import (
     DEFAULT_SUBMENU_ORDER,
-    PRIZE_TYPE_LABELS as WHEEL_PRIZE_TYPE_LABELS,
     SETTING_COOLDOWN,
     SETTING_DAILY_LIMIT,
     SETTING_FREE_SPINS_DAILY,
@@ -36,23 +30,20 @@ from app.services.lucky_wheel import (
     SETTING_WHEEL_ENABLED,
     archive_prize,
     clamp_int,
-    get_wheel_settings,
-    list_prizes,
-    list_recent_spins,
-    overview_wheel_metrics,
     parse_submenu_order,
     prize_in_scope,
     upsert_prize,
 )
-from app.services.platform_identity import is_explicit_owner_staff
-from app.services.shop_manual_adjust import ManualAdjustError, new_request_key, parse_request_key
+from app.services.shop_manual_adjust import ManualAdjustError, parse_request_key
 from app.services.shop_membership import assert_customer_in_staff_scope
-from app.services.shop_points_adjust import shop_points_form_context
 from app.services.shop_scope import (
     ShopScopeError,
     resolve_shop_scope_id,
 )
-from app.services.users import get_setting, set_setting
+from app.services.users import set_setting
+
+# Old bookmarks of the page's tabs that now open the settings editor.
+LEGACY_SETTINGS_TABS = frozenset({"settings", "rules", "rewards", "tiers", "wheel"})
 
 
 def _shop_scope(staff: dict) -> int | None:
@@ -78,96 +69,6 @@ def _reward_in_scope(reward: LoyaltyReward, scope: int | None) -> bool:
     return reward.reseller_id is not None and int(reward.reseller_id) == int(scope)
 
 
-def _submenu_pool_context(order_csv: str) -> dict[str, object]:
-    active = [p.strip() for p in str(order_csv or "").split(",") if p.strip()]
-    # Keep only known keys, preserve order
-    active = [k for k in active if k in DEFAULT_SUBMENU_ORDER]
-    seen = set(active)
-    pool = [k for k in DEFAULT_SUBMENU_ORDER if k not in seen]
-    return {
-        "loyalty_submenu_order": ",".join(active) if active else ",".join(DEFAULT_SUBMENU_ORDER),
-        "loyalty_submenu_active": active or list(DEFAULT_SUBMENU_ORDER),
-        "loyalty_submenu_pool": pool if active else [],
-    }
-
-
-def _empty_wheel_context() -> dict:
-    """Safe defaults when wheel tables/settings cannot be loaded."""
-    order = ",".join(DEFAULT_SUBMENU_ORDER)
-    ctx = {
-        "wheel_metrics": {
-            "wheel_enabled": False,
-            "active_prizes": 0,
-            "total_spins": 0,
-            "spin_cost": 10,
-        },
-        "lucky_wheel_enabled": "0",
-        "lucky_wheel_spin_cost_points": 10,
-        "lucky_wheel_daily_limit": 3,
-        "lucky_wheel_cooldown_seconds": 0,
-        "lucky_wheel_free_spins_daily": 0,
-        "wheel_prizes": [],
-        "wheel_spins": [],
-        "wheel_prize_type_labels": WHEEL_PRIZE_TYPE_LABELS,
-    }
-    ctx.update(_submenu_pool_context(order))
-    return ctx
-
-
-async def _wheel_panel_context(
-    session: AsyncSession, *, reseller_id: int | None
-) -> dict:
-    """Context for loyalty.html + wheel modal. Fail-soft if migration pending."""
-    import logging
-
-    try:
-        cfg = await get_wheel_settings(session, reseller_id=reseller_id)
-        metrics = await overview_wheel_metrics(session, reseller_id=reseller_id)
-        prizes = await list_prizes(
-            session, reseller_id=reseller_id, include_archived=True
-        )
-        spin_rows = await list_recent_spins(session, reseller_id=reseller_id, limit=40)
-        user_ids = {int(s.user_id) for s in spin_rows}
-        users: dict[int, BotUser] = {}
-        if user_ids:
-            rows = (
-                await session.execute(select(BotUser).where(BotUser.id.in_(user_ids)))
-            ).scalars().all()
-            users = {int(u.id): u for u in rows}
-        spins = [
-            {
-                "id": s.id,
-                "user_label": bot_user_panel_label(
-                    users.get(int(s.user_id)), fallback_id=int(s.user_id)
-                ),
-                "prize_label_snapshot": s.prize_label_snapshot,
-                "prize_type": s.prize_type,
-                "cost_points": s.cost_points,
-                "used_free_spin": bool(s.used_free_spin),
-                "status": s.status,
-            }
-            for s in spin_rows
-        ]
-        ctx = {
-            "wheel_metrics": metrics,
-            "lucky_wheel_enabled": "1" if cfg["enabled"] else "0",
-            "lucky_wheel_spin_cost_points": int(cfg["spin_cost"]),
-            "lucky_wheel_daily_limit": int(cfg["daily_limit"]),
-            "lucky_wheel_cooldown_seconds": int(cfg["cooldown_seconds"]),
-            "lucky_wheel_free_spins_daily": int(cfg["free_spins_daily"]),
-            "wheel_prizes": prizes,
-            "wheel_spins": spins,
-            "wheel_prize_type_labels": WHEEL_PRIZE_TYPE_LABELS,
-        }
-        ctx.update(_submenu_pool_context(",".join(cfg["submenu_order"])))
-        return ctx
-    except Exception:
-        logging.getLogger(__name__).exception(
-            "loyalty wheel context failed (migration pending?)"
-        )
-        return _empty_wheel_context()
-
-
 def _wheel_redirect(err: str | None = None, *, saved: bool = False) -> RedirectResponse:
     q = "/loyalty?tab=overview&settings=wheel"
     if saved:
@@ -179,160 +80,20 @@ def _wheel_redirect(err: str | None = None, *, saved: bool = False) -> RedirectR
 def register_loyalty_pages(app, *, render, require_perm, require_admin, get_db):
     require_loyalty = require_perm("loyalty")
 
-    @app.get("/loyalty", response_class=HTMLResponse)
+    @app.get("/loyalty")
     async def loyalty_overview(
-        request: Request,
         staff: dict = Depends(require_loyalty),
-        session: AsyncSession = Depends(get_db),
         tab: str = "overview",
     ):
         try:
-            scope = _shop_scope(staff)
+            _shop_scope(staff)
         except ValueError:
             return RedirectResponse("/home", status_code=303)
-        await ensure_loyalty_defaults(session, reseller_id=scope)
-        metrics = await overview_metrics(session, reseller_id=scope)
-        if scope is None:
-            rules_q = select(PointsRule).where(PointsRule.reseller_id.is_(None))
-            rewards_q = select(LoyaltyReward).where(LoyaltyReward.reseller_id.is_(None))
-        else:
-            rules_q = select(PointsRule).where(PointsRule.reseller_id == int(scope))
-            rewards_q = select(LoyaltyReward).where(LoyaltyReward.reseller_id == int(scope))
-        rules = list(
-            (
-                await session.execute(
-                    rules_q.order_by(PointsRule.sort_order.asc(), PointsRule.id.asc())
-                )
-            ).scalars().all()
-        )
-        rewards = list(
-            (
-                await session.execute(
-                    rewards_q.order_by(LoyaltyReward.sort_order.asc(), LoyaltyReward.id.asc())
-                )
-            ).scalars().all()
-        )
-        tiers = list(
-            (
-                await session.execute(
-                    select(LoyaltyTier).order_by(LoyaltyTier.sort_order.asc(), LoyaltyTier.id.asc())
-                )
-            ).scalars().all()
-        )
-        txs_q = (
-            select(PointsTransaction, BotUser)
-            .join(BotUser, BotUser.id == PointsTransaction.user_id)
-            .order_by(PointsTransaction.id.desc())
-            .limit(50)
-        )
-        # The entry's own purse decides the shop, not the customer's attribution.
-        if scope is not None:
-            txs_q = txs_q.where(PointsTransaction.reseller_id == int(scope))
-        else:
-            txs_q = txs_q.where(PointsTransaction.reseller_id.is_(None))
-        txs = [
-            {
-                "id": tx.id,
-                "user_id": tx.user_id,
-                "user_label": bot_user_panel_label(user, fallback_id=tx.user_id),
-                "amount": tx.amount,
-                "balance_after": tx.balance_after,
-                "description": tx.description,
-                "created_at": tx.created_at,
-            }
-            for tx, user in (await session.execute(txs_q)).all()
-        ]
-        loyalty_enabled = await get_setting(
-            session, "loyalty_enabled", "1", reseller_id=scope
-        )
-        wallet_rate = await get_setting(
-            session, "points_to_wallet_rate", "100", reseller_id=scope
-        )
-        page_tab = tab or "overview"
-        # Legacy page tabs moved into the settings modal.
-        if page_tab in {"settings", "rules", "rewards", "tiers", "wheel"}:
-            settings_key = "1" if page_tab == "settings" else page_tab
-            return RedirectResponse(
-                f"/loyalty?tab=overview&settings={settings_key}", status_code=303
-            )
-        if page_tab not in {"overview", "transactions"}:
-            page_tab = "overview"
-
-        from app.services.users import SETTING_GROUPS, TAB_SETTING_GROUPS, get_all_settings
-
-        values = await get_all_settings(session, reseller_id=scope)
-        can_edit_referral_text = staff.get("role") == "admin" or (
-            "shop_settings" in (staff.get("permissions") or [])
-        )
-        ref_names = (TAB_SETTING_GROUPS.get("loyalty") or []) if can_edit_referral_text else []
-        settings_q = (request.query_params.get("settings") or "").strip()
-        settings_tabs = {
-            "1",
-            "true",
-            "yes",
-            "club",
-            "referral",
-            "rules",
-            "rewards",
-            "tiers",
-            "wheel",
-        }
-        open_settings = settings_q in settings_tabs
-        if settings_q in {"rules", "rewards", "tiers", "wheel"}:
-            loyalty_settings_tab = settings_q
-        elif settings_q == "referral" and can_edit_referral_text:
-            loyalty_settings_tab = "referral"
-        else:
-            loyalty_settings_tab = "club"
-        next_referral = quote(f"/loyalty?tab={page_tab}&settings=referral")
-        if staff.get("role") == "admin":
-            referral_text_action = f"/settings?tab=loyalty&next={next_referral}"
-        elif can_edit_referral_text:
-            referral_text_action = f"/shop-settings?tab=loyalty&next={next_referral}"
-        else:
-            referral_text_action = ""
-
-        flash_ok = None
-        if request.query_params.get("saved"):
-            flash_ok = request.query_params.get("msg") or "ذخیره شد."
-        elif request.query_params.get("ok"):
-            flash_ok = request.query_params.get("ok")
-
-        wheel_ctx = await _wheel_panel_context(session, reseller_id=scope)
-
-        return render(
-            request,
-            "loyalty.html",
-            {
-                "staff": staff,
-                "tab": page_tab,
-                "metrics": metrics,
-                "rules": rules,
-                "rewards": rewards,
-                "tiers": tiers,
-                "txs": txs,
-                "event_labels": EVENT_LABELS,
-                "reward_type_labels": REWARD_TYPE_LABELS,
-                "loyalty_enabled": loyalty_enabled,
-                "wallet_rate": wallet_rate,
-                "is_platform_admin": staff.get("role") == "admin",
-                "can_adjust_platform_points": is_explicit_owner_staff(staff),
-                "owner_points_nonce": new_request_key(),
-                **shop_points_form_context(staff),
-                "flash_ok": flash_ok,
-                "flash_err": request.query_params.get("err"),
-                "flash_msg": request.query_params.get("msg"),
-                "open_loyalty_settings": open_settings,
-                "loyalty_settings_tab": loyalty_settings_tab,
-                "values": values,
-                "referral_tab_groups": ref_names,
-                "referral_groups": {
-                    n: SETTING_GROUPS[n] for n in ref_names if n in SETTING_GROUPS
-                },
-                "referral_text_action": referral_text_action,
-                **wheel_ctx,
-            },
-        )
+        # Legacy page tabs moved into the settings editor.
+        if tab in LEGACY_SETTINGS_TABS:
+            settings_key = "1" if tab == "settings" else tab
+            return RedirectResponse(f"/loyalty?tab=overview&settings={settings_key}", status_code=303)
+        return spa_response("loyalty")
 
     @app.post("/loyalty/settings")
     async def loyalty_settings_save(

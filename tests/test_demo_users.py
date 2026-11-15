@@ -18,6 +18,7 @@ from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.api.panel_users_api import register_panel_users_api
 from app.api.user_pages import register_user_pages
 from app.db.models import (
     Base, BotUser, DeliveryFailure, FunnelEvent, LoyaltyReward, Order, Payment, Plan,
@@ -102,7 +103,14 @@ class DemoUserTests(unittest.IsolatedAsyncioTestCase):
         def render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
             return HTMLResponse(self.env.get_template(name).render(**context, csrf_token="fake-csrf"))
 
+        def require_perm(perm: str):
+            return require_staff
+
         register_user_pages(self.app, render=render, require_admin=require_staff, get_db=get_db)
+        register_panel_users_api(
+            self.app, require_staff=require_staff, require_admin=require_staff, require_perm=require_perm,
+            require_pg_perm=require_perm, get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
@@ -291,20 +299,25 @@ class DemoUserTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("&err=", response.headers["location"])
             self.assertFalse((await self.session.get(BotUser, user_id)).is_demo)
 
-    async def test_edit_form_shows_state_csrf_and_escapes_customer_text(self) -> None:
-        with patch("app.services.bot_user_admin.list_service_snapshots", AsyncMock(return_value=[])), patch("app.services.bot_user_admin.list_wallet_txs", AsyncMock(return_value=[])), patch("app.services.plans_catalog.list_catalog_plans", AsyncMock(return_value=[])):
-            response = await self.client.get("/users/2/edit?fragment=1")
+    async def test_edit_data_shows_state_and_permission_and_returns_customer_text_as_data(self) -> None:
+        patches = (
+            patch("app.services.user_edit_view.list_service_snapshots", AsyncMock(return_value=[])),
+            patch("app.services.user_edit_view.list_wallet_txs", AsyncMock(return_value=[])),
+            patch("app.services.user_edit_view.list_catalog_plans", AsyncMock(return_value=[])),
+        )
+        with patches[0], patches[1], patches[2]:
+            response = await self.client.get("/api/panel/users/2/edit")
             self.assertEqual(response.status_code, 200)
-            self.assertIn('action="/users/2/demo"', response.text)
-            self.assertIn('name="csrf_token" value="fake-csrf"', response.text)
-            self.assertIn('value="1" selected', response.text)
-            self.assertIn('&lt;script&gt;', response.text)
-            self.assertNotIn('<script>alert', response.text)
+            body = response.json()
+            self.assertTrue(body["user"]["is_demo"])
+            self.assertTrue(body["can"]["demo"])
+            self.assertEqual(body["user"]["name"], '<script>alert("test")</script>', "plain data; React escapes it")
+            self.assertTrue(response.headers["content-type"].startswith("application/json"))
             self.staff = shop_staff(10, has_permission=False)
-            response = await self.client.get("/users/11/edit?fragment=1")
+            response = await self.client.get("/api/panel/users/11/edit")
             self.assertEqual(response.status_code, 200)
-            self.assertNotIn('action="/users/11/demo"', response.text)
-            response = await self.client.get("/users/21/edit?fragment=1")
+            self.assertFalse(response.json()["can"]["demo"])
+            response = await self.client.get("/api/panel/users/21/edit")
             self.assertEqual(response.status_code, 403)
 
 

@@ -43,6 +43,7 @@ from app.services.formatting import (
     status_label_plain,
     time_remaining_label,
 )
+from app.api.spa_pages import spa_response
 from app.services.miniapp_auth import (
     assert_mini_force_join,
     assert_miniapp_feature_enabled,
@@ -64,6 +65,7 @@ from app.services.miniapp_shop import (
     shop_nav,
 )
 from app.services.pasarguard import get_pg
+from app.services.service_automation import renew_switch_state
 from app.services.service_live_info import fetch_subscription_info, service_info_error, validate_service_info
 from app.services.users import current_shop_reseller_id, get_all_settings, on
 from app.services.wallet import get_wallet_balance
@@ -573,13 +575,7 @@ def register_miniapp_pages(app: FastAPI, *, render, get_db) -> None:
     @app.get("/miniapp", response_class=HTMLResponse)
     async def miniapp_index(request: Request):
         assert_miniapp_feature_enabled()
-        resp = render(request, "miniapp.html", {})
-        # Never let intermediaries / SW-ish caches serve a shell without WebApp context.
-        try:
-            resp.headers["Cache-Control"] = "no-store"
-        except Exception:
-            log.debug("miniapp_index: ignored failure", exc_info=True)
-        return resp
+        return spa_response("miniapp")
 
     @app.get("/miniapp/s/{shop_key}/", response_class=HTMLResponse)
     @app.get("/miniapp/s/{shop_key}", response_class=HTMLResponse)
@@ -589,9 +585,7 @@ def register_miniapp_pages(app: FastAPI, *, render, get_db) -> None:
         if not KEY_PATTERN.fullmatch(shop_key):
             raise HTTPException(404, SHOP_UNAVAILABLE)
         await resolve_shop_scope(session, shop_key)
-        resp = render(request, "miniapp.html", {})
-        resp.headers["Cache-Control"] = "no-store"
-        return resp
+        return spa_response("miniapp")
 
     @app.get("/api/mini/me")
     async def mini_me(request: Request, session: AsyncSession = Depends(get_db)):
@@ -637,6 +631,7 @@ def register_miniapp_pages(app: FastAPI, *, render, get_db) -> None:
         # Never return raw PG payload — allowlisted summary only
         row = _serialize_service(svc, info)
         row["addons_allowed"] = _addons_allowed(user, svc)
+        row["auto_renew"] = await renew_switch_state(session, svc.id)
         return _no_store({"service": row})
 
     @app.get("/api/mini/service/{service_id}/qr")

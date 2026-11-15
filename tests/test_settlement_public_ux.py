@@ -60,7 +60,7 @@ class SettlementStatusTemplateTests(unittest.TestCase):
             "close_button_label": "بستن",
             "footer": "می‌توانید به تلگرام برگردید.",
             "app_version": "0.0.0",
-            "pwa_name": "MrClockBot",
+            "pwa_name": "ShieldRay",
         }
         base.update(kwargs)
         return env.get_template("panel_status.html").render(**base)
@@ -79,7 +79,9 @@ class SettlementStatusTemplateTests(unittest.TestCase):
         self.assertIn("بازگشت به ربات", html)
         self.assertIn('href="tg://resolve?domain=shopbot"', html)
         self.assertIn('data-https="https://t.me/shopbot"', html)
-        self.assertIn("openTelegramLink", html)
+        # The Telegram hand-off lives in the page's external script (no inline script under the CSP).
+        self.assertIn("/static/panel-status.js", html)
+        self.assertNotIn("<script>", html)
         self.assertIn("panel-status-actions--single", html)
 
     def test_ascii_kicker_keeps_ltr(self) -> None:

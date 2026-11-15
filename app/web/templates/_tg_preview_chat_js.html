@@ -108,7 +108,7 @@
     return String(text||'')
       .replaceAll('{user_name}','کاربر')
       .replaceAll('{name}','کاربر')
-      .replaceAll('{shop_title}', val('shop_title','کلاک بات'))
+      .replaceAll('{shop_title}', val('shop_title','شیلدری'))
       .replaceAll('{user_id}','123456789')
       .replaceAll('{username}','@user')
       .replaceAll('{order_id}','1024')
@@ -195,8 +195,8 @@
   }
   function render(){
     if (!active) return;
-    const shop = val('shop_title','کلاک بات');
-    if (titleEl) titleEl.textContent = shop || 'کلاک بات';
+    const shop = val('shop_title','شیلدری');
+    if (titleEl) titleEl.textContent = shop || 'شیلدری';
     let text = '';
     let showQr = false;
     let showKeys = false;

@@ -131,9 +131,13 @@ class AppPagesCase(RoutesHarness):
 
 
 class PlansPageTests(AppPagesCase):
-    async def test_the_plans_page_has_no_gift_code_button(self):
-        html = await self.fetch("/plans")
-        self.assertNotIn('href="/gift-codes"', html)
+    async def test_the_plans_data_has_no_gift_code_section(self):
+        """Gift codes live under marketing; the plan catalog data carries none of them."""
+        cookie = f"session={self.signer.dumps(OWNER_SESSION)}; csrf=token"
+        with patch("app.api.panel_catalog_api.plans_overview", AsyncMock(return_value={"plans": []})):
+            response = await self.client.get("/api/panel/plans", headers={"cookie": cookie})
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("gift", " ".join(response.json()))
 
 
 class BrowserTests(AppPagesCase):

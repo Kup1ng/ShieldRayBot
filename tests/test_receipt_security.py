@@ -49,7 +49,8 @@ class ReceiptSourceGuardsTests(unittest.TestCase):
         self.assertIn("payer_reseller_id", src)
         self.assertIn("no-store", src)
         # Platform payments list excludes reseller tenants (top-ups by the wallet's shop).
-        self.assertIn("Payment.wallet_shop_id.is_(None)", src)
+        listing = open("app/services/finance_panel.py", encoding="utf-8").read()
+        self.assertIn("Payment.wallet_shop_id.is_(None)", listing)
 
 
 class ReceiptBotTokenTests(unittest.IsolatedAsyncioTestCase):

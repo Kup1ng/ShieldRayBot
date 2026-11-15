@@ -74,12 +74,16 @@ class MessageVariablesCatalogTests(unittest.TestCase):
         self.assertEqual(by_domain["qr"], "/shop-settings?tab=qr")
 
     def test_page_requires_shop_settings(self):
-        src = (ROOT / "app/api/message_variables_pages.py").read_text(encoding="utf-8")
-        self.assertIn('require_perm("shop_settings")', src)
-        self.assertIn("include_owner_only", src)
-        self.assertIn("is_explicit_owner_staff", src)
-        self.assertNotIn("BOT_TOKEN", src)
-        self.assertNotIn("ADMIN_IDS", src)
+        page = (ROOT / "app/api/message_variables_pages.py").read_text(encoding="utf-8")
+        data = (ROOT / "app/api/panel_catalog_api.py").read_text(encoding="utf-8")
+        service = (ROOT / "app/services/panel_catalog_extras.py").read_text(encoding="utf-8")
+        self.assertIn('require_perm("shop_settings")', page)
+        self.assertIn('require_perm("shop_settings")', data)
+        self.assertIn("include_owner_only", service)
+        self.assertIn("is_explicit_owner_staff", service)
+        for src in (page, data, service):
+            self.assertNotIn("BOT_TOKEN", src)
+            self.assertNotIn("ADMIN_IDS", src)
 
 
 class MessageVariablesRenderTests(unittest.TestCase):

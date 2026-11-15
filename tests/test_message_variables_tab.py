@@ -151,6 +151,7 @@ class SettingsPagesTests(unittest.TestCase):
 class VariablesPageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from app.api.app import render
+        from app.api.panel_catalog_api import register_panel_catalog_api
 
         self.staff: dict = {}
 
@@ -169,41 +170,63 @@ class VariablesPageTests(unittest.IsolatedAsyncioTestCase):
         register_message_variables_pages(
             app, render=render, require_perm=require_perm, require_admin=lambda: self.staff, get_db=get_db
         )
+        register_panel_catalog_api(
+            app,
+            require_staff=lambda: self.staff,
+            require_admin=lambda: self.staff,
+            require_perm=require_perm,
+            require_pg_perm=require_perm,
+            get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self):
         await self.client.aclose()
 
-    async def _get(self, staff: dict):
+    async def _get(self, staff: dict, url: str = "/api/panel/message-variables"):
         self.staff.clear()
         self.staff.update(staff)
-        return await self.client.get("/message-variables")
+        return await self.client.get(url)
+
+    @staticmethod
+    def _tabs(response) -> list[dict]:
+        return [tab for group in response.json()["tab_groups"] for tab in group["tabs"]]
 
     async def test_owner_gets_the_platform_tab_strip_with_the_variables_tab_active(self):
         response = await self._get(OWNER)
         self.assertEqual(response.status_code, 200)
-        strip = _tab_strip(response.text)
-        self.assertIn('href="/settings?tab=welcome"', strip)
-        self.assertIn('href="/message-variables" class="active">متغیرهای پیام</a>', strip)
-        self.assertIn('href="/settings?tab=naming" class=""', strip)
-        self.assertNotIn("/shop-settings", strip)
+        tabs = self._tabs(response)
+        hrefs = {tab["key"]: tab["href"] for tab in tabs}
+        self.assertEqual(hrefs["welcome"], "/settings?tab=welcome")
+        self.assertEqual(hrefs["naming"], "/settings?tab=naming")
+        self.assertEqual(hrefs[MESSAGE_VARIABLES_TAB_KEY], "/message-variables")
+        self.assertEqual([tab["key"] for tab in tabs if tab["active"]], [MESSAGE_VARIABLES_TAB_KEY])
+        self.assertFalse(any("/shop-settings" in tab["href"] for tab in tabs))
+        self.assertEqual(response.json()["title"], "تنظیمات ربات")
 
     async def test_shop_owner_gets_the_shop_tab_strip(self):
         response = await self._get(SHOP_WITH_RIGHT)
         self.assertEqual(response.status_code, 200)
-        strip = _tab_strip(response.text)
-        self.assertIn('href="/shop-settings?tab=welcome"', strip)
-        self.assertIn('href="/message-variables" class="active">متغیرهای پیام</a>', strip)
-        self.assertNotIn('href="/settings?tab=', strip)
+        tabs = self._tabs(response)
+        hrefs = {tab["key"]: tab["href"] for tab in tabs}
+        self.assertEqual(hrefs["welcome"], "/shop-settings?tab=welcome")
+        self.assertEqual(hrefs[MESSAGE_VARIABLES_TAB_KEY], "/message-variables")
+        self.assertFalse(any(tab["href"].startswith("/settings?tab=") for tab in tabs))
+        self.assertEqual(response.json()["title"], "تنظیمات فروشگاه")
 
-    async def test_a_role_without_the_right_cannot_open_the_page_the_tab_would_point_to(self):
+    async def test_a_role_without_the_right_cannot_open_the_page_or_its_data(self):
         for staff in (SHOP_WITHOUT_RIGHT, SHOP_NO_PERMISSIONS):
             self.assertEqual((await self._get(staff)).status_code, 403, staff)
+            self.assertEqual((await self._get(staff, "/message-variables")).status_code, 403, staff)
 
     async def test_owner_only_variables_stay_hidden_from_a_shop(self):
-        owner = await self._get(OWNER)
-        shop = await self._get(SHOP_WITH_RIGHT)
-        self.assertGreater(owner.text.count("msg-vars-token-box"), shop.text.count("msg-vars-token-box"))
+        def tokens(response) -> set[str]:
+            return {v["token"] for g in response.json()["groups"] for v in g["vars"]}
+
+        owner = tokens(await self._get(OWNER))
+        shop = tokens(await self._get(SHOP_WITH_RIGHT))
+        self.assertGreater(len(owner), len(shop))
+        self.assertTrue(shop < owner)
 
 
 if __name__ == "__main__":

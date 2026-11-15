@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import html
-import secrets
 from urllib.parse import quote
 
 from fastapi import Depends, Request
@@ -11,20 +10,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.spa_pages import spa_response
 from app.db.models import BotUser, Plan
-from app.services.authz import authz_from_staff, can_shop
-from app.services.customer_marks import marks_for_staff, may_edit_private_marks
-from app.services.shop_customer_block import shop_block_form_context
-from app.services.shop_wallet_adjust import shop_wallet_form_context
-from app.services.demo_users import DEMO_USERS_PERMISSION, set_demo_user
-from app.services.pg_access import staff_user_actions
-from app.services.platform_identity import is_explicit_owner_staff
+from app.services.demo_users import set_demo_user
 from app.services.shop_membership import assert_customer_in_staff_scope
 from app.services.shop_scope import (
     ShopScopeError,
     resolve_shop_scope_id,
 )
-from app.services.user_card import build_user_card
 from app.services.user_photo import photo_bot, user_photo
 
 
@@ -104,7 +97,9 @@ async def _require_scoped_user(
     return user
 
 
-def register_user_pages(app, *, render, require_admin, get_db, require_perm=None) -> None:
+def register_user_pages(app, *, render=None, require_admin, get_db, require_perm=None) -> None:
+    # ``render`` is no longer used (the screens are the React export); the parameter keeps the
+    # registration call unchanged.
     require_ops = require_perm("dashboard") if require_perm else require_admin
 
     @app.post("/users/{user_id}/demo")
@@ -222,115 +217,15 @@ def register_user_pages(app, *, render, require_admin, get_db, require_perm=None
     @app.get("/users/{user_id}/edit", response_class=HTMLResponse)
     async def user_edit_page(
         user_id: int,
-        request: Request,
         staff: dict = Depends(require_ops),
         session: AsyncSession = Depends(get_db),
     ):
-        from app.services.bot_user_admin import list_service_snapshots, list_wallet_txs
-        from app.services.formatting import format_toman
-        from app.services.pg_access import staff_user_actions
-        from app.services.plans_catalog import list_catalog_plans
-        from app.services.platform_identity import is_explicit_owner_staff
-
-        as_fragment = request.query_params.get("fragment") == "1"
-        loaded = await _require_scoped_user(
-            session, staff, user_id, fragment=as_fragment
-        )
+        # The screen is a React page fed by /api/panel/users/{id}/edit; an unknown or foreign
+        # customer is turned away here, before the shell is served.
+        loaded = await _require_scoped_user(session, staff, user_id)
         if isinstance(loaded, (RedirectResponse, HTMLResponse)):
             return loaded
-        user = loaded
-
-        from app.services.shop_scope import resolve_shop_scope_id
-        from app.services.wallet import get_wallet_balance
-
-        try:
-            shop_scope = resolve_shop_scope_id(staff)
-        except ShopScopeError:
-            shop_scope = None
-        # Display the purse for this staff's shop only (no cross-tenant leak).
-        display_wallet = await get_wallet_balance(
-            session, user, shop_id=shop_scope
-        )
-
-        snaps = await list_service_snapshots(session, int(user_id), shop_id=shop_scope)
-        # Same shop scope as display_wallet — never mix other purses' ledger rows.
-        wallet_txs = await list_wallet_txs(
-            session, int(user_id), limit=20, shop_id=shop_scope
-        )
-        plans = await list_catalog_plans(session, staff, include_trial=False)
-        pg_acts = staff_user_actions(staff)
-        can_pg_create = bool(pg_acts.get("create"))
-        can_pg_update = bool(pg_acts.get("update"))
-        can_pg_delete = bool(pg_acts.get("delete"))
-        from app.services.color_tags import color_tag_meta, color_tags_for_ui
-
-        # Each shop reads only its own note and tag (the platform its own); the customer is
-        # already checked to be in this staff member's scope.
-        ctx = {
-            "staff": staff,
-            "user": user,
-            "marks": await marks_for_staff(session, staff, user),
-            "show_private_marks": True,
-            "can_edit_private_marks": await may_edit_private_marks(session, staff, user),
-            "display_wallet": display_wallet,
-            "services": snaps,
-            "wallet_txs": wallet_txs,
-            "wallet_nonce": secrets.token_hex(8),
-            **shop_wallet_form_context(staff),
-            **(await shop_block_form_context(session, staff, user)),
-            "plans": plans,
-            "format_toman": format_toman,
-            "flash_ok": request.query_params.get("ok"),
-            "flash_err": request.query_params.get("err"),
-            # CRM identity ops stay Owner-only (not PG ACL).
-            "can_manage_users": is_explicit_owner_staff(staff),
-            "can_manage_demo_users": can_shop(authz_from_staff(staff), DEMO_USERS_PERMISSION),
-            # Plan assign / service mutate follow PasarGuard users.* ACL.
-            "can_provision_users": can_pg_create,
-            "can_pg_create": can_pg_create,
-            "can_pg_update": can_pg_update,
-            "can_pg_delete": can_pg_delete,
-            "color_tags": color_tags_for_ui(),
-            "color_tag_meta": color_tag_meta,
-        }
-        if as_fragment:
-            return render(request, "_user_edit_body.html", ctx)
-        return render(request, "user_edit.html", ctx)
-
-    @app.get("/users/{user_id}/card", response_class=HTMLResponse)
-    async def user_card(
-        user_id: int,
-        request: Request,
-        staff: dict = Depends(require_ops),
-        session: AsyncSession = Depends(get_db),
-    ):
-        """Read-only user card for the users list (modal fragment)."""
-        loaded = await _require_scoped_user(session, staff, user_id, fragment=True)
-        if isinstance(loaded, (RedirectResponse, HTMLResponse)):
-            return loaded
-        try:
-            shop_scope = resolve_shop_scope_id(staff)
-        except ShopScopeError as exc:
-            return HTMLResponse(
-                f'<div class="flash err">{html.escape(exc.message)}</div>', status_code=403
-            )
-        card = await build_user_card(
-            session,
-            loaded,
-            shop_id=shop_scope,
-            show_private_marks=True,
-        )
-        pg_acts = staff_user_actions(staff)
-        in_shop = is_explicit_owner_staff(staff) or shop_scope is not None
-        return render(
-            request,
-            "_user_card_body.html",
-            {
-                "card": card,
-                "can_edit": in_shop and any(pg_acts.get(k) for k in ("create", "update", "delete")),
-                "can_message": not loaded.is_blocked,
-            },
-        )
+        return spa_response("users/edit")
 
     @app.get("/users/{user_id}/photo")
     async def user_card_photo(

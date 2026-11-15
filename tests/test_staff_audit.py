@@ -10,7 +10,6 @@ from pathlib import Path
 import httpx
 import sqlalchemy as sa
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
@@ -226,7 +225,7 @@ class GiftCodeAuditTests(AuditDbHarness):
 class StaffAuditPageTests(AuditDbHarness):
     async def asyncSetUp(self):
         await super().asyncSetUp()
-        from app.api.app import templates
+        from app.api.panel_home_api import register_panel_home_api
         from app.api.staff_audit_pages import register_staff_audit_pages
 
         self.staff: dict = _reseller(SHOP_A)
@@ -235,36 +234,70 @@ class StaffAuditPageTests(AuditDbHarness):
             async with self.Session() as session:
                 yield session
 
-        def render(request, name, ctx):
-            ctx = {"request": request, "path": request.url.path, "csrf_token": "t", **ctx}
-            return HTMLResponse(templates.env.get_template(name).render(**ctx))
+        def current_staff():
+            return self.staff
+
+        def other_guard(_perm):
+            return current_staff
 
         app = FastAPI()
-        register_staff_audit_pages(app, render=render, require_staff=lambda: self.staff, get_db=get_db)
+        register_staff_audit_pages(app, render=None, require_staff=current_staff, get_db=get_db)
+        register_panel_home_api(
+            app, require_staff=current_staff, require_admin=current_staff, require_perm=other_guard, require_pg_perm=other_guard, get_db=get_db
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self):
         await self.client.aclose()
         await super().asyncTearDown()
 
-    async def test_page_shows_only_the_shop_records_and_escapes_text(self):
+    async def test_endpoint_shows_only_the_shop_records_and_keeps_text_as_data(self):
         async with self.Session() as session:
             mine = StaffActor(shop_id=SHOP_A, kind="shop_owner", user_id=SHOP_A, label="<b>ali</b>")
             theirs = StaffActor(shop_id=SHOP_B, kind="shop_owner", user_id=SHOP_B, label="OTHERSHOP")
             add_staff_action(session, mine, action="gift_code_edit", target_type="gift_code", target_id=3, reason="<script>x</script>")
             add_staff_action(session, theirs, action="gift_code_edit", target_type="gift_code", target_id=4)
             await session.commit()
-        response = await self.client.get("/staff-actions?before=not-a-number")
+        response = await self.client.get("/api/panel/staff-actions?before=not-a-number")
         self.assertEqual(response.status_code, 200)
         self.assertNotIn("OTHERSHOP", response.text)
-        self.assertNotIn("<script>x</script>", response.text)
-        self.assertNotIn("<b>ali</b>", response.text)
-        self.assertIn("&lt;b&gt;ali&lt;/b&gt;", response.text)
+        body = response.json()
+        self.assertEqual([row["actor"] for row in body["actions"]], ["<b>ali</b>"])
+        self.assertEqual(body["actions"][0]["reason"], "<script>x</script>")
+        self.assertIsNone(body["next_before"])
+        self.assertEqual(response.headers["cache-control"], "private, no-store")
 
-    async def test_staff_without_a_shop_are_sent_home(self):
+    async def test_endpoint_pages_by_the_before_cursor(self):
+        async with self.Session() as session:
+            actor = StaffActor(shop_id=SHOP_A, kind="shop_owner", user_id=SHOP_A, label="ali")
+            for target in range(PAGE_SIZE + 3):
+                add_staff_action(session, actor, action="gift_code_edit", target_type="gift_code", target_id=target + 1)
+            await session.commit()
+        first = (await self.client.get("/api/panel/staff-actions")).json()
+        self.assertEqual(len(first["actions"]), PAGE_SIZE)
+        self.assertEqual(first["next_before"], first["actions"][-1]["id"])
+        second = (await self.client.get(f"/api/panel/staff-actions?before={first['next_before']}")).json()
+        self.assertEqual(len(second["actions"]), 3)
+        self.assertIsNone(second["next_before"])
+        self.assertTrue(all(row["id"] < first["next_before"] for row in second["actions"]))
+
+    async def test_staff_without_a_shop_are_refused_by_the_endpoint_and_sent_home_by_the_page(self):
         self.staff = {"role": "pg_staff", "permissions": ["orders"]}
-        response = await self.client.get("/staff-actions")
-        self.assertEqual((response.status_code, response.headers["location"]), (303, "/home"))
+        response = await self.client.get("/api/panel/staff-actions")
+        self.assertEqual(response.status_code, 403)
+        page = await self.client.get("/staff-actions")
+        self.assertEqual((page.status_code, page.headers["location"]), (303, "/home"))
+
+    async def test_the_platform_owner_reads_only_the_platform_log(self):
+        self.staff = dict(OWNER)
+        async with self.Session() as session:
+            platform = StaffActor(shop_id=None, kind="platform_owner", user_id=None, label="PLATFORMROW")
+            shop = StaffActor(shop_id=SHOP_A, kind="shop_owner", user_id=SHOP_A, label="SHOPROW")
+            add_staff_action(session, platform, action="gift_code_edit", target_type="gift_code", target_id=1)
+            add_staff_action(session, shop, action="gift_code_edit", target_type="gift_code", target_id=2)
+            await session.commit()
+        body = (await self.client.get("/api/panel/staff-actions")).json()
+        self.assertEqual([row["actor"] for row in body["actions"]], ["PLATFORMROW"])
 
 
 class StaffAuditMigrationTests(unittest.TestCase):

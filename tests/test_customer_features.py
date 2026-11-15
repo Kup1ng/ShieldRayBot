@@ -451,7 +451,9 @@ class CustomerFeaturesTests(unittest.IsolatedAsyncioTestCase):
             redirect = await client.get("/service-cancellations", follow_redirects=False)
             self.assertEqual(redirect.status_code, 303)
             self.assertIn("/finance?tab=cancellations", redirect.headers.get("location", ""))
-            self.assertEqual((await client.get("/campaigns")).status_code, 200)
+            with patch("app.api.customer_features.spa_response", lambda page: HTMLResponse(f"shell:{page}")):
+                shell = await client.get("/campaigns")
+            self.assertEqual((shell.status_code, shell.text), (200, "shell:campaigns"))
         from app.services.service_cancellations import list_cancellation_requests
         rows, _ = await list_cancellation_requests(self.session, 2, limit=50)
         self.assertTrue(any(r.id == row["id"] for r, _ in rows))

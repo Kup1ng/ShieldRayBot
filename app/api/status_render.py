@@ -48,7 +48,7 @@ def render_status_page(
 
         pname = panel_display_name()
     except Exception:
-        pname = "MrClockBot"
+        pname = "ShieldRay"
 
     kind_s = str(kind)
     if http_status is None:

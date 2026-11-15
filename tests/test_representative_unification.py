@@ -217,6 +217,16 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
             require_staff=require_staff,
             get_db=get_db,
         )
+        from app.api.panel_resellers_api import register_panel_resellers_api
+
+        register_panel_resellers_api(
+            app,
+            require_staff=require_staff,
+            require_admin=require_admin,
+            require_perm=lambda _perm: require_staff,
+            require_pg_perm=lambda _perm: require_staff,
+            get_db=get_db,
+        )
         return app
 
     def _client(self, staff: dict):
@@ -448,11 +458,11 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
             owner_child = await client.post(
                 "/resellers/create-child", data=form, follow_redirects=False
             )
-            owner_list = await client.get("/resellers", follow_redirects=False)
-            apps = await client.get("/resellers/applications", follow_redirects=False)
+            owner_list = await client.get("/api/panel/resellers", follow_redirects=False)
+            apps = await client.get("/api/panel/resellers/applications", follow_redirects=False)
         self.assertEqual(owner_child.status_code, 403)
         self.assertEqual(owner_list.status_code, 200)
-        self.assertIn("نمایندگان", owner_list.text)
+        self.assertTrue(owner_list.json()["owner_view"])
         self.assertNotIn("Level 1", owner_list.text)
         self.assertNotIn("Principal", owner_list.text)
         self.assertNotIn(_CHILD_PASSWORD, owner_list.text)
@@ -489,11 +499,14 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_web_bot_parity_and_no_secret_in_ui(self) -> None:
         _, a, _ = await self._seed()
         async with self._client(_l1_staff(a)) as client:
-            page = await client.get("/resellers")
+            page = await client.get("/api/panel/resellers")
+            options = await client.get("/api/panel/resellers/create-options")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("نمایندگان من", page.text)
-        self.assertIn("افزودن نماینده", page.text)
-        self.assertIn("/resellers/create-child", page.text)
+        listing = page.json()
+        # The page shows «نمایندگان من» and the create button for a representative (not the owner's tools).
+        self.assertFalse(listing["owner_view"])
+        self.assertEqual(listing["can_create"], "child")
+        self.assertEqual(options.json()["mode"], "child")
         self.assertNotIn("Level 1", page.text)
         self.assertNotIn("Level 2", page.text)
         self.assertNotIn("Principal", page.text)

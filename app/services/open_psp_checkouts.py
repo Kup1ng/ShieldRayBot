@@ -1,6 +1,6 @@
 """Pending gateway payments whose checkout link the customer may still pay.
 
-A PSP gateway takes the money before PGClockBot verifies it, so a pending payment
+A PSP gateway takes the money before ShieldRay verifies it, so a pending payment
 with an open PSP settlement must stay payable: rejecting it when the customer picks
 a payment method again would turn a later successful payment into money with no order.
 """

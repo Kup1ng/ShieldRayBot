@@ -10,6 +10,7 @@ from app.services.formatting import (
     format_bytes_rate,
     format_bytes_rate_parts,
     format_bytes_ratio_parts,
+    node_status_fa,
 )
 from app.services.host_gauges import tone_class
 from app.services.host_metrics import format_memory_ratio
@@ -282,6 +283,7 @@ def node_overview_card(node: dict) -> dict[str, Any]:
     except (TypeError, ValueError):
         nid = None
     name = str(node.get("name") or node.get("address") or "—").strip() or "—"
+    status = str(node.get("_status") or node.get("status") or node.get("connection_status") or "")
     # Cap name length for JSON surface (display only)
     if len(name) > 80:
         name = name[:77] + "…"
@@ -315,7 +317,8 @@ def node_overview_card(node: dict) -> dict[str, Any]:
     return {
         "id": nid,
         "name": name,
-        "status": str(node.get("_status") or node.get("status") or node.get("connection_status") or "—"),
+        "status": status or "—",
+        "status_label": node_status_fa(status) if status else "—",
         "status_kind": node.get("_status_kind") or _status_kind(node.get("status")),
         "cpu_percent": node.get("_cpu_percent"),
         "cpu_text": node.get("_cpu_text") or "—",
@@ -375,6 +378,7 @@ def nodes_overview_json(overview: dict[str, Any]) -> dict[str, Any]:
                 "id": card.get("id"),
                 "name": card.get("name"),
                 "status": card.get("status"),
+                "status_label": card.get("status_label"),
                 "status_kind": card.get("status_kind"),
                 "cpu_percent": card.get("cpu_percent"),
                 "cpu_text": card.get("cpu_text"),

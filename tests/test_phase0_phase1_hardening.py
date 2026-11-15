@@ -146,9 +146,11 @@ class SchedulerShopScopeSourceTests(unittest.TestCase):
 
 class BotTokenRedactSourceTests(unittest.TestCase):
     def test_bot_status_uses_redact(self):
-        app_src = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
-        self.assertIn("redact(exc)", app_src)
-        shop_src = (ROOT / "app/api/shop_settings.py").read_text(encoding="utf-8")
+        # The Owner's bot tab moved to app/services/settings_panel.py, which shows only the fixed
+        # Persian reason; tests/test_panel_settings_api.py proves a raw error carrying the token
+        # never reaches the page (test_an_offline_bot_shows_the_reason_and_a_webhook_mode_shows_its_address).
+        # The shop's bot status moved with the shop settings data (React page).
+        shop_src = (ROOT / "app/api/shop_settings_panel.py").read_text(encoding="utf-8")
         self.assertIn("redact(exc)", shop_src)
 
 
