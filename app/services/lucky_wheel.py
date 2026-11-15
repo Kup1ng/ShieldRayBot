@@ -29,6 +29,10 @@ from app.db.models import (
     UserService,
 )
 from app.services.loyalty import (
+    COUNTED_STATUSES,
+    REVIEW_STATUS,
+    RewardOutcomeUnknown,
+    RewardPendingReview,
     apply_service_reward,
     credit_points,
     debit_points,
@@ -427,7 +431,7 @@ async def _user_prize_wins(session: AsyncSession, user_id: int, prize_id: int) -
                 .where(
                     LuckyWheelSpin.user_id == int(user_id),
                     LuckyWheelSpin.prize_id == int(prize_id),
-                    LuckyWheelSpin.status == "completed",
+                    LuckyWheelSpin.status.in_(COUNTED_STATUSES),
                 )
             )
         ).scalar_one()
@@ -681,7 +685,12 @@ async def spin(
                 commit=False,
             )
         elif ptype in ("traffic_gb", "time_days") and service is not None:
-            await apply_service_reward(session, user, service, ptype, pval)
+            try:
+                await apply_service_reward(session, user, service, ptype, pval)
+            except RewardOutcomeUnknown:
+                # The spin and its cost stand; staff confirm the grant on the panel.
+                spin_row.status = REVIEW_STATUS
+                meta["panel_outcome"] = "unknown"
         elif ptype == "discount_percent" and pval > 0:
             ent = await issue_discount_entitlement(
                 session,
@@ -736,6 +745,9 @@ async def spin(
         await session.rollback()
         raise
 
+    if spin_row.status == REVIEW_STATUS:
+        logger.warning("wheel prize panel write unanswered spin=%s", spin_row.id)
+        raise RewardPendingReview()
     return SpinResult(
         spin=spin_row,
         prize_type=spin_row.prize_type,

@@ -34,7 +34,11 @@ from app.db.models import (
 from app.services.demo_users import non_demo_customer
 from app.services.formatting import bot_user_panel_label
 from app.services.service_scope import customer_may_use_service, service_shop_id
-from app.services.volume_allocation import VolumeAllocationError, assert_volume_delta_allowed
+from app.services.volume_allocation import (
+    VolumeAllocationError,
+    assert_volume_delta_allowed,
+    is_hard_panel_rejection,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1084,7 +1088,7 @@ async def _user_redemption_count(session: AsyncSession, user_id: int, reward_id:
                 .where(
                     RewardRedemption.user_id == user_id,
                     RewardRedemption.reward_id == reward_id,
-                    RewardRedemption.status == "completed",
+                    RewardRedemption.status.in_(COUNTED_STATUSES),
                 )
             )
         ).scalar_one()
@@ -1211,9 +1215,13 @@ async def redeem_reward(
         # key has already debited and recorded the redemption, so the benefit is not applied again.
         return await _replayed_redemption(session, key)
 
+    outcome_unknown = False
     try:
         if rtype in ("traffic_gb", "time_days"):
-            await apply_service_reward(session, user, service, rtype, rval)
+            try:
+                await apply_service_reward(session, user, service, rtype, rval)
+            except RewardOutcomeUnknown:
+                outcome_unknown = True
         elif rtype == "wallet_credit":
             wallet_reason = f"loyalty_reward:{reward.id}:{key}"
             from app.services.wallet import credit_wallet
@@ -1235,7 +1243,7 @@ async def redeem_reward(
             points_spent=cost,
             reward_type=rtype,
             reward_value=rval,
-            status="completed",
+            status=REVIEW_STATUS if outcome_unknown else "completed",
             service_id=service.id if service else None,
             points_tx_id=pts_tx.id if pts_tx else None,
             wallet_reason=wallet_reason,
@@ -1268,6 +1276,9 @@ async def redeem_reward(
     except Exception:
         await session.rollback()
         raise
+    if outcome_unknown:
+        logger.warning("loyalty reward panel write unanswered redemption=%s", red.id)
+        raise RewardPendingReview()
     return red
 
 
@@ -1537,6 +1548,24 @@ async def void_loyalty_discount_on_refund(session: AsyncSession, order: Order) -
     )
 
 
+REVIEW_STATUS = "review"
+# Redemptions and spins that count toward per-user caps: an unconfirmed grant may have landed.
+COUNTED_STATUSES = ("completed", REVIEW_STATUS)
+
+
+class RewardOutcomeUnknown(Exception):
+    """The panel write of a traffic/time reward got no answer; it may have been applied."""
+
+
+class RewardPendingReview(ValueError):
+    """Shown to the customer: the reward is recorded and spent, staff confirm it on the panel."""
+
+    def __init__(self) -> None:
+        super().__init__(
+            "جایزه ثبت شد ولی نتیجهٔ اعمال آن روی سرویس مشخص نیست؛ پشتیبانی بررسی می‌کند. دوباره درخواست نکنید."
+        )
+
+
 async def apply_service_reward(
     session: AsyncSession,
     user: BotUser,
@@ -1589,7 +1618,12 @@ async def apply_service_reward(
             except Exception:
                 logger.debug("apply_service_reward: ignored failure", exc_info=True)
         payload["expire"] = base + add_sec
-    await pg.modify_user_by_id(int(service.pg_user_id), payload)
+    try:
+        await pg.modify_user_by_id(int(service.pg_user_id), payload)
+    except Exception as exc:
+        if is_hard_panel_rejection(exc):
+            raise
+        raise RewardOutcomeUnknown() from exc
     if "data_limit" in payload:
         # Counted in the shop's allocation from the caller's commit on.
         service.quota_data_limit_bytes = int(payload["data_limit"])
