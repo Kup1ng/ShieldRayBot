@@ -3,4 +3,4 @@
 :HL["/static/spa/_next/static/media/YekanBakh_VF-s.p.0_bcfwnsg6-14.woff2","font",{"crossOrigin":"","type":"font/woff2"}]
 2:[["children",{"s":"__PAGE__","h":160}]]
 1:[["children",{"s":"service-shop-review","h":96,"c":"$Q2"}]]
-0:{"b":"75DFZHn9i5beVBjdMI-hs","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"UkQo4yyeRMS8uGGnsnljN","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

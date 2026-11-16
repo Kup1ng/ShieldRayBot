@@ -184,4 +184,27 @@ describe("settings: payment lists and purge", () => {
     await ui.click(screen.getByRole("button", { name: "ذخیره تنظیمات" }));
     await waitFor(() => expect(action).toHaveBeenCalledWith("/finance/cleanup/purge-rules?next=%2Ffinance", { days: "30", "t_order:cancelled": "1" }));
   });
+
+  it("opens the deletion rules for an address that names the cleanup tab", async () => {
+    get.mockResolvedValue({
+      ...base,
+      tabs: [
+        { id: "payment", label: "پرداخت" },
+        { id: "purge", label: "پاکسازی" },
+      ],
+      purge: {
+        sections: [],
+        days: 30,
+        min_days: 1,
+        max_days: 3650,
+        ready: { orders: 0, payments: 0, total: 0 },
+        auto_on: false,
+        last_run: null,
+        rules_action: "/finance/cleanup/save?next=%2Ffinance",
+        run_action: "/finance/cleanup/purge-run?next=%2Ffinance",
+      },
+    } satisfies FinanceSettingsPayload);
+    mount(<SettingsDialog open tab="cleanup" onTabChange={() => {}} onClose={() => {}} />);
+    expect(await screen.findByRole("button", { name: "حذف کامل الان" })).toBeTruthy();
+  });
 });

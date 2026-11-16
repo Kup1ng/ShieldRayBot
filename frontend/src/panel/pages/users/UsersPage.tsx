@@ -1,18 +1,19 @@
 "use client";
 
-import { Button, Input, ListBox, Select, Tabs } from "@heroui/react";
+import { Button, Input, ListBox, Select, Tabs, toast } from "@heroui/react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { Icon } from "@/icons/Icon";
 import { useLocation } from "@/lib/location";
 
 import { run, type Ask } from "../../core/actions";
+import { FALLBACK_ERROR, panelAction } from "../../core/api";
 import { useJson, useQuery, useUrlFlash } from "../../core/data";
 import { fa } from "../../core/format";
 import { PanelShell } from "../../layout/PanelShell";
 import { GlassSection, PageHeader, StatTile } from "../../ui/Page";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../../ui/States";
-import { BULK_META, BULK_ORDER, eligibleIds, fill, FILTER_LABELS, FILTER_ORDER, money } from "./format";
+import { BULK_META, BULK_ORDER, eligibleIds, fill, FILTER_LABELS, FILTER_ORDER, isSubscriptionLink, LINK_SEARCH_PATH, money, samePath } from "./format";
 import { ReasonDialog, type ReasonRequest } from "./ReasonDialog";
 import { SelectionBar } from "./SelectionBar";
 import type { BulkOp, UserRow, UsersFilter, UsersList } from "./types";
@@ -88,6 +89,15 @@ export function UsersContent() {
   const { search } = useLocation();
   const query = useQuery();
   const update = query.set;
+  // The server answers with the customer's row, or the same «not found» for every miss.
+  const findByLink = async (link: string) => {
+    try {
+      const next = samePath((await panelAction(LINK_SEARCH_PATH, { link })).location);
+      if (next) window.location.assign(next);
+    } catch (err) {
+      toast.danger(err instanceof Error ? err.message : FALLBACK_ERROR);
+    }
+  };
   const list = useJson<UsersList>(listPath(query.get));
   const { data, reload } = list;
   const { selected, select: setSelected, clear: clearSelection } = useSelection(search);
@@ -128,10 +138,14 @@ export function UsersContent() {
     if (action === "message") setMessage({ id: row.id, name: row.message_name });
     else if (action === "edit") window.location.assign(`/users/${row.id}/edit`);
     else if (action === "renew") {
-      await run(`/users/${row.id}/quick-renew`, returnFields, {
-        ask: { title: "سرویس بحرانی (نزدیک‌ترین انقضا) با پلن فعلی تمدید شود؟", text: "مصرف ریست می‌شود.", confirmLabel: "تمدید" },
-        success: "سرویس تمدید شد",
-        refresh,
+      setReason({
+        title: "تمدید سرویس",
+        message: "سرویس بحرانی (نزدیک‌ترین انقضا) با پلن فعلی تمدید شود؟ مصرف ریست می‌شود.",
+        confirmLabel: "تمدید",
+        reasonLabel: "علت تمدید",
+        onConfirm: async (text) => {
+          await run(`/users/${row.id}/quick-renew`, { ...returnFields, reason: text }, { success: "سرویس تمدید شد", refresh });
+        },
       });
     } else if (action === "block") {
       await run(`/users/${row.id}/block`, {}, {
@@ -229,7 +243,7 @@ export function UsersContent() {
                 </Tabs.List>
               </Tabs.ListContainer>
             </Tabs>
-            <SearchBar key={data.q} q={data.q} color={data.color} tags={data.color_tags} onSearch={(text) => update({ q: text || null, uid: null })} onColor={(key) => update({ color: key || null })} />
+            <SearchBar key={data.q} q={data.q} color={data.color} tags={data.color_tags} onSearch={(text) => (isSubscriptionLink(text) ? void findByLink(text) : update({ q: text || null, uid: null }))} onColor={(key) => update({ color: key || null })} />
             {rows.length === 0 ? (
               <EmptyBlock icon="solar:users-group-rounded-linear" title="کاربری نیست" description={data.q || data.color || filter !== "all" ? "با این فیلتر کاربری پیدا نشد." : "هنوز کاربری ثبت نشده است."} />
             ) : (

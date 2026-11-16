@@ -342,25 +342,27 @@ class SettingsTests(FinanceApiCase):
         self.assertNotIn("merchant_id", psp[0])
         self.assertIn(PLATFORM_CARD, self.field(data, "payment", "payment_cards")["value"])
 
-    async def test_the_platform_gets_billing_cleanup_and_purge_tabs(self) -> None:
+    async def test_the_platform_gets_billing_and_the_tag_cleanup_tab(self) -> None:
         data = (await self.get("/api/panel/finance/settings", dict(OWNER))).json()
-        self.assertEqual([t["id"] for t in data["tabs"]], ["payment", "billing", "cleanup", "purge"])
+        # The automatic cancelling of pending orders is retired: no tab, status or «cancel now» action.
+        self.assertEqual([t["id"] for t in data["tabs"]], ["payment", "billing", "purge"])
         self.assertEqual(data["actions"]["payment"].split("?")[0], "/settings")
-        self.assertIsNotNone(data["cleanup_status"])
+        self.assertIsNone(data["cleanup_status"])
+        self.assertEqual((data["actions"]["cleanup"], data["actions"]["pending_orders"]), ("", ""))
         self.assertIsNotNone(data["purge"])
-        self.assertTrue(data["purge"]["rules_action"].startswith("/finance/cleanup/purge-rules?next="))
+        self.assertTrue(data["purge"]["rules_action"].startswith("/finance/cleanup/save?next="))
 
     async def test_a_shop_sees_its_own_values_and_posts_to_its_own_settings(self) -> None:
         response = await self.get("/api/panel/finance/settings", shop_staff(SHOP_A))
         data = response.json()
-        self.assertEqual([t["id"] for t in data["tabs"]], ["payment", "cleanup"])
+        self.assertEqual([t["id"] for t in data["tabs"]], ["payment"])
         cards = self.field(data, "payment", "payment_cards")["value"]
         self.assertIn(SHOP_A_CARD, cards)
         self.assertNotIn(PLATFORM_CARD, response.text)
         for secret in (BBC_SECRET, WEBHOOK_SECRET):
             self.assertNotIn(secret, response.text)
         self.assertEqual(data["actions"]["payment"].split("?")[0], "/shop-settings")
-        self.assertEqual(data["actions"]["pending_orders"].split("?")[0], "/shop-settings/cancel-pending-orders")
+        self.assertEqual(data["actions"]["pending_orders"], "", "the cancel-pending route is retired")
         self.assertIsNone(data["purge"], "purging needs its own permission")
         allowed = (await self.get("/api/panel/finance/settings", shop_staff(SHOP_A, ["orders", "shop_settings", "orders_purge"]))).json()
         self.assertIn("purge", [t["id"] for t in allowed["tabs"]])

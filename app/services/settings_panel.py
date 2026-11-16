@@ -40,6 +40,7 @@ from app.services.payment_destinations import (
     parse_payment_gateways,
 )
 from app.services.rich_text import prepare_settings_values_for_web
+from app.services.settings_form_payload import listed_tabs
 from app.services.settings_tab_groups import group_settings_tabs, tabs_with_message_variables
 from app.services.setup_wizard import current_setup_values
 from app.services.support_contacts import parse_support_contacts
@@ -57,6 +58,13 @@ from app.services.users import (
 )
 
 DEFAULT_TAB = "welcome"
+# The Owner's bot connection is a system setting upstream, but the React panel edits it with the bot
+# settings, where its form lives; every other system tab is drawn by the system settings page.
+BOT_TAB = "bot"
+OWNER_BOT_TAB = (BOT_TAB, dict(PANEL_SETTINGS_TABS).get(BOT_TAB, "اتصال ربات"))
+SYSTEM_TABS = [(key, label) for key, label in PANEL_SETTINGS_TABS if key != BOT_TAB]
+# The shared layout names this group for a shop's own bot; on the Owner's page it is the main bot.
+CONNECT_GROUP, OWNER_CONNECT_LABEL = "connect", "اتصال ربات"
 NAMING_TAB = "naming"
 SECURITY_PATH = "/security"
 TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -155,7 +163,7 @@ def resolve_tab(raw: str | None) -> TabRoute:
 
 
 def is_panel_tab(tab: str) -> bool:
-    return tab in PANEL_SETTINGS_KEYS
+    return tab in PANEL_SETTINGS_KEYS and tab != BOT_TAB
 
 
 def nav_payload(staff: dict, tab: str) -> dict[str, Any]:
@@ -163,11 +171,11 @@ def nav_payload(staff: dict, tab: str) -> dict[str, Any]:
     if is_panel_tab(tab):
         return {
             "kind": "panel",
-            "panel_tabs": [{"key": key, "label": label} for key, label in PANEL_SETTINGS_TABS],
+            "panel_tabs": [{"key": key, "label": label} for key, label in SYSTEM_TABS],
             "security_href": SECURITY_PATH,
             "groups": [],
         }
-    groups = group_settings_tabs(tabs_with_message_variables(SETTINGS_TABS, staff), tab)
+    groups = group_settings_tabs(tabs_with_message_variables([*SETTINGS_TABS, OWNER_BOT_TAB], staff), tab)
     return {
         "kind": "bot",
         "panel_tabs": [],
@@ -175,9 +183,9 @@ def nav_payload(staff: dict, tab: str) -> dict[str, Any]:
         "groups": [
             {
                 "key": group.key,
-                "label": group.label,
+                "label": OWNER_CONNECT_LABEL if group.key == CONNECT_GROUP else group.label,
                 "is_active": group.is_active,
-                "tabs": [{"key": item.key, "label": item.label, "href": item.href} for item in group.tabs],
+                "tabs": [{"key": item.key, "label": item.label, "href": item.href} for item in listed_tabs(group)],
             }
             for group in groups
         ],

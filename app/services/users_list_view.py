@@ -15,9 +15,10 @@ from app.db.models import BotUser
 from app.services.color_tags import normalize_color_filter
 from app.services.customer_marks import CustomerMarks, color_filter_clause, marks_for
 from app.services.list_query import filter_by_search, normalize_search_q
-from app.services.pg_access import staff_user_actions
+from app.services.bot_user_admin import customer_service_actions
 from app.services.platform_identity import is_explicit_owner_staff
 from app.services.shop_scope import resolve_shop_scope_id
+from app.services.subscription_lookup import link_token
 from app.services.user_search import clean_handle, with_search_matches
 from app.services.users_ops import (
     UserFilter,
@@ -55,7 +56,7 @@ class UsersListView:
 
 
 def list_abilities(staff: dict, scope: int | None) -> UsersListAbilities:
-    pg_acts = staff_user_actions(staff)
+    pg_acts = customer_service_actions(staff)
     in_shop = is_explicit_owner_staff(staff) or scope is not None
     return UsersListAbilities(
         manage=is_explicit_owner_staff(staff),
@@ -77,6 +78,10 @@ async def load_users_list(
     """Raises ``ShopScopeError`` for staff without a shop scope."""
     scope = resolve_shop_scope_id(staff)
     query = normalize_search_q(search)
+    if query and link_token(query):
+        # A subscription link is a bearer secret: it is looked up by POST (/users/find-by-link),
+        # never searched for here or sent back in the list.
+        query = ""
     focus_uid = parse_focus_uid(uid_raw)
     color_filter = normalize_color_filter(color_raw)
 

@@ -8,9 +8,10 @@ Hybrid Owner ACL: platform web Owner keeps full *shop* power, but PasarGuard
 menus/actions are clamped to the env ``PG_USERNAME`` role (fail-closed).
 """
 
-import time
+import asyncio
 from typing import Any, Mapping
 
+from app.services.pasarguard import PasarGuardError, is_panel_outage
 from app.services.redact import user_safe_error
 from app.services.security_policy import UnsafePgUrlError, assert_safe_pg_base_url
 import logging
@@ -42,21 +43,56 @@ PG_FEATURE_LABELS: dict[str, str] = {
     "pg_admins": "ادمین",
 }
 
-# Short-lived cache: role_id → (monotonic_at, features, raw_role)
-# Menus must track GET /api/admin like quotas — keep this only as a fallback.
-_ROLE_CACHE: dict[int, tuple[float, list[str], dict]] = {}
-# Keep short: sidebar/menus must stay near live GET /api/admin (stale ACL = wrong menus).
-_ROLE_CACHE_TTL = 8.0
-
-# Platform env-credential capability cache: key → (monotonic_at, payload)
-_PLATFORM_CAPS_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
-_PLATFORM_CAPS_TTL = 8.0
+PG_API_KEY_REJECTED_MSG = (
+    "کلید API پاسارگارد پذیرفته نشد. "
+    "علت محتمل: کلید اشتباه، منقضی یا باطل شده، یا به سقف درخواست رسیده است. "
+    "راه حل: در پاسارگارد یک کلید API فعال بسازید و مقدار کامل آن را وارد کنید، "
+    "یا کلید API را حذف کنید تا ورود با رمز انجام شود."
+)
+PG_ADMIN_DISABLED_MSG = (
+    "حساب این ادمین در پاسارگارد غیرفعال است. "
+    "راه حل: ادمین را در پاسارگارد فعال کنید یا اعتبارنامه ادمین دیگری وارد کنید."
+)
 
 
 def clear_platform_pg_capability_cache() -> None:
-    """Drop cached Owner PG ACL (call after setup / PG credential changes)."""
-    _PLATFORM_CAPS_CACHE.clear()
-    _ROLE_CACHE.clear()
+    """Drop cached PG ACL probes (call after setup / PG credential / permission changes)."""
+    from app.services.pg_read_cache import invalidate_capability_cache
+
+    invalidate_capability_cache()
+
+
+def _capability_ident(*, base_url: str, username: str, partition: str = "platform") -> str:
+    """Partition capability answers by panel identity; never share across shops."""
+    user = (username or "").strip().lower()
+    base = (base_url or "").rstrip("/")
+    if user:
+        return f"u:{user}@{base}:{partition}"
+    return f"owner@{base}:{partition}"
+
+
+def _client_capability_ident(pg: Any) -> str:
+    """Prefer the client's own cache partition; never await / share across shops."""
+    import inspect
+
+    bound = getattr(pg, "_read_cache_ident", None)
+    if callable(bound):
+        try:
+            value = bound()
+        except Exception:
+            value = None
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+        if inspect.isawaitable(value):
+            # AsyncMock or similar — ignore and fall back to attributes.
+            try:
+                value.close()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+    uname = str(getattr(pg, "_login_username", "") or "").strip()
+    base = str(getattr(pg, "base_url", "") or "")
+    partition = str(getattr(pg, "_cache_partition", "role") or "role")
+    return _capability_ident(base_url=base, username=uname, partition=partition)
 
 
 def _nested_role(admin: dict | None) -> dict | None:
@@ -171,6 +207,97 @@ def full_pg_owner_features() -> list[str]:
     return out
 
 
+class _CredentialsRejected(Exception):
+    """The panel answered that the probed credentials cannot be used."""
+
+
+# PasarGuard's exact answer for a disabled admin; any other 403 is a role refusal.
+PG_ACCOUNT_DISABLED_DETAIL = "your account has been disabled"
+
+
+def _says_account_disabled(exc: PasarGuardError) -> bool:
+    return (exc.detail() or "").strip().lower() == PG_ACCOUNT_DISABLED_DETAIL
+
+
+def _rejected_credentials_reason(exc: Exception, *, uses_api_key: bool) -> str | None:
+    """Persian reason when the self lookup proves the login unusable, else ``None``.
+
+    A 403 or 404 from a limited role or an older panel is not proof: the
+    caller keeps its fallback lookups for those.
+    """
+    if not isinstance(exc, PasarGuardError):
+        return None
+    if exc.status_code == 401:
+        return PG_API_KEY_REJECTED_MSG if uses_api_key else exc.user_message()
+    if exc.status_code == 403 and _says_account_disabled(exc):
+        return PG_ADMIN_DISABLED_MSG
+    return None
+
+
+async def _read_probe_admin(client: Any, uname: str, *, uses_api_key: bool) -> dict:
+    """The signed-in admin's own record for the capability probe.
+
+    ``GET /api/admin`` needs no ``admins.read``, so it comes first. Directory
+    lookups often 403 for roles that only have ``users.create``, and a
+    username stub keeps a valid login from reading as "admin not found".
+    An API key is never checked when the client is built, so this is the
+    first request that can reject it: a refusal or an unreachable panel
+    stops the probe instead of falling through to the stub.
+    """
+    try:
+        current = await client.get_current_admin()
+    except Exception as exc:
+        if is_panel_outage(exc):
+            raise
+        reason = _rejected_credentials_reason(exc, uses_api_key=uses_api_key)
+        if reason:
+            raise _CredentialsRejected(reason) from exc
+        current = None
+    if isinstance(current, dict) and current:
+        return current
+    admin = await client.get_admin(uname)
+    if isinstance(admin, dict):
+        return admin
+    return {"username": uname}
+
+
+async def _role_is_owner_role(client: Any, role_id: int) -> bool | None:
+    """Whether the PasarGuard role with this id is the owner role; ``None`` if unreadable.
+
+    Report-only: a failure here must never turn a valid login into a failed setup.
+    """
+    try:
+        roles = await client.get_admin_roles()
+    except Exception:
+        logger.debug("admin role list unavailable for the setup report", exc_info=True)
+        return None
+    match = next(
+        (r for r in roles if isinstance(r, dict) and str(r.get("id")) == str(role_id)),
+        None,
+    )
+    if match is None or "is_owner" not in match:
+        return None
+    return bool(match.get("is_owner"))
+
+
+async def _auth_method_fields(
+    client: Any, *, uses_api_key: bool, inspect_key: bool, role_id: int | None
+) -> dict[str, Any]:
+    """How the probe signed in, for the setup report.
+
+    PasarGuard answers a key created without "inherit permissions" with
+    ``is_owner=False`` and only the key's own permissions, even when the
+    admin holds the owner role. ``api_key_overrides_owner_role`` is True when
+    the role list shows exactly that, and ``None`` when it cannot be read.
+    Only the setup and connection-test probes look, to keep the cached
+    request-path probe to one panel call.
+    """
+    fields: dict[str, Any] = {"auth_method": "api_key" if uses_api_key else "password"}
+    if uses_api_key and inspect_key and role_id is not None:
+        fields["api_key_overrides_owner_role"] = await _role_is_owner_role(client, role_id)
+    return fields
+
+
 async def resolve_platform_pg_capabilities(
     *,
     username: str | None = None,
@@ -188,6 +315,13 @@ async def resolve_platform_pg_capabilities(
     from app.config import get_settings
     from app.services.pasarguard import PasarGuardClient, PasarGuardError, new_panel_http_client
 
+    from app.services.pg_read_cache import (
+        CAPABILITY_PROBE_MAX_AGE_SEC,
+        CAPABILITY_PROBE_PATH,
+        cache_get,
+        cache_put,
+    )
+
     settings = get_settings()
     env_username = getattr(settings, "pg_username", None)
     env_password = getattr(settings, "pg_password", None)
@@ -201,18 +335,26 @@ async def resolve_platform_pg_capabilities(
         "\r", ""
     ).strip()
     # base_url override only for setup probe (temporary client)
-    cache_key = f"{(base_url or env_base_url or '').rstrip('/')}|{uname.lower()}"
-    now = time.monotonic()
-    if (
-        use_cache
-        and username is None
-        and password is None
-        and api_key is None
-        and base_url is None
-    ):
-        hit = _PLATFORM_CAPS_CACHE.get(cache_key)
-        if hit and (now - hit[0]) < _PLATFORM_CAPS_TTL:
-            return dict(hit[1])
+    own_client = bool(
+        username is not None
+        or password is not None
+        or api_key is not None
+        or base_url is not None
+    )
+    cache_ident = _capability_ident(
+        base_url=str(base_url or env_base_url or ""),
+        username=uname,
+        partition="platform",
+    )
+    if use_cache and not own_client:
+        hit = cache_get(
+            cache_ident,
+            CAPABILITY_PROBE_PATH,
+            None,
+            max_age=CAPABILITY_PROBE_MAX_AGE_SEC,
+        )
+        if isinstance(hit, dict) and hit.get("ok") is True:
+            return dict(hit)
 
     empty: dict[str, Any] = {
         "ok": False,
@@ -229,12 +371,6 @@ async def resolve_platform_pg_capabilities(
         return empty
 
     client: PasarGuardClient | None = None
-    own_client = bool(
-        username is not None
-        or password is not None
-        or api_key is not None
-        or base_url is not None
-    )
     try:
         if own_client:
             # Temporary client for setup probe — do not touch global get_pg() singleton.
@@ -263,25 +399,10 @@ async def resolve_platform_pg_capabilities(
             client = get_pg()
 
         await client.ensure_token()
-        # Token success already proves the account exists. Directory lookup
-        # (GET /api/admins, /api/admin/{id}) often 403s for roles that only
-        # have users.create — use GET /api/admin (self) first, then directory,
-        # then a username stub so setup never treats a valid login as
-        # "admin not found / wrong password".
-        admin: dict | None = None
-        try:
-            current = await client.get_current_admin()
-            if isinstance(current, dict) and current:
-                admin = current
-                got = str(current.get("username") or "").strip()
-                if got:
-                    uname = got
-        except Exception:
-            admin = None
-        if not isinstance(admin, dict):
-            admin = await client.get_admin(uname)
-        if not isinstance(admin, dict):
-            admin = {"username": uname}
+        admin = await _read_probe_admin(client, uname, uses_api_key=bool(key))
+        got = str(admin.get("username") or "").strip()
+        if got:
+            uname = got
 
         role_id = None
         nested_role = admin.get("role")
@@ -328,20 +449,28 @@ async def resolve_platform_pg_capabilities(
             "role": role,
             "admin": admin,
         }
-        if use_cache and not own_client:
-            _PLATFORM_CAPS_CACHE[cache_key] = (now, dict(payload))
+        payload.update(
+            await _auth_method_fields(
+                client,
+                uses_api_key=bool(key),
+                inspect_key=own_client and not pg_is_owner,
+                role_id=role_id,
+            )
+        )
+        # Cache only successful probes; failures stay fail-closed without a long TTL.
+        if use_cache and not own_client and payload["ok"]:
+            cache_put(cache_ident, CAPABILITY_PROBE_PATH, None, dict(payload))
         return payload
+    except _CredentialsRejected as e:
+        empty["error"] = str(e)
+        return empty
     except PasarGuardError as e:
         empty["error"] = e.user_message(fallback=str(e))
-        if use_cache and not own_client:
-            _PLATFORM_CAPS_CACHE[cache_key] = (now, dict(empty))
         return empty
     except Exception as e:
         # Transport errors carry internal hosts and ports; show a mapped Persian cause only.
         logger.warning("PasarGuard capability probe failed", exc_info=True)
         empty["error"] = user_safe_error(e, fallback="خطا در خواندن نقش پاسارگارد")
-        if use_cache and not own_client:
-            _PLATFORM_CAPS_CACHE[cache_key] = (now, dict(empty))
         return empty
     finally:
         if own_client and client is not None:
@@ -349,6 +478,37 @@ async def resolve_platform_pg_capabilities(
                 await client.close()
             except Exception:
                 logger.debug("resolve_platform_pg_capabilities: ignored failure", exc_info=True)
+
+
+PG_CHECK_TIMEOUT_SEC = 8.0
+PG_CHECK_TIMEOUT_MSG = "پنل در زمان مقرر پاسخ نداد؛ آدرس و اتصال پنل را بررسی کنید"
+
+
+async def check_pg_credentials(
+    *, username: str, password: str, api_key: str, base_url: str
+) -> str | None:
+    """Sign in with these PasarGuard credentials; a safe Persian reason on failure, else ``None``.
+
+    Used before credentials are saved from settings, so a wrong password or a
+    refused API key is reported instead of being written to ``.env``.
+    """
+    try:
+        caps = await asyncio.wait_for(
+            resolve_platform_pg_capabilities(
+                username=username,
+                password=password or None,
+                api_key=api_key or None,
+                base_url=base_url,
+                use_cache=False,
+            ),
+            timeout=PG_CHECK_TIMEOUT_SEC,
+        )
+    except TimeoutError:
+        return PG_CHECK_TIMEOUT_MSG
+    if caps.get("ok"):
+        return None
+    detail = caps.get("error") or "اعتبارنامه پذیرفته نشد"
+    return f"اتصال پاسارگارد ناموفق بود: {detail}"
 
 
 async def enrich_platform_admin_staff(user: dict) -> dict:
@@ -540,24 +700,36 @@ async def resolve_reseller_pg_features(
     *,
     client: Any | None = None,
 ) -> tuple[list[str], dict | None]:
-    """Fetch role from PasarGuard and return (feature_keys, raw_role). Cached ~60s.
+    """Fetch role from PasarGuard and return (feature_keys, raw_role).
 
-    ``client`` must be the caller-allowed PG client (Principal/parent/reseller/staff).
-    Omitting ``client`` uses Owner ``get_pg()`` — Owner/platform paths only.
+    Cached ~3 minutes per client identity via ``pg_read_cache`` so two shops never
+    share an answer. ``client`` must be the caller-allowed PG client
+    (Principal/parent/reseller/staff). Omitting ``client`` uses Owner ``get_pg()``.
     """
+    from app.services.pg_read_cache import (
+        CAPABILITY_PROBE_MAX_AGE_SEC,
+        ROLE_FEATURES_PATH,
+        cache_get,
+        cache_put,
+    )
+
     if not pg_role_id:
         return [], None
     rid = int(pg_role_id)
-    now = time.monotonic()
-    hit = _ROLE_CACHE.get(rid)
-    if hit and (now - hit[0]) < _ROLE_CACHE_TTL:
-        return list(hit[1]), dict(hit[2]) if isinstance(hit[2], dict) else hit[2]
 
     pg = client
     if pg is None:
         from app.services.pasarguard import get_pg
 
         pg = get_pg()
+
+    ident = _client_capability_ident(pg)
+    params = {"role_id": rid}
+    cached = cache_get(ident, ROLE_FEATURES_PATH, params, max_age=CAPABILITY_PROBE_MAX_AGE_SEC)
+    if isinstance(cached, dict) and cached.get("ok") is True:
+        features = list(cached.get("features") or [])
+        role = cached.get("role")
+        return features, dict(role) if isinstance(role, dict) else None
 
     role = None
     try:
@@ -572,7 +744,12 @@ async def resolve_reseller_pg_features(
     if not isinstance(role, dict):
         return [], None
     features = map_pg_role_to_features(role)
-    _ROLE_CACHE[rid] = (now, list(features), dict(role))
+    cache_put(
+        ident,
+        ROLE_FEATURES_PATH,
+        params,
+        {"ok": True, "features": list(features), "role": dict(role)},
+    )
     return features, role
 
 
@@ -603,6 +780,51 @@ def staff_from_platform_caps(caps: Mapping[str, Any] | None) -> dict[str, Any]:
     return staff
 
 
+PLAN_CATALOG_FEATURES = ("pg_templates", "pg_groups")
+
+AUDIT_NOTE_CUSTOM_KEY_ON_OWNER = (
+    "این کلید API با «دسترسی سفارشی» ساخته شده است. ادمین در پاسارگارد owner است، "
+    "ولی پاسارگارد چنین کلیدی را هیچ‌وقت owner حساب نمی‌کند و فقط دسترسی‌های خود کلید را می‌پذیرد. "
+    "راه حل: در پاسارگارد برای این کلید «ارث‌بری دسترسی‌ها» را روشن کنید یا با رمز وصل شوید."
+)
+AUDIT_NOTE_API_KEY_LIMITED = (
+    "اتصال با کلید API است. اگر این ادمین در پاسارگارد owner است ولی اینجا حساب محدود نشان داده می‌شود، "
+    "کلید با «دسترسی سفارشی» ساخته شده است؛ برای این کلید «ارث‌بری دسترسی‌ها» را روشن کنید یا با رمز وصل شوید."
+)
+
+
+def _missing_catalog_note(feature_keys: list[str]) -> str | None:
+    missing = [PG_FEATURE_LABELS[k] for k in PLAN_CATALOG_FEATURES if k not in feature_keys]
+    if not missing:
+        return None
+    names = " و ".join(f"«{label}»" for label in missing)
+    return (
+        f"این حساب به {names} پاسارگارد دسترسی ندارد، پس در ساخت پلن قابل انتخاب نیستند. "
+        f"راه حل: در نقش این ادمین (یا دسترسی کلید API) خواندن {names} را فعال کنید."
+    )
+
+
+def _audit_notes(
+    caps: Mapping[str, Any], *, feature_keys: list[str], pg_is_owner: bool
+) -> list[str]:
+    """Plain-language warnings for the setup report; an owner account needs none."""
+    if pg_is_owner:
+        return []
+    notes: list[str] = []
+    if caps.get("auth_method") == "api_key":
+        # True: confirmed owner role behind a custom key. None: role list unreadable,
+        # so explain the possibility. False: a genuinely limited role, nothing to add.
+        overrides_owner = caps.get("api_key_overrides_owner_role")
+        if overrides_owner is True:
+            notes.append(AUDIT_NOTE_CUSTOM_KEY_ON_OWNER)
+        elif overrides_owner is None:
+            notes.append(AUDIT_NOTE_API_KEY_LIMITED)
+    catalog_note = _missing_catalog_note(feature_keys)
+    if catalog_note:
+        notes.append(catalog_note)
+    return notes
+
+
 def public_pg_access_audit(caps: Mapping[str, Any] | None) -> dict[str, Any]:
     """Display-only snapshot of PG ACL. Never an authorization source."""
     from app.services.formatting import format_bytes
@@ -622,6 +844,7 @@ def public_pg_access_audit(caps: Mapping[str, Any] | None) -> dict[str, Any]:
         "can_manage_representatives": False,
         "shop_full": True,
         "limits": [],
+        "notes": [],
     }
     if not caps.get("ok"):
         return empty
@@ -698,6 +921,7 @@ def public_pg_access_audit(caps: Mapping[str, Any] | None) -> dict[str, Any]:
         "can_manage_representatives": can_create,
         "shop_full": True,
         "limits": limits_rows,
+        "notes": _audit_notes(caps, feature_keys=feature_keys, pg_is_owner=pg_is_owner),
     }
 
 

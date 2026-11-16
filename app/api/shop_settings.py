@@ -19,7 +19,11 @@ from app.config import DATA_DIR
 from app.services.bbc_settlement import bbc_enable_error
 from app.services.chat_cleanup_config import chat_cleanup_payload
 from app.services.connection_guides import prune_guide_media, serialize_submitted_guides
-from app.services.miniapp_shop import SHOP_SWITCH, set_shop_miniapp, switch_value
+from app.services.miniapp_shop import (
+    SHOP_SWITCH,
+    set_shop_miniapp,
+    switch_value,
+)
 from app.services.reseller_bots import schedule_shop_menu_sync
 from app.services.resellers import (
     RESELLER_SETTINGS_TABS,
@@ -33,6 +37,7 @@ from app.services.secret_box import reveal_bot_token
 from app.services.settings_button_labels import PLATFORM_ONLY_BTN_KEYS
 from app.services.users import (
     IMAGE_KEYS,
+    PLATFORM_ONLY_SETTING_KEYS,
     RESETTABLE_SETTINGS_TABS,
     SECRET_KEYS,
     TOGGLE_KEYS,
@@ -185,7 +190,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         from app.services.service_import_config import PLATFORM_ONLY_KEYS
 
         # Subscription paths and extra panel admins describe the one panel: Owner only.
-        known = keys_for_tab(tab) - PLATFORM_ONLY_KEYS - PLATFORM_ONLY_BTN_KEYS
+        known = keys_for_tab(tab) - PLATFORM_ONLY_KEYS - PLATFORM_ONLY_BTN_KEYS - PLATFORM_ONLY_SETTING_KEYS
         if tab == "menu":
             known = known | {"menu_order"}
             known.discard("show_reseller_apply")
@@ -313,35 +318,6 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
             await prune_guide_media(session, reseller_id=rid)
         return _redirect_after_save(request, f"/shop-settings?tab={tab}")
 
-    @app.post("/shop-settings/cancel-pending-orders")
-    async def shop_cancel_pending_orders(
-        request: Request,
-        staff: dict = Depends(shop_dep),
-        session: AsyncSession = Depends(get_db),
-    ):
-        if _is_owner_settings_actor(staff):
-            return RedirectResponse("/finance?tab=orders&settings=cleanup", status_code=303)
-        rid = _rid(staff)
-        if not rid:
-            return _deny_scope()
-        from app.services.orders import cancel_stale_pending_for_settings
-
-        fallback = "/finance?tab=orders&settings=cleanup"
-        try:
-            n = await cancel_stale_pending_for_settings(
-                session, reseller_id=int(rid), force=True
-            )
-        except Exception:
-            logger.exception("manual pending order cancel failed shop=%s", rid)
-            dest = _safe_next(request, fallback)
-            sep = "&" if "?" in dest else "?"
-            return RedirectResponse(
-                f"{dest}{sep}err={quote('لغو سفارش‌ها ناموفق بود. لاگ سرور را بررسی کنید.')}",
-                status_code=303,
-            )
-        msg = f"{n} سفارش معلق/تأییدنشده لغو شد" if n else "سفارش معلقی برای لغو نبود"
-        return _redirect_after_save(request, fallback, msg=msg)
-
     @app.post("/shop-notifications")
     async def shop_notifications_save(
         request: Request,
@@ -448,7 +424,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         session: AsyncSession = Depends(get_db),
     ):
         if _is_owner_settings_actor(staff):
-            return RedirectResponse("/tickets?supports=1", status_code=303)
+            return RedirectResponse("/tickets?supports=1&stab=contacts", status_code=303)
         from app.services.support_contacts import contacts_from_form_json, save_support_contacts
 
         rid = _rid(staff)
@@ -460,11 +436,11 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
             contacts, err = contacts_from_form_json(str(raw))
             if err:
                 return RedirectResponse(
-                    f"/tickets?supports=1&err={quote(err)}",
+                    f"/tickets?supports=1&stab=contacts&err={quote(err)}",
                     status_code=303,
                 )
             await save_support_contacts(session, contacts or [], reseller_id=rid)
-            return RedirectResponse("/tickets?supports=1&saved=1", status_code=303)
+            return RedirectResponse("/tickets?supports=1&stab=contacts&saved=1", status_code=303)
 
         from app.services.button_styles import parse_item_button_style_form
         from app.services.support_contacts import upsert_support_contact
@@ -492,10 +468,10 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         )
         if err:
             return RedirectResponse(
-                f"/tickets?supports=1&err={quote(err)}",
+                f"/tickets?supports=1&stab=contacts&err={quote(err)}",
                 status_code=303,
             )
-        return RedirectResponse("/tickets?supports=1&saved=1", status_code=303)
+        return RedirectResponse("/tickets?supports=1&stab=contacts&saved=1", status_code=303)
 
     @app.post("/shop-supports/delete")
     async def shop_supports_delete(
@@ -504,7 +480,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         session: AsyncSession = Depends(get_db),
     ):
         if _is_owner_settings_actor(staff):
-            return RedirectResponse("/tickets?supports=1", status_code=303)
+            return RedirectResponse("/tickets?supports=1&stab=contacts", status_code=303)
         from app.services.support_contacts import delete_support_contact
 
         rid = _rid(staff)
@@ -514,4 +490,4 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         contact_id = str(form.get("id") or "").strip()
         if contact_id:
             await delete_support_contact(session, contact_id, reseller_id=rid)
-        return RedirectResponse("/tickets?supports=1&saved=1", status_code=303)
+        return RedirectResponse("/tickets?supports=1&stab=contacts&saved=1", status_code=303)

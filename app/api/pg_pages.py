@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from urllib.parse import quote
 
 from fastapi import Depends, Form, Request
@@ -11,6 +12,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.spa_pages import spa_response
+from app.services.action_reasons import ReasonRequired, log_reasoned_action, reason_from_form
+from app.services.credential_policy import validate_pg_username
+from app.services.customer_action_notices import notify_customers, pg_user_targets
 from app.services.numbers import normalize_number_text, parse_float, parse_int, parse_optional_float, parse_optional_int
 from app.services.pasarguard import (
     PasarGuardError,
@@ -26,6 +30,16 @@ from app.services.pg_quota import (
     PgQuotaError,
     assert_can_mutate_owned_users,
 )
+from app.services.payg_gate import (
+    charged_note,
+    charge_staff_create,
+    charge_staff_edit,
+    finish_charge,
+    finish_charges,
+    reset_with_charge,
+    settle_failed_charge,
+    settle_failed_charges,
+)
 from app.services.provision_gate import (
     ProvisionError,
     assert_provision_create,
@@ -35,7 +49,9 @@ from app.services.provision_gate import (
     hold_staff_edit,
     settle_failed_hold,
 )
+from app.services.plans_catalog import filter_groups_for_staff
 from app.services.platform_identity import is_explicit_owner_staff
+from app.services.redact import user_safe_error
 from app.services.shop_scope import is_platform_admin, shop_owner_id
 from app.services.volume_allocation import apply_create_form_oversell
 
@@ -291,6 +307,7 @@ def register_pg_pages(
         from app.services.plans_catalog import (
             groups_allowed_for_staff,
             parse_group_ids_from_form,
+            resolve_user_write_group_ids,
             template_allowed_for_staff,
         )
 
@@ -313,13 +330,9 @@ def register_pg_pages(
             mode = "template" if str(form.get("template_id") or "").strip() else "custom"
 
         note = f"web panel · {staff.get('username') or 'staff'}"
-        import re
-
-        if not re.fullmatch(r"[A-Za-z0-9_]{3,32}", uname):
-            return _pg_form_err(
-                "نام کاربری باید ۳ تا ۳۲ کاراکتر انگلیسی، عدد یا _ باشد (بدون فاصله و فارسی)",
-                modal="create",
-            )
+        uname, uname_error = validate_pg_username(uname)
+        if uname_error:
+            return _pg_form_err(uname_error, modal="create")
         # Non-admin must have a PG admin identity — otherwise create-as-owner
         # bypasses every role quota (max_users / volume / expire).
         if not _is_admin(staff) and not _pg_owner(staff):
@@ -328,6 +341,7 @@ def register_pg_pages(
                 modal="create",
             )
         hold = None
+        charge = None
         try:
             if mode == "template":
                 raw_tid = str(form.get("template_id") or form.get("pg_template_id") or "").strip()
@@ -344,6 +358,10 @@ def register_pg_pages(
                     return _pg_form_err(getattr(qe, "message", str(qe)), modal="create")
                 pg, as_owner = await _staff_pg(session, staff)
                 hold = await hold_staff_create(session, staff, pg=pg, template_id=tid, data_limit=None)
+                charge = await charge_staff_create(
+                    session, staff, pg=pg, hold=hold, template_id=tid, data_limit=None, expire_ts=None,
+                    username=uname, now_ts=int(time.time()),
+                )
                 await pg.create_user_from_template(
                     {
                         "username": uname,
@@ -361,10 +379,6 @@ def register_pg_pages(
                 if not ids:
                     # also accept comma field if present
                     ids = parse_group_ids(str(form.get("group_ids") or ""))
-                if not ids:
-                    return _pg_form_err("حداقل یک گروه انتخاب کنید", modal="create")
-                if not groups_allowed_for_staff(staff, ids):
-                    return _pg_form_err("یکی از گروه‌های انتخاب‌شده مجاز نیست", modal="create")
 
                 gb_raw = str(form.get("data_limit_gb") or "").strip()
                 days_raw = str(form.get("duration_days") or "").strip()
@@ -411,11 +425,40 @@ def register_pg_pages(
                     return _pg_form_err(getattr(qe, "message", str(qe)), modal="create")
 
                 pg, as_owner = await _staff_pg(session, staff)
+                try:
+                    raw_groups = await pg.get_groups_simple()
+                except Exception:
+                    logger.warning(
+                        "pg users create: PasarGuard groups fetch failed",
+                        exc_info=True,
+                    )
+                    return _pg_form_err(
+                        "خواندن گروه‌های پاسارگارد ناموفق بود؛ دوباره تلاش کنید",
+                        modal="create",
+                    )
+                visible = filter_groups_for_staff(
+                    raw_groups if isinstance(raw_groups, list) else [], staff
+                )
+                try:
+                    resolved_ids = resolve_user_write_group_ids(
+                        ids, visible_groups=visible
+                    )
+                except ValueError as ve:
+                    return _pg_form_err(str(ve), modal="create")
+                if resolved_ids is not None and not groups_allowed_for_staff(
+                    staff, resolved_ids
+                ):
+                    return _pg_form_err("یکی از گروه‌های انتخاب‌شده مجاز نیست", modal="create")
+
                 hold = await hold_staff_create(session, staff, pg=pg, template_id=None, data_limit=data_limit)
+                charge = await charge_staff_create(
+                    session, staff, pg=pg, hold=hold, template_id=None, data_limit=data_limit,
+                    expire_ts=expire_ts, username=uname, now_ts=int(time.time()),
+                )
                 await pg.create_user(
                     build_user_create_payload(
                         username=uname,
-                        group_ids=ids,
+                        group_ids=resolved_ids,
                         data_limit=data_limit,
                         expire_ts=expire_ts,
                         hwid_limit=hwid_limit,
@@ -427,11 +470,13 @@ def register_pg_pages(
             # reseller/pg_staff→own PG admin). Do not call get_pg() here for a
             # second owner-token transfer — that path bypassed staff ACL.
             _ = as_owner
+            await finish_charge(session, charge)
         except Exception as e:
             await settle_failed_hold(session, hold, e, panel_touched=True)
+            await settle_failed_charge(session, charge, e, panel_touched=True)
             msg = e.user_message(fallback="خطا در ساخت کاربر") if isinstance(e, PasarGuardError) else str(e)
             return _pg_form_err(msg, modal="create")
-        return RedirectResponse(f"/pg/users?ok={_q(f'کاربر {uname} ساخته شد')}", status_code=303)
+        return RedirectResponse(f"/pg/users?ok={_q(f'کاربر {uname} ساخته شد' + charged_note(charge))}", status_code=303)
 
     @app.get("/pg/users/{user_id}/link")
     async def pg_users_link(
@@ -467,16 +512,16 @@ def register_pg_pages(
     ):
         import time
 
-        from app.services.plans_catalog import groups_allowed_for_staff, parse_group_ids_from_form
+        from app.services.plans_catalog import (
+            groups_allowed_for_staff,
+            parse_group_ids_from_form,
+            resolve_user_write_group_ids,
+        )
 
         if not staff_user_actions(staff)["update"]:
             return RedirectResponse(f"/pg/users?err={_q('اجازه ویرایش ندارید')}", status_code=303)
         form = await request.form()
         ids = parse_group_ids_from_form(form, prefix="edit_group_")
-        if not ids:
-            return _pg_form_err("حداقل یک گروه انتخاب کنید", modal="edit", uid=user_id)
-        if not groups_allowed_for_staff(staff, ids):
-            return _pg_form_err("یکی از گروه‌های انتخاب‌شده مجاز نیست", modal="edit", uid=user_id)
 
         gb_raw = str(form.get("data_limit_gb") or "").strip()
         days_raw = str(form.get("duration_days") or "").strip()
@@ -514,6 +559,7 @@ def register_pg_pages(
                 hwid_limit = 0  # unlimited
 
         hold = None
+        charges: list = []
         try:
             current = await _assert_owned_user(staff, user_id, session=session)
             if current is None:
@@ -531,27 +577,60 @@ def register_pg_pages(
                 )
             except (ProvisionError, PgQuotaError) as qe:
                 return _pg_form_err(getattr(qe, "message", str(qe)), modal="edit", uid=user_id)
+            pg, _as_owner = await _staff_pg(session, staff)
+            try:
+                raw_groups = await pg.get_groups_simple()
+            except Exception:
+                logger.warning(
+                    "pg users edit: PasarGuard groups fetch failed",
+                    exc_info=True,
+                )
+                return _pg_form_err(
+                    "خواندن گروه‌های پاسارگارد ناموفق بود؛ دوباره تلاش کنید",
+                    modal="edit",
+                    uid=user_id,
+                )
+            visible = filter_groups_for_staff(
+                raw_groups if isinstance(raw_groups, list) else [], staff
+            )
+            try:
+                resolved_ids = resolve_user_write_group_ids(
+                    ids, visible_groups=visible
+                )
+            except ValueError as ve:
+                return _pg_form_err(str(ve), modal="edit", uid=user_id)
+            if resolved_ids is not None and not groups_allowed_for_staff(
+                staff, resolved_ids
+            ):
+                return _pg_form_err(
+                    "یکی از گروه‌های انتخاب‌شده مجاز نیست", modal="edit", uid=user_id
+                )
             # PasarGuard does not allow changing username after create
             payload = build_user_modify_payload(
                 username=None,
-                group_ids=ids,
+                group_ids=resolved_ids,
                 data_limit=data_limit,
                 expire_ts=expire_ts,
                 hwid_limit=hwid_limit if hwid_changed else None,
                 status=str(current.get("status") or "") or None,
             )
-            pg, _as_owner = await _staff_pg(session, staff)
             hold = await hold_staff_edit(
                 session, staff, current_limit=current.get("data_limit"), new_limit=data_limit
             )
+            charges = await charge_staff_edit(
+                session, staff, hold=hold, current=current, data_limit=data_limit, expire_ts=expire_ts,
+                now_ts=int(time.time()),
+            )
             await pg.modify_user_by_id(user_id, payload)
             await finish_staff_edit(session, hold, pg_user_id=user_id, data_limit=data_limit)
+            await finish_charges(session, charges)
             uname = str(current.get("username") or user_id)
         except Exception as e:
             await settle_failed_hold(session, hold, e, panel_touched=True)
+            await settle_failed_charges(session, charges, e, panel_touched=True)
             msg = e.user_message(fallback="خطا در ویرایش") if isinstance(e, PasarGuardError) else str(e)
             return _pg_form_err(msg, modal="edit", uid=user_id)
-        return RedirectResponse(f"/pg/users?ok={_q(f'کاربر {uname} ویرایش شد')}", status_code=303)
+        return RedirectResponse(f"/pg/users?ok={_q(f'کاربر {uname} ویرایش شد' + charged_note(charges))}", status_code=303)
 
     async def _guard_owned_mutation(
         staff: dict, user_id: int, *, session: AsyncSession
@@ -567,12 +646,18 @@ def register_pg_pages(
 
     @app.post("/pg/users/{user_id}/disable")
     async def pg_users_disable(
+        request: Request,
         user_id: int,
         staff: dict = Depends(require_pg_perm("pg_users")),
         session: AsyncSession = Depends(get_db),
     ):
         if not staff_user_actions(staff)["disable"]:
             return RedirectResponse(f"/pg/users?err={_q('اجازه ندارید')}", status_code=303)
+        try:
+            reason = reason_from_form(await request.form())
+        except ReasonRequired as exc:
+            return RedirectResponse(f"/pg/users?err={_q(str(exc))}", status_code=303)
+        targets = await pg_user_targets(session, staff, pg_user_id=user_id)
         try:
             denied = await _guard_owned_mutation(staff, user_id, session=session)
             if denied is not None:
@@ -581,16 +666,28 @@ def register_pg_pages(
             await pg.set_disabled_by_id(user_id, True)
         except Exception as e:
             return RedirectResponse(f"/pg/users?err={_pg_err(e)}", status_code=303)
+        await log_reasoned_action(
+            session, staff, action="pg_user_disable", target_type="pg_user", target_id=user_id, reason=reason
+        )
+        await notify_customers(
+            session, targets, action="pg_user_disable", reason=reason
+        )
         return RedirectResponse(f"/pg/users?ok={_q('کاربر غیرفعال شد')}", status_code=303)
 
     @app.post("/pg/users/{user_id}/enable")
     async def pg_users_enable(
+        request: Request,
         user_id: int,
         staff: dict = Depends(require_pg_perm("pg_users")),
         session: AsyncSession = Depends(get_db),
     ):
         if not staff_user_actions(staff)["enable"]:
             return RedirectResponse(f"/pg/users?err={_q('اجازه ندارید')}", status_code=303)
+        try:
+            reason = reason_from_form(await request.form())
+        except ReasonRequired as exc:
+            return RedirectResponse(f"/pg/users?err={_q(str(exc))}", status_code=303)
+        targets = await pg_user_targets(session, staff, pg_user_id=user_id)
         try:
             denied = await _guard_owned_mutation(staff, user_id, session=session)
             if denied is not None:
@@ -599,10 +696,17 @@ def register_pg_pages(
             await pg.set_disabled_by_id(user_id, False)
         except Exception as e:
             return RedirectResponse(f"/pg/users?err={_pg_err(e)}", status_code=303)
+        await log_reasoned_action(
+            session, staff, action="pg_user_enable", target_type="pg_user", target_id=user_id, reason=reason
+        )
+        await notify_customers(
+            session, targets, action="pg_user_enable", reason=reason
+        )
         return RedirectResponse(f"/pg/users?ok={_q('کاربر فعال شد')}", status_code=303)
 
     @app.post("/pg/users/{user_id}/reset")
     async def pg_users_reset(
+        request: Request,
         user_id: int,
         staff: dict = Depends(require_pg_perm("pg_users")),
         session: AsyncSession = Depends(get_db),
@@ -611,17 +715,29 @@ def register_pg_pages(
         if not acts["reset_usage"]:
             return RedirectResponse(f"/pg/users?err={_q('اجازه ندارید')}", status_code=303)
         try:
+            reason = reason_from_form(await request.form())
+        except ReasonRequired as exc:
+            return RedirectResponse(f"/pg/users?err={_q(str(exc))}", status_code=303)
+        targets = await pg_user_targets(session, staff, pg_user_id=user_id)
+        try:
             denied = await _guard_owned_mutation(staff, user_id, session=session)
             if denied is not None:
                 return denied
             pg, _ = await _staff_pg(session, staff)
-            await pg.reset_user_by_id(user_id)
+            await reset_with_charge(session, staff, pg=pg, pg_user_id=user_id, now_ts=int(time.time()))
         except Exception as e:
             return RedirectResponse(f"/pg/users?err={_pg_err(e)}", status_code=303)
+        await log_reasoned_action(
+            session, staff, action="pg_user_reset_usage", target_type="pg_user", target_id=user_id, reason=reason
+        )
+        await notify_customers(
+            session, targets, action="pg_user_reset_usage", reason=reason
+        )
         return RedirectResponse(f"/pg/users?ok={_q('مصرف ریست شد')}", status_code=303)
 
     @app.post("/pg/users/{user_id}/revoke")
     async def pg_users_revoke(
+        request: Request,
         user_id: int,
         staff: dict = Depends(require_pg_perm("pg_users")),
         session: AsyncSession = Depends(get_db),
@@ -630,6 +746,11 @@ def register_pg_pages(
         if not acts["revoke_sub"]:
             return RedirectResponse(f"/pg/users?err={_q('اجازه ندارید')}", status_code=303)
         try:
+            reason = reason_from_form(await request.form())
+        except ReasonRequired as exc:
+            return RedirectResponse(f"/pg/users?err={_q(str(exc))}", status_code=303)
+        targets = await pg_user_targets(session, staff, pg_user_id=user_id)
+        try:
             denied = await _guard_owned_mutation(staff, user_id, session=session)
             if denied is not None:
                 return denied
@@ -637,6 +758,12 @@ def register_pg_pages(
             await pg.revoke_sub_by_id(user_id)
         except Exception as e:
             return RedirectResponse(f"/pg/users?err={_pg_err(e)}", status_code=303)
+        await log_reasoned_action(
+            session, staff, action="pg_user_revoke_sub", target_type="pg_user", target_id=user_id, reason=reason
+        )
+        await notify_customers(
+            session, targets, action="pg_user_revoke_sub", reason=reason
+        )
         return RedirectResponse(f"/pg/users?ok={_q('سابسکرایب ابطال شد')}", status_code=303)
 
     @app.post("/pg/users/{user_id}/delete")
@@ -648,6 +775,11 @@ def register_pg_pages(
     ):
         if not staff_user_actions(staff)["delete"]:
             return RedirectResponse(f"/pg/users?err={_q('اجازه حذف ندارید')}", status_code=303)
+        try:
+            reason = reason_from_form(await request.form())
+        except ReasonRequired as exc:
+            return RedirectResponse(f"/pg/users?err={_q(str(exc))}", status_code=303)
+        targets = await pg_user_targets(session, staff, pg_user_id=user_id)
         try:
             denied = await _guard_owned_mutation(staff, user_id, session=session)
             if denied is not None:
@@ -665,6 +797,12 @@ def register_pg_pages(
             await detach_local_services_for_pg_user(session, user_id, commit=True)
         except Exception as e:
             return RedirectResponse(f"/pg/users?err={_pg_err(e)}", status_code=303)
+        await log_reasoned_action(
+            session, staff, action="pg_user_delete", target_type="pg_user", target_id=user_id, reason=reason
+        )
+        await notify_customers(
+            session, targets, action="pg_user_delete", reason=reason
+        )
         return RedirectResponse(f"/pg/users?ok={_q('کاربر حذف شد')}", status_code=303)
 
     # ---- templates ----
@@ -1523,7 +1661,8 @@ def register_pg_pages(
                         )
                         await session.commit()
                     except Exception as e:
-                        err = f"ذخیره شد ولی اشتراک زمانی اعمال نشد: {e}"
+                        logger.warning("Subscription apply failed", exc_info=True)
+                        err = f"ذخیره شد ولی اشتراک زمانی اعمال نشد: {user_safe_error(e)}"
         else:
             row, err = await grant_web_access_with_plan(
                 session,
@@ -1589,7 +1728,6 @@ def register_pg_pages(
                 plan=plan,
                 payer=None,
                 charge_wallet=False,
-                reset_user_traffic=True,
             )
         except ValueError as e:
             return RedirectResponse(f"/pg/admins?err={_q(e)}", status_code=303)
@@ -1598,7 +1736,7 @@ def register_pg_pages(
         exp = result.get("expires_at")
         exp_s = exp.strftime("%Y-%m-%d") if exp is not None else "بدون انقضا"
         return RedirectResponse(
-            f"/pg/admins?ok={_q(f'اشتراک «{pg_u}» تمدید شد — انقضا: {exp_s}')}",
+            f"/pg/admins?ok={_q(f'اشتراک «{pg_u}» تمدید شد — انقضا: {exp_s}؛ مصرف ادمین صفر شد و مصرف کاربران دست‌نخورده ماند' + (' — ' + ' '.join(result.get('warnings') or []) if result.get('warnings') else ''))}",
             status_code=303,
         )
 

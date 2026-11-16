@@ -76,7 +76,7 @@ class ShopAdminPersonaTests(unittest.IsolatedAsyncioTestCase):
                 await set_setting(session, SHOP_SWITCH, "1", reseller_id=shop)
         clear_settings_cache()
         settings = SimpleNamespace(miniapp_enabled=True, bot_token=MAIN_TOKEN, currency="تومان")
-        # A platform admin is someone listed in ADMIN_IDS; a role left on the row alone is demoted.
+        # A real platform admin is listed in ADMIN_IDS; anyone else loses the admin role on load.
         listed = get_settings().model_copy(update={"admin_ids": [ADMIN_TG]})
         self.patches = [
             patch("app.services.miniapp_auth.get_settings", return_value=settings),

@@ -412,11 +412,12 @@ async def _has_commerce_history(session: AsyncSession, user_id: int) -> bool:
     return has_order is not None
 
 
-async def demote_removed_admin(session: AsyncSession, user: BotUser) -> bool:
-    """Drop a sticky ADMIN role once the Telegram id left ADMIN_IDS; True when the role changed.
+async def demote_stale_admin(session: AsyncSession, user: BotUser) -> bool:
+    """Drop the sticky ``admin`` role of someone no longer listed in ADMIN_IDS.
 
-    The role is kept on the row, so every entry point (bot update, Mini App) must re-check it
-    against the configured list before trusting it.
+    A shop owner keeps their reseller role. Returns True when the role changed; the caller
+    commits. The role is kept on the row, so every entry point (bot update, Mini App) must
+    re-check it against the configured list before trusting it.
     """
     if user.role != Role.ADMIN.value or int(user.telegram_id or 0) in get_settings().admin_ids:
         return False
@@ -463,7 +464,7 @@ async def get_or_create_user(
         if is_admin and user.role != Role.ADMIN.value:
             user.role = Role.ADMIN.value
             changed = True
-        elif not is_admin and await demote_removed_admin(session, user):
+        elif await demote_stale_admin(session, user):
             changed = True
         # Sticky first-touch attribution for reseller shop bots. A customer who
         # already bought elsewhere keeps their services and stays out of the shop's
@@ -517,6 +518,8 @@ async def get_or_create_user(
         role=Role.ADMIN.value if is_admin else Role.USER.value,
         referral_code=_referral_code(),
         referred_by_id=referred_by_id,
+        # The referrer was looked up in this bot's shop, so the referral belongs to it.
+        referral_shop_id=reseller_owner_id if referred_by_id else None,
         reseller_id=assign_reseller,
         color_tag=DEFAULT_COLOR_TAG,
     )
@@ -808,8 +811,12 @@ DEFAULT_SETTINGS = {
     "auto_approve_after_max_amount": "0",
     "auto_approve_after_returning_only": "1",
     "faq_text": (
-        "❓ حجم تمام شد چه کنم؟\nاز بخش سرویس‌ها → تمدید.\n\n"
-        "❓ لینک کار نمی‌کند؟\nQR یا لینک را دوباره از سرویس‌های من بگیرید."
+        "❓ حجم یا زمان سرویسم تمام شد، چه کنم؟\n"
+        "از «سرویس‌های من» همان سرویس را باز کنید و «تمدید» را بزنید.\n\n"
+        "❓ لینک اتصال کار نمی‌کند؟\n"
+        "لینک یا QR را دوباره از «سرویس‌های من» بگیرید و در برنامه جایگزین کنید.\n\n"
+        "❓ هنوز مشکل دارید؟\n"
+        "از بخش «پشتیبانی» برای ما پیام بفرستید."
     ),
     "guide_text": (
         "۱) سرویس را بخرید و پرداخت را انجام دهید\n"
@@ -821,13 +828,15 @@ DEFAULT_SETTINGS = {
     "wallet_success_title": "💰 شارژ کیف پول",
     "wallet_success_text": "مبلغ {amount} به کیف پول شما اضافه شد.",
     "payment_ok_title": "✅ پرداخت تأیید شد",
-    "payment_reject_text": "پرداخت شما رد شد. اگر اشتباهی رخ داده با پشتیبانی در تماس باشید.",
+    "payment_reject_text": "پرداخت شما تأیید نشد. اگر فکر می‌کنید اشتباهی رخ داده، لطفاً با پشتیبانی تماس بگیرید.",
     "pending_order_cleanup_enabled": "0",
     "pending_order_ttl_hours": "48",
     "pending_order_cleanup_awaiting_approval": "0",
     "pending_order_approval_ttl_hours": "72",
     "pending_order_cleanup_last_run": "",
     "pending_order_cleanup_last_count": "0",
+    # One-shot banner after soft-cancel is retired by the hourly purge job.
+    "cleanup_soft_cancel_retired_notice": "0",
     "card_pay_text": (
         "مبلغ قابل پرداخت: <b>{amount}</b>\n"
         "شماره کارت: <code>{card}</code>\n"
@@ -856,6 +865,7 @@ DEFAULT_SETTINGS = {
     "notify_panel_update": "1",
     "notify_panel_capacity": "1",
     "notify_panel_delivery_failures": "1",
+    "notify_service_panel_missing": "1",
     "notify_service_import_request": "1",
     "notify_auto_approve": "1",
     "notify_account_edits": "1",
@@ -864,6 +874,15 @@ DEFAULT_SETTINGS = {
     "user_alert_low_traffic_pct": "20",
     "user_alert_low_time_pct": "20",
     "first_use_nudge_enabled": "0",
+    # Expired / volume-finished service cleanup (service_cleanup.py keeps the same defaults).
+    "expired_cleanup_enabled": "0",
+    "expired_cleanup_days": "7",
+    "expired_cleanup_enabled_at": "",
+    "expired_cleanup_warn_first": "3",
+    "expired_cleanup_warn_last": "1",
+    "volume_cleanup_enabled": "0",
+    "volume_cleanup_days": "30",
+    "volume_cleanup_enabled_at": "",
     # Reseller panel URLs (setup links + messages). Empty = system defaults
     "reseller_panel_base_url": "",
     "reseller_pg_panel_base_url": "",
@@ -906,7 +925,10 @@ DEFAULT_SETTINGS = {
     "btn_adm_hub_product": "📦 محصول و پاسارگارد",
     "btn_adm_hub_marketing": "🎯 بازاریابی",
     "btn_adm_hub_system": "🛠 سیستم",
+    "btn_adm_payg_review": "🧾 بازبینی PAYG",
     "btn_adm_edit_mode": "✏️ حالت ویرایش منوها",
+    "btn_adm_service_cleanup": "🗑 پاکسازی سرویس‌ها",
+    "btn_res_service_cleanup": "🗑 پاکسازی سرویس‌ها",
     # Submenu and hub button labels (editable from the bot editor and settings).
     "btn_pg_stats": "🏠 نمای کلی",
     "btn_pg_users": "👥 کاربران",
@@ -976,6 +998,24 @@ DEFAULT_SETTINGS = {
     "btn_adm_plans_view": "📋 مشاهده پلن‌ها",
     "btn_adm_gift_codes": "🎁 کدهای هدیه",
     "btn_adm_campaigns": "📣 کمپین‌ها",
+    "btn_adm_cashback": "💸 کش‌بک",
+    "btn_res_cashback": "💸 کش‌بک",
+    "btn_res_child_pricing": "🏷 قیمت زیرمجموعه",
+    "btn_adm_trial_users": "🧪 کاربران تست",
+    "btn_adm_broadcast_history": "📜 تاریخچهٔ ارسال‌ها",
+    "btn_adm_staff_audit": "🧾 گزارش کارکنان",
+    "btn_adm_service_shop_review": "🏷 تعیین فروشگاه سرویس",
+    "btn_pg_hosts": "🌐 هاست‌ها",
+    "btn_pg_inbounds": "📡 اینباندها",
+    "btn_pg_admins": "🛡 ادمین‌های پنل",
+    "btn_res_trial_users": "🧪 کاربران تست",
+    "btn_res_staff_audit": "🧾 گزارش کارکنان",
+    "btn_adm_discounts": "🏷 تخفیف‌ها",
+    "btn_adm_funnel": "📊 رفتار کاربر",
+    "btn_res_gift_codes": "🎁 کد هدیه",
+    "btn_res_campaigns": "📣 کمپین‌ها",
+    "btn_res_discounts": "🏷 تخفیف‌ها",
+    "btn_res_funnel": "📊 رفتار کاربر",
     "btn_adm_loy_overview": "📊 نمای کلی",
     "btn_adm_loy_rules": "📐 قوانین امتیاز",
     "btn_adm_loy_rewards": "🎁 جوایز",
@@ -994,6 +1034,7 @@ DEFAULT_SETTINGS = {
     "btn_res_payments": "🧾 رسیدهای در انتظار",
     "btn_res_tickets": "🎫 تیکت‌های مشتریان",
     "btn_res_loyalty": "⭐ باشگاه مشتریان",
+    "btn_res_broadcast": "📢 پیام گروهی",
     "btn_res_settings": "⚙️ تنظیمات فروشگاه",
     "btn_res_billing": "💰 کیف پول PAYG",
     "btn_res_grp_daily": "📥 کارهای روزانه",
@@ -1016,6 +1057,10 @@ DEFAULT_SETTINGS = {
     "btn_adm_preview": "👁 پیش‌نمایش منوی کاربر",
     "btn_adm_exit_preview": "🛠 بازگشت به پنل ادمین",
     "btn_buy_continue": "🟢✅ ادامه خرید",
+    # The shop's first step: trial, fixed plans (when no category is linked) and custom plan.
+    "btn_shop_kind_trial": "تست",
+    "btn_shop_kind_fixed": "ثابت",
+    "btn_shop_kind_custom": "دلخواه",
     "btn_back": "⬅️ بازگشت",
     "btn_pay_wallet": "🟢👛 پرداخت از کیف پول",
     "btn_pay_card": "🔵💳 کارت به کارت",
@@ -1072,6 +1117,7 @@ DEFAULT_SETTINGS = {
     "pay_bbc_enabled": "0",
     "pay_card_auto_enabled": "0",
     "pay_discount_enabled": "1",
+    "custom_service_name_enabled": "0",
     # JSON list of API gateways (see psp_gateways.py); empty = the single psp_* gateway below.
     "psp_gateways": "[]",
     "psp_provider": "zarinpal",
@@ -1125,6 +1171,11 @@ DEFAULT_SETTINGS = {
     "billing_low_balance": "10000",
     "billing_on_empty": "block_provision",
     "billing_tick_minutes": "15",
+    # Credit statements: days after month end, then days after due for each ladder step.
+    "credit_due_days": "7",
+    "credit_block_create_days": "3",
+    "credit_block_changes_days": "7",
+    "credit_block_days": "14",
     "volume_external_sync_minutes": "15",
     # UX20 ops
     "shop_maintenance_enabled": "0",
@@ -1133,6 +1184,8 @@ DEFAULT_SETTINGS = {
         "تمدید و پشتیبانی فعال است — کمی بعد دوباره سر بزنید."
     ),
     "admin_daily_report_enabled": "1",
+    "pg_link_watchdog_enabled": "1",
+    "pg_link_alerts_enabled": "1",
     "admin_daily_report_hour": "0",
     "admin_daily_report_last": "",
     "admin_daily_report_template": "",
@@ -1158,7 +1211,7 @@ DEFAULT_SETTINGS = {
     "action_center_expire_days": "3",
     "funnel_tracking_enabled": "1",
     "one_tap_renew_enabled": "1",
-    "service_import_enabled": "0",
+    "service_import_enabled": "1",
     "chat_cleanup_enabled": "1",
     "menu_keyboard_persistent": "0",
     # Shop Mini Apps: platform switch and each shop's own switch, both off until turned on.
@@ -1185,18 +1238,17 @@ SETTINGS_TABS: list[tuple[str, str]] = [
     ("messages", "متن پیام‌ها"),
     ("buttons", "متن دکمه‌ها"),
     (SCREEN_TEXT_TAB, "تیتر و توضیح منوها"),
-    ("colors", "رنگبندی دکمه‌ها"),
-    ("menu", "منوی بات"),
+    ("colors", "رنگ دکمه‌ها"),
+    ("menu", "منوی ربات"),
     ("miniapp", "مینی‌اپ"),
     ("links", "لینک‌های سریع"),
     ("qr", "QR اشتراک"),
-    ("naming", "نام‌گذاری سرویس"),
-    ("limits", "محدودیت"),
+    ("naming", "قالب نام‌گذاری"),
+    ("limits", "قوانین و محدودیت‌ها"),
     ("service_import", "افزودن سرویس قبلی"),
     ("guides", "آموزش اتصال"),
-    ("notifications", "نوتیفیکیشن"),
+    ("notifications", "هشدارها"),
     ("daily_report", "گزارش روزانه"),
-    ("bot", "ربات و اتصال"),
 ]
 
 # Legacy bot-settings tabs moved to page-level modals (finance / support / loyalty).
@@ -1208,10 +1260,10 @@ SETTINGS_DOMAIN_REDIRECTS: dict[str, str] = {
     "supports": "/tickets?supports=1",
     "loyalty": "/loyalty?settings=referral",
     "reseller": "/resellers",
-    # Merged into «محدودیت»
+    # Merged into «قوانین و محدودیت‌ها»
     "forcejoin": "/settings?tab=limits",
     "terms": "/settings?tab=limits",
-    # PG connection lives under «ربات و اتصال»
+    # PG connection lives under «اتصال ربات و پاسارگارد» (system settings)
     "pasarguard": "/settings?tab=bot",
 }
 
@@ -1222,6 +1274,8 @@ PANEL_SETTINGS_TABS: list[tuple[str, str]] = [
     ("pwa", "ظاهر و برند"),
     # Tab key stays "ssl" so saved links keep working.
     ("ssl", "دامنه‌ها"),
+    # Bot token, webhook and PasarGuard credentials are server settings, not shop settings.
+    ("bot", "اتصال ربات و پاسارگارد"),
     ("update", "آپدیت"),
 ]
 PANEL_SETTINGS_KEYS = {t[0] for t in PANEL_SETTINGS_TABS}
@@ -1243,6 +1297,10 @@ SETTING_VISIBILITY: dict[str, tuple[str, tuple[str, ...]]] = {
     "crypto_rate_api_path": ("crypto_rate_mode", ("api",)),
     "crypto_rate_api_divisor": ("crypto_rate_mode", ("api",)),
 }
+
+# Main-bot switch only: a shop gets the name step from its package permission instead.
+CUSTOM_SERVICE_NAME_GROUP = "نام دلخواه سرویس"
+PLATFORM_ONLY_SETTING_GROUPS: frozenset[str] = frozenset({CUSTOM_SERVICE_NAME_GROUP})
 
 SETTING_GROUPS = {
     "خوش‌آمد و هویت": [
@@ -1354,6 +1412,7 @@ SETTING_GROUPS = {
         ),
     ],
     "متن دعوت دوستان": [
+        ("referral_bonus", "پاداش دعوت (تومان)", "number", "هدیه به معرف بعد از خرید موفق دعوت‌شده"),
         ("referral_text", "متن دعوت دوستان", "textarea", "متغیرها: {code} {link} — فهرست: /message-variables"),
     ],
     BUTTON_LABELS_GROUP: [
@@ -1416,6 +1475,9 @@ SETTING_GROUPS = {
         ("btn_adm_preview", "دکمه پیش‌نمایش کاربر (ادمین)", "text", "هاب سیستم"),
         ("btn_adm_exit_preview", "خروج از پیش‌نمایش", "text", "روی کیبورد هنگام پیش‌نمایش منوی کاربر"),
         ("btn_buy_continue", "ادامه خرید (فروشگاه)", "text", "زیر جزئیات پلن"),
+        ("btn_shop_kind_trial", "دکمه تست (فروشگاه)", "text", "قدم اول خرید"),
+        ("btn_shop_kind_fixed", "دکمه پلن ثابت (فروشگاه)", "text", "قدم اول خرید، وقتی دسته‌ای تعریف نشده"),
+        ("btn_shop_kind_custom", "دکمه پلن دلخواه (فروشگاه)", "text", "قدم اول خرید"),
         ("btn_back", "دکمه بازگشت", "text", "زیر پیام‌های انتخابی (اینلاین)"),
         ("btn_cancel", "انصراف", "text", ""),
         ("btn_renew", "تمدید", "text", ""),
@@ -1457,6 +1519,30 @@ SETTING_GROUPS = {
             "number",
             "فاصله اجرای billing tick برای کسر مصرف تفاضلی (دلتا) از watermark نماینده",
         ),
+        (
+            "credit_due_days",
+            "مهلت پرداخت صورت‌حساب (روز)",
+            "number",
+            "روز بعد از پایان ماه تا سررسید صورت‌حساب اعتبار؛ از سررسید، اعتبار تازه داده نمی‌شود",
+        ),
+        (
+            "credit_block_create_days",
+            "بستن ساخت کاربر (روز بعد از سررسید)",
+            "number",
+            "از این روز، نمایندهٔ بدهکار کاربر تازه نمی‌سازد",
+        ),
+        (
+            "credit_block_changes_days",
+            "بستن تمدید و تغییر (روز بعد از سررسید)",
+            "number",
+            "از این روز، تمدید، افزایش حجم و ریست هم بسته است",
+        ),
+        (
+            "credit_block_days",
+            "مسدودسازی کامل (روز بعد از سررسید)",
+            "number",
+            "از این روز حساب نماینده تعلیق می‌شود؛ با پرداخت خودکار باز می‌شود",
+        ),
     ],
     "هشدار سرویس کاربر": [
         (
@@ -1489,7 +1575,7 @@ SETTING_GROUPS = {
             "admin_daily_report_enabled",
             "ارسال گزارش روزانه در تلگرام",
             "toggle",
-            "هر روز در ساعت مشخص‌شده خلاصهٔ انتخابی به ادمین‌ها فرستاده می‌شود",
+            "هر روز در ساعت مشخص‌شده، خلاصهٔ روز کامل قبل (تقویم تهران) فرستاده می‌شود",
         ),
         (
             "subordinate_report_enabled",
@@ -1501,13 +1587,27 @@ SETTING_GROUPS = {
             "admin_daily_report_hour",
             "ساعت ارسال (۰–۲۳، UTC)",
             "number",
-            "ساعت تهران = UTC + ۳:۳۰ · مثلاً ۲۰ = ۲۳:۳۰ تهران · اگر ربات در آن ساعت خاموش باشد، گزارش همان روز بعداً فرستاده می‌شود",
+            "گزارش روز کامل قبل تهران را می‌فرستد · تهران = UTC + ۳:۳۰ · پیش‌فرض ۰ = ۰۳:۳۰ تهران · اگر ربات خاموش باشد همان روز بعداً فرستاده می‌شود",
         ),
         (
             "admin_daily_report_template",
             "متن گزارش",
             "textarea",
             "متغیرها: {admin_name} {users_new} {revenue_today} … — فهرست کامل در همین تب و /message-variables",
+        ),
+    ],
+    "سلامت ارتباط پاسارگارد": [
+        (
+            "pg_link_watchdog_enabled",
+            "پایش خودکار ارتباط با پاسارگارد",
+            "toggle",
+            "هر دقیقه یک خواندن سبک برای بازیابی ارتباط؛ در صورت قطع مکرر کلاینت HTTP بازسازی می‌شود. پیش‌فرض روشن است.",
+        ),
+        (
+            "pg_link_alerts_enabled",
+            "اعلان قطع و برقراری ارتباط پاسارگارد",
+            "toggle",
+            "به مالک تلگرام اطلاع می‌دهد وقتی لینک قطع یا دوباره برقرار می‌شود. حداکثر یک پیام از هر نوع در ۱۵ دقیقه. پیش‌فرض روشن است.",
         ),
     ],
     "گزارش و عملیات": [
@@ -1590,41 +1690,18 @@ SETTING_GROUPS = {
             "عددی؛ چند شناسه را با کاما جدا کنید. ربات باید در آن چت شروع شده باشد.",
         ),
     ],
-    "حالت تعمیرات و رسید": [
-        (
-            "shop_maintenance_enabled",
-            "حالت تعمیرات فروشگاه",
-            "toggle",
-            "خرید جدید بسته می‌شود؛ تمدید و پشتیبانی باز می‌ماند",
-        ),
-        (
-            "shop_maintenance_text",
-            "متن حالت تعمیرات",
-            "textarea",
-            "پیامی که در ربات به کاربر نشان داده می‌شود",
-        ),
-        (
-            "receipt_auto_match_enabled",
-            "پیشنهاد تطبیق رسیدهای هم‌مبلغ",
-            "toggle",
-            "در صف پرداخت‌ها موارد هم‌مبلغ در بازه زمانی پیشنهاد می‌شود",
-        ),
-        (
-            "receipt_match_window_minutes",
-            "بازه تطبیق رسید (دقیقه)",
-            "number",
-            "مثلاً ۱۲۰",
-        ),
-    ],
     "QR اشتراک": [
         ("qr_enabled", "ارسال خودکار QR", "toggle", "بعد از تحویل سرویس، QR لینک اشتراک فرستاده می‌شود"),
         ("show_sub_link_in_text", "نمایش لینک در کپشن QR", "toggle", "لینک متنی هم در کپشن QR باشد"),
         ("qr_caption", "کپشن عکس QR", "textarea", "جزئیات لینک/حجم/زمان خودکار اضافه می‌شود. متغیر: {url} یا {sub_link}"),
         ("qr_background", "عکس پس‌زمینه QR", "image", "اختیاری — PNG/JPG"),
     ],
-    "روش‌های پرداخت": [
+    # Payment settings: one section per payment method, its switch first.
+    "کیف پول": [
         ("pay_wallet_enabled", "کیف پول داخلی", "toggle", "پرداخت از موجودی کیف پول کاربر"),
-        ("pay_card_enabled", "کارت به کارت", "toggle", ""),
+        ("btn_pay_wallet", "متن دکمه کیف پول", "text", ""),
+    ],
+    "رسیدها": [
         ("auto_approve_payments", "تأیید خودکار رسید", "toggle", "اگر روشن باشد، هر رسیدی که مشتری می‌فرستد خودکار تأیید می‌شود: خرید سرویس، تمدید، افزونه و شارژ کیف پول. برای رسید کارت‌به‌کارتِ خرید سرویس جدید می‌توانید پایین‌تر زمان انتظار بگذارید؛ بقیه بلافاصله تأیید می‌شوند."),
         (
             "auto_approve_after_minutes",
@@ -1644,54 +1721,40 @@ SETTING_GROUPS = {
             "toggle",
             "روشن (پیشنهادی): فقط مشتریانی که قبلاً از همین فروشگاه خرید پولی تحویل‌شده دارند خودکار تأیید می‌شوند؛ مشتری جدید دستی می‌ماند.",
         ),
-        ("pay_card_auto_enabled", "تأیید خودکار کارت به کارت", "toggle", "وب‌هوک امضادار از سرویس تأیید کارت — کنار رسید دستی"),
         (
-            "pay_bbc_enabled",
-            "بزن به کارت",
+            "receipt_auto_match_enabled",
+            "پیشنهاد تطبیق رسیدهای هم‌مبلغ",
             "toggle",
-            "کارت‌به‌کارت خودکار با bezanbecard.ir و کلید API خود فروشگاه: مشتری مبلغ یکتا را "
-            "واریز می‌کند و ربات بعد از تأیید بزن به کارت، خودکار تحویل می‌دهد. نیاز به آدرس https دارد.",
+            "در صف پرداخت‌ها موارد هم‌مبلغ در بازه زمانی پیشنهاد می‌شود",
         ),
-        ("pay_gateway_enabled", "درگاه پرداخت (لینک + رسید)", "toggle", "لینک درگاه خارجی + ارسال رسید — روش قبلی حفظ می‌شود"),
         (
-            "pay_psp_enabled",
-            "درگاه آنلاین API",
-            "toggle",
-            "درگاه واقعی request→verify (زرین‌پال / سان‌پی / Mock فقط با ALLOW_SETTLEMENT_MOCK)",
+            "receipt_match_window_minutes",
+            "بازه تطبیق رسید (دقیقه)",
+            "number",
+            "مثلاً ۱۲۰",
         ),
-        ("pay_crypto_enabled", "رمزارز", "toggle", ""),
-        ("pay_stars_enabled", "استارز تلگرام", "toggle", "پرداخت درون‌برنامه‌ای با ⭐"),
-        ("pay_discount_enabled", "کد تخفیف", "toggle", "نمایش دکمه کد تخفیف هنگام پرداخت"),
-        ("referral_bonus", "پاداش دعوت (تومان)", "number", "هدیه به معرف بعد از خرید موفق دعوت‌شده"),
         ("payment_reject_text", "متن رد پرداخت", "textarea", "وقتی ادمین رسید را رد می‌کند"),
     ],
-    "پاکسازی سفارش‌های معلق": [
+    "کد تخفیف": [
+        ("pay_discount_enabled", "کد تخفیف", "toggle", "نمایش دکمه کد تخفیف هنگام پرداخت"),
+        ("btn_pay_discount", "متن دکمه کد تخفیف", "text", ""),
+    ],
+    "وضعیت فروش": [
         (
-            "pending_order_cleanup_enabled",
-            "لغو خودکار سفارش‌های معلق",
+            "shop_maintenance_enabled",
+            "حالت تعمیرات فروشگاه",
             "toggle",
-            "هر ساعت سفارش‌های پرداخت‌نشده‌ای که از مهلت گذشته‌اند لغو می‌شوند",
+            "خرید جدید بسته می‌شود؛ تمدید و پشتیبانی باز می‌ماند",
         ),
         (
-            "pending_order_ttl_hours",
-            "مهلت سفارش پرداخت‌نشده (ساعت)",
-            "number",
-            "سفارش‌های در انتظار پرداخت یا رسید که قدیمی‌تر از این مقدار باشند لغو می‌شوند (۱ تا ۷۲۰)",
-        ),
-        (
-            "pending_order_cleanup_awaiting_approval",
-            "لغو سفارش‌های منتظر تأیید رسید",
-            "toggle",
-            "مشتری رسید فرستاده و منتظر تأیید ادمین است؛ فقط اگر بخواهید بعد از مهلت جداگانهٔ زیر لغو شود روشن کنید",
-        ),
-        (
-            "pending_order_approval_ttl_hours",
-            "مهلت سفارش منتظر تأیید (ساعت)",
-            "number",
-            "فقط وقتی گزینهٔ بالا روشن است اعمال می‌شود (۱ تا ۷۲۰)",
+            "shop_maintenance_text",
+            "متن حالت تعمیرات",
+            "textarea",
+            "پیامی که در ربات به کاربر نشان داده می‌شود",
         ),
     ],
     "کارت به کارت": [
+        ("pay_card_enabled", "کارت به کارت", "toggle", ""),
         (
             "payment_cards",
             "کارت‌ها",
@@ -1708,6 +1771,7 @@ SETTING_GROUPS = {
         ("btn_pay_card", "متن دکمه کارت به کارت", "text", ""),
     ],
     "درگاه پرداخت": [
+        ("pay_gateway_enabled", "درگاه پرداخت (لینک + رسید)", "toggle", "لینک درگاه خارجی + ارسال رسید — روش قبلی حفظ می‌شود"),
         (
             "payment_gateways",
             "درگاه‌ها",
@@ -1718,6 +1782,7 @@ SETTING_GROUPS = {
         ("btn_pay_gateway", "متن دکمه درگاه", "text", ""),
     ],
     "رمزارز": [
+        ("pay_crypto_enabled", "رمزارز", "toggle", ""),
         (
             "payment_crypto_wallets",
             "آدرس‌های ولت",
@@ -1742,6 +1807,7 @@ SETTING_GROUPS = {
         ("btn_pay_crypto", "متن دکمه رمزارز", "text", ""),
     ],
     "استارز تلگرام": [
+        ("pay_stars_enabled", "استارز تلگرام", "toggle", "پرداخت درون‌برنامه‌ای با ⭐"),
         (
             "stars_toman_per_star",
             "هر استارز چند تومان؟",
@@ -1753,6 +1819,12 @@ SETTING_GROUPS = {
         ("btn_pay_stars", "متن دکمه استارز", "text", ""),
     ],
     "درگاه آنلاین API": [
+        (
+            "pay_psp_enabled",
+            "درگاه آنلاین API",
+            "toggle",
+            "درگاه واقعی request→verify (زرین‌پال / سان‌پی / Mock فقط با ALLOW_SETTLEMENT_MOCK)",
+        ),
         (
             "psp_gateways",
             "درگاه‌ها",
@@ -1780,6 +1852,13 @@ SETTING_GROUPS = {
     ],
     "بزن به کارت": [
         (
+            "pay_bbc_enabled",
+            "بزن به کارت",
+            "toggle",
+            "کارت‌به‌کارت خودکار با bezanbecard.ir و کلید API خود فروشگاه: مشتری مبلغ یکتا را "
+            "واریز می‌کند و ربات بعد از تأیید بزن به کارت، خودکار تحویل می‌دهد. نیاز به آدرس https دارد.",
+        ),
+        (
             "bbc_api_key",
             "کلید API",
             "password",
@@ -1796,6 +1875,7 @@ SETTING_GROUPS = {
         ("btn_pay_bbc", "متن دکمه بزن به کارت", "text", ""),
     ],
     "تأیید خودکار کارت به کارت": [
+        ("pay_card_auto_enabled", "تأیید خودکار کارت به کارت", "toggle", "وب‌هوک امضادار از سرویس تأیید کارت — کنار رسید دستی"),
         (
             "card_auto_provider",
             "نام ارائه‌دهنده",
@@ -1815,10 +1895,6 @@ SETTING_GROUPS = {
             "پلتفرم: /payments/settlement/card-auto/platform/webhook — فروشگاه: .../shop/{reseller_id}/webhook",
         ),
     ],
-    "متن دکمه‌های پرداخت": [
-        ("btn_pay_wallet", "پرداخت با کیف پول", "text", ""),
-        ("btn_pay_discount", "کد تخفیف", "text", ""),
-    ],
     "نام‌گذاری سرویس در پاسارگارد": [
         ("pg_username_prefix", "پیشوند ثابت", "text", "مثلاً clk — اول نام کاربر ساخته‌شده"),
         ("pg_username_suffix", "پسوند ثابت", "text", "اختیاری — ته نام"),
@@ -1826,7 +1902,17 @@ SETTING_GROUPS = {
             "pg_username_pattern",
             "الگوی نام",
             "text",
-            "متغیرها: {prefix} {random} {suffix} {id} {plan_volume} {plan_unit} {username} — پیش‌فرض: {prefix}_{random}{suffix}",
+            "متغیرها: {prefix} {random} {suffix} {id} {plan_volume} {plan_unit} {username} — پیش‌فرض: {prefix}_{random}{suffix}. "
+            "نام دلخواه خریدار جای {random} می‌نشیند (بدون {random}: الگوی پیش‌فرض).",
+        ),
+    ],
+    CUSTOM_SERVICE_NAME_GROUP: [
+        (
+            "custom_service_name_enabled",
+            "نام دلخواه سرویس هنگام خرید",
+            "toggle",
+            "روشن باشد، خریدار ربات اصلی و مینی‌اپ بعد از انتخاب پلن نام سرویس را خودش می‌نویسد یا «اسم تصادفی» را می‌زند. "
+            "فروشگاه‌ها این امکان را از دسترسی «نام دلخواه سرویس» در پلن نمایندگی می‌گیرند.",
         ),
     ],
     "کانال اجباری": [
@@ -1978,20 +2064,21 @@ TAB_SETTING_GROUPS: dict[str, list[str]] = {
     "colors": ["رنگ دکمه‌ها"],
     "qr": ["QR اشتراک"],
     "payment": [
-        "روش‌های پرداخت",
+        "کیف پول",
         "کارت به کارت",
         "تأیید خودکار کارت به کارت",
+        "رسیدها",
         "درگاه پرداخت",
         "درگاه آنلاین API",
         "بزن به کارت",
         "رمزارز",
         "استارز تلگرام",
-        "متن دکمه‌های پرداخت",
-        "حالت تعمیرات و رسید",
+        "کد تخفیف",
+        "وضعیت فروش",
     ],
     "supports": ["متن پشتیبانی ربات"],
     "loyalty": ["متن دعوت دوستان"],
-    "naming": ["نام‌گذاری سرویس در پاسارگارد"],
+    "naming": ["نام‌گذاری سرویس در پاسارگارد", CUSTOM_SERVICE_NAME_GROUP],
     "limits": [
         "معرف اجباری",
         "شماره تماس خرید",
@@ -2008,8 +2095,7 @@ TAB_SETTING_GROUPS: dict[str, list[str]] = {
     "forcejoin": ["کانال اجباری"],
     "terms": ["قوانین ورود به ربات", "قوانین خرید پلن کاربر", "قوانین خرید پلن نماینده"],
     "billing": ["مدیریت PAYG"],
-    "cleanup": ["پاکسازی سفارش‌های معلق"],
-    "notifications": ["هشدار سرویس کاربر", "گزارش و عملیات"],
+    "notifications": ["هشدار سرویس کاربر", "گزارش و عملیات", "سلامت ارتباط پاسارگارد"],
     "daily_report": ["گزارش روزانه"],
     "backup": ["بکاپ زمان‌بندی", "ارسال بکاپ به تلگرام"],
     "pwa": [],
@@ -2049,6 +2135,12 @@ SECRET_KEEP_VALUES = {"", "••••", "****", "__keep__", "__unchanged__"}
 
 def should_keep_secret_value(raw: str | None) -> bool:
     return str(raw if raw is not None else "").strip() in SECRET_KEEP_VALUES
+
+
+# Keys of PLATFORM_ONLY_SETTING_GROUPS: never shown on or saved from a shop's settings.
+PLATFORM_ONLY_SETTING_KEYS: frozenset[str] = frozenset(
+    field[0] for name in PLATFORM_ONLY_SETTING_GROUPS for field in SETTING_GROUPS[name]
+)
 
 
 def keys_for_tab(tab: str) -> set[str]:

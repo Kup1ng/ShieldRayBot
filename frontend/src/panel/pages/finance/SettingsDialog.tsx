@@ -136,7 +136,9 @@ function SettingsBody({ initialTab, onTabChange }: { initialTab: string; onTabCh
   const refresh = useCallback(() => reload(), [reload]);
   if (!state.data) return state.status === "error" ? <ErrorBlock message={state.message} onRetry={reload} /> : <LoadingBlock rows={4} />;
   const data = state.data;
-  const tab = (data.tabs.find((t) => t.id === initialTab) ?? data.tabs[0]).id;
+  // «cleanup» in an address is the deletion rules now; the old automatic cancelling tab is retired.
+  const wanted = initialTab === "cleanup" ? "purge" : initialTab;
+  const tab = (data.tabs.find((t) => t.id === wanted) ?? data.tabs[0]).id;
   return (
     <div className="flex flex-col gap-4">
       {state.status === "error" ? <ErrorBlock message={state.message} onRetry={reload} /> : null}

@@ -12,7 +12,8 @@ import { PanelShell } from "../../layout/PanelShell";
 import { BulkBar, Ltr, PagerBar, RowMenu, SearchBar, StatusChip, type MenuAction } from "../../ui/Data";
 import { GlassSection, PageHeader } from "../../ui/Page";
 import { EmptyBlock, Loadable, Notice } from "../../ui/States";
-import { availableOps, countText, eligibleIds, runBulk, type BulkSpec } from "./bulk";
+import { ReasonDialog, type ReasonRequest } from "../users/ReasonDialog";
+import { availableOps, countText, eligibleIds } from "./bulk";
 import { daysLeftText, USER_OP_ORDER, USER_OPS, userStatusColor } from "./format";
 import { useRowSelection } from "./selection";
 import type { PgUserOp, PgUserRow, PgUsersPayload } from "./types";
@@ -22,16 +23,8 @@ import { PgTabs, selectCell, selectColumn } from "./ui";
 const LIST_PATH = "/api/panel/pg/users";
 const BULK_URL = "/pg/users/bulk-action";
 
-const BULK: Record<PgUserOp, BulkSpec> = Object.fromEntries(
-  USER_OP_ORDER.map((op) => [
-    op,
-    {
-      label: USER_OPS[op].label,
-      danger: op === "delete",
-      ask: (count: number) => ({ title: USER_OPS[op].bulkTitle, text: countText(USER_OPS[op].bulkText, count), confirmLabel: USER_OPS[op].confirm, tone: USER_OPS[op].tone }),
-    },
-  ]),
-) as Record<PgUserOp, BulkSpec>;
+// The server refuses every panel-user operation without a reason (at least three characters) and logs it.
+const REASON_LABEL = "علت این عملیات";
 
 function TrafficCell({ row }: { row: PgUserRow }) {
   return (
@@ -117,6 +110,7 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
   const [createOpen, setCreateOpen] = useState(false);
   const [editing, setEditing] = useState<PgUserRow | null>(null);
   const [link, setLink] = useState<{ id: number; username: string } | null>(null);
+  const [reason, setReason] = useState<ReasonRequest | null>(null);
 
   const handlers: RowHandlers = useMemo(
     () => ({
@@ -124,7 +118,16 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
       onEdit: setEditing,
       onOp: (row, op) => {
         const meta = USER_OPS[op];
-        void run(`/pg/users/${row.id}/${op}`, {}, { ask: { title: meta.title, text: meta.text, confirmLabel: meta.confirm, tone: meta.tone }, refresh: reload });
+        setReason({
+          title: meta.title,
+          message: meta.text,
+          confirmLabel: meta.confirm,
+          reasonLabel: REASON_LABEL,
+          tone: meta.tone,
+          onConfirm: async (text) => {
+            await run(`/pg/users/${row.id}/${op}`, { reason: text }, { refresh: reload });
+          },
+        });
       },
     }),
     [reload],
@@ -132,15 +135,26 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
 
   const buttons = availableOps(data.rows, selection.ids, USER_OP_ORDER).map((op) => {
     const ids = eligibleIds(data.rows, selection.ids, op);
+    const meta = USER_OPS[op as PgUserOp];
     return {
       op,
-      label: BULK[op as PgUserOp].label,
+      label: meta.label,
       danger: op === "delete",
       count: ids.length,
       onPress: () =>
-        void runBulk(BULK_URL, `/pg/users${window.location.search}`, op, ids, BULK[op as PgUserOp], () => {
-          selection.clear();
-          reload();
+        setReason({
+          title: meta.bulkTitle,
+          message: countText(meta.bulkText, ids.length),
+          confirmLabel: meta.confirm,
+          reasonLabel: REASON_LABEL,
+          tone: meta.tone,
+          onConfirm: async (text) => {
+            const refresh = () => {
+              selection.clear();
+              reload();
+            };
+            await run(BULK_URL, { action: op, ids, return_to: `/pg/users${window.location.search}`, reason: text }, { refresh });
+          },
         }),
     };
   });
@@ -180,6 +194,7 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
       <CreateUserDialog open={createOpen} can={data.can} templates={data.templates} groups={data.groups} onClose={() => setCreateOpen(false)} refresh={reload} />
       <EditUserDialog row={editing} groups={data.groups} onClose={() => setEditing(null)} refresh={reload} />
       <LinkDialog target={link} onClose={() => setLink(null)} />
+      <ReasonDialog request={reason} onClose={() => setReason(null)} />
     </>
   );
 }

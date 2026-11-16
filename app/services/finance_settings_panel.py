@@ -1,4 +1,4 @@
-"""Data of the finance settings dialog (payment, PAYG, cleanup, purge) for the React panel.
+"""Data of the finance settings dialog (payment, PAYG, cleanup) for the React panel.
 
 The forms still post the existing settings handlers; this module only describes their fields. Secret
 fields (``password`` kind) are never sent back, only whether a value is saved, and the online gateway
@@ -12,11 +12,11 @@ from urllib.parse import quote
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.cleanup_settings import SAVE_PATH as CLEANUP_SAVE_PATH
 from app.services.finance_panel import SCOPE_UNKNOWN, FinanceAccess, FinanceScopeError
 from app.services.order_purge import purge_panel_context
 from app.services.psp_gateways import psp_gateways_form_json
 from app.services.shop_scope import shop_owner_id
-from app.services.stale_order_cleanup import cleanup_status
 from app.services.users import SETTING_GROUPS, SETTING_VISIBILITY, TAB_SETTING_GROUPS, get_all_settings
 
 TRUE_VALUES = frozenset({"1", "true", "yes", "on"})
@@ -73,7 +73,7 @@ def _groups_payload(tab: str, values: dict[str, str]) -> list[dict[str, Any]]:
     ]
 
 
-def _purge_payload(purge: dict[str, Any]) -> dict[str, Any]:
+def _purge_payload(purge: dict[str, Any], *, rules_action: str) -> dict[str, Any]:
     ready = purge["ready"]
     last = purge["last_run"]
     return {
@@ -97,18 +97,8 @@ def _purge_payload(purge: dict[str, Any]) -> dict[str, Any]:
             if last
             else None
         ),
-        "rules_action": str(purge["rules_action"]),
+        "rules_action": rules_action,
         "run_action": str(purge["run_action"]),
-    }
-
-
-def _cleanup_payload(status: dict[str, Any] | None) -> dict[str, Any] | None:
-    if status is None:
-        return None
-    return {
-        "ready_count": int(status["ready_count"]),
-        "last_run": str(status["last_run"]),
-        "last_count": int(status["last_count"]),
     }
 
 
@@ -117,44 +107,42 @@ def _next(settings_tab: str) -> str:
 
 
 async def settings_payload(session: AsyncSession, staff: dict, access: FinanceAccess) -> dict[str, Any]:
-    """The dialog's tabs with their fields, saved values and the existing handlers they post to."""
+    """The dialog's tabs with their fields, saved values and the existing handlers they post to.
+
+    Cleanup is the tag-based deletion rules. The old automatic cancelling of pending orders is retired:
+    its fields, status and «cancel now» action are no longer offered (the keys stay empty for the page).
+    """
     if not access.can_settings:
         raise PermissionError("دسترسی تنظیمات مالی ندارید")
     if access.platform:
         values = await get_all_settings(session)
-        base, pending_path = "/settings", "/settings/cancel-pending-orders"
-        can_cleanup = staff.get("role") == "admin"
-        cleanup = await cleanup_status(session, values, reseller_id=None)
+        base = "/settings"
     else:
         shop_id = shop_owner_id(staff)
         if not shop_id:
             # Never fall back to the Owner's settings for staff without a shop.
             raise FinanceScopeError(SCOPE_UNKNOWN)
         values = await get_all_settings(session, reseller_id=shop_id)
-        base, pending_path = "/shop-settings", "/shop-settings/cancel-pending-orders"
-        can_cleanup = True
-        cleanup = await cleanup_status(session, values, reseller_id=int(shop_id))
+        base = "/shop-settings"
     purge = await purge_panel_context(session, staff, values, return_to=f"{NEXT_BASE}&settings=purge")
     tabs = [{"id": "payment", "label": "پرداخت"}]
     if access.can_billing:
         tabs.append({"id": "billing", "label": "مدیریت PAYG"})
-    if can_cleanup:
-        tabs.append({"id": "cleanup", "label": "پاکسازی"})
     if purge:
-        tabs.append({"id": "purge", "label": "حذف کامل"})
+        tabs.append({"id": "purge", "label": "پاکسازی"})
     return {
         "tabs": tabs,
         "groups": {
             "payment": _groups_payload("payment", values),
             "billing": _groups_payload("billing", values) if access.can_billing else [],
-            "cleanup": _groups_payload("cleanup", values) if can_cleanup else [],
+            "cleanup": [],
         },
         "actions": {
             "payment": f"{base}?tab=payment&next={_next('payment')}",
             "billing": f"{base}?tab=billing&next={_next('billing')}",
-            "cleanup": f"{base}?tab=cleanup&next={_next('cleanup')}",
-            "pending_orders": f"{pending_path}?next={_next('cleanup')}",
+            "cleanup": "",
+            "pending_orders": "",
         },
-        "cleanup_status": _cleanup_payload(cleanup) if can_cleanup else None,
-        "purge": _purge_payload(purge) if purge else None,
+        "cleanup_status": None,
+        "purge": _purge_payload(purge, rules_action=f"{CLEANUP_SAVE_PATH}?next={_next('purge')}") if purge else None,
     }

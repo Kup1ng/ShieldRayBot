@@ -47,11 +47,12 @@ export type BulkMeta = {
   reasonLabel?: string;
 };
 
-/** Confirmation copy of each bulk action; `{n}` is the number of eligible rows. */
+/** Confirmation copy of each bulk action; `{n}` is the number of eligible rows. A `reasonLabel` asks for
+ * the reason the server requires (at least three characters) and sends it with the action. */
 export const BULK_META: Record<BulkOp, BulkMeta> = {
-  block: { label: "مسدود", message: "{n} کاربر مسدود شوند؟ پیام برای کاربر ارسال می‌شود.", title: "مسدودسازی گروهی", confirmLabel: "مسدود کردن", tone: "warning" },
-  unblock: { label: "رفع مسدودی", message: "مسدودیت {n} کاربر برداشته شود؟", title: "رفع مسدودی گروهی", confirmLabel: "رفع مسدودی", tone: "accent" },
-  renew: { label: "تمدید", message: "سرویس بحرانی {n} کاربر با پلن فعلی تمدید شود؟ مصرف ریست می‌شود.", title: "تمدید گروهی", confirmLabel: "تمدید", tone: "accent" },
+  block: { label: "مسدود", message: "{n} کاربر مسدود شوند؟ پیام برای کاربر ارسال می‌شود.", title: "مسدودسازی گروهی", confirmLabel: "مسدود کردن", tone: "warning", reasonLabel: "علت مسدودسازی" },
+  unblock: { label: "رفع مسدودی", message: "مسدودیت {n} کاربر برداشته شود؟", title: "رفع مسدودی گروهی", confirmLabel: "رفع مسدودی", tone: "accent", reasonLabel: "علت رفع مسدودی" },
+  renew: { label: "تمدید", message: "سرویس بحرانی {n} کاربر با پلن فعلی تمدید شود؟ مصرف ریست می‌شود.", title: "تمدید گروهی", confirmLabel: "تمدید", tone: "accent", reasonLabel: "علت تمدید" },
   delete: {
     label: "حذف",
     message: "{n} کاربر و داده‌های مرتبط کامل حذف شوند؟ این عمل برگشت‌ناپذیر است.",
@@ -71,6 +72,16 @@ export function fill(template: string, n: number): string {
 /** The selected row ids a bulk action applies to (the server re-checks each one). */
 export function eligibleIds(rows: { id: number; bulk_ops: BulkOp[] }[], selected: ReadonlySet<number>, op: BulkOp): number[] {
   return rows.filter((row) => selected.has(row.id) && row.bulk_ops.includes(op)).map((row) => row.id);
+}
+
+/** Where a pasted subscription link is looked up. The link is a bearer secret: it goes in a POST body,
+ * never in the address, the list request or a message. */
+export const LINK_SEARCH_PATH = "/users/find-by-link";
+
+/** A subscription link or a long bare token, by the server's own rule (a path, or 33+ token characters). */
+export function isSubscriptionLink(text: string): boolean {
+  const value = text.trim();
+  return value.includes("/") || /^[A-Za-z0-9_-]{33,}$/.test(value);
 }
 
 /** A same-site path only: used to follow a handler's `location`. */

@@ -6,15 +6,17 @@ import { useState } from "react";
 import { Icon } from "@/icons/Icon";
 
 import { FALLBACK_ERROR, panelGet } from "../../core/api";
-import { confirm } from "../../core/confirm";
 import { run } from "../../core/actions";
 import { fa } from "../../core/format";
 import { GlassSection } from "../../ui/Page";
 import { EmptyBlock } from "../../ui/States";
 import { money } from "./format";
+import { ReasonDialog, type ReasonRequest } from "./ReasonDialog";
 import type { EditService, UserEdit } from "./types";
 
 type Props = { edit: UserEdit; reload: () => void };
+/** Opens the reason dialog: the server refuses a service change without a reason (at least three characters). */
+type AskReason = (request: ReasonRequest) => void;
 type LinkAnswer = { ok: boolean; url?: string; error?: string };
 
 const EXTEND_DAYS_LIMIT = 3650;
@@ -81,7 +83,7 @@ function Stat({ label, value }: { label: string; value: string }) {
   );
 }
 
-function RenewForm({ userId, service, plans, reload }: { userId: number; service: EditService; plans: UserEdit["plans"]; reload: () => void }) {
+function RenewForm({ userId, service, plans, reload, askReason }: { userId: number; service: EditService; plans: UserEdit["plans"]; reload: () => void; askReason: AskReason }) {
   const initial = service.plan_id !== null && plans.some((p) => p.id === service.plan_id) ? String(service.plan_id) : plans[0] ? String(plans[0].id) : "";
   const [plan, setPlan] = useState(initial);
   const [pending, setPending] = useState(false);
@@ -109,13 +111,20 @@ function RenewForm({ userId, service, plans, reload }: { userId: number; service
         className="button--ink !h-10 !rounded-lg"
         isPending={pending}
         isDisabled={!plan}
-        onPress={async () => {
-          if (!(await confirm("سرویس با پلن انتخابی تمدید شود؟", { description: "مصرف ریست می‌شود.", confirmLabel: "تمدید" }))) return;
-          setPending(true);
-          await run(`/users/${userId}/services/${service.id}/renew`, { plan_id: plan }, { success: "سرویس تمدید شد" });
-          setPending(false);
-          reload();
-        }}
+        onPress={() =>
+          askReason({
+            title: "تمدید سرویس",
+            message: "سرویس با پلن انتخابی تمدید شود؟ مصرف ریست می‌شود.",
+            confirmLabel: "تمدید",
+            reasonLabel: "علت تمدید",
+            onConfirm: async (text) => {
+              setPending(true);
+              await run(`/users/${userId}/services/${service.id}/renew`, { plan_id: plan, reason: text }, { success: "سرویس تمدید شد" });
+              setPending(false);
+              reload();
+            },
+          })
+        }
       >
         تمدید
       </Button>
@@ -123,7 +132,7 @@ function RenewForm({ userId, service, plans, reload }: { userId: number; service
   );
 }
 
-function ExtendForm({ userId, service, reload }: { userId: number; service: EditService; reload: () => void }) {
+function ExtendForm({ userId, service, reload, askReason }: { userId: number; service: EditService; reload: () => void; askReason: AskReason }) {
   const [days, setDays] = useState("0");
   const [gb, setGb] = useState("0");
   const [pending, setPending] = useState(false);
@@ -146,13 +155,25 @@ function ExtendForm({ userId, service, reload }: { userId: number; service: Edit
         className="!h-10 !rounded-lg"
         isPending={pending}
         isDisabled={!valid}
-        onPress={async () => {
-          if (!(await confirm("روز/حجم سرویس فعلی تغییر کند؟", { description: "مثبت = افزایش، منفی = کاهش", confirmLabel: "اعمال", tone: "warning" }))) return;
-          setPending(true);
-          await run(`/users/${userId}/services/${service.id}/extend`, { extra_days: days.trim() || "0", extra_gb: gb.trim() || "0" }, { success: "مانده سرویس به‌روز شد" });
-          setPending(false);
-          reload();
-        }}
+        onPress={() =>
+          askReason({
+            title: "تغییر مانده سرویس",
+            message: "روز/حجم سرویس فعلی تغییر کند؟ مثبت = افزایش، منفی = کاهش",
+            confirmLabel: "اعمال",
+            reasonLabel: "علت تغییر",
+            tone: "warning",
+            onConfirm: async (text) => {
+              setPending(true);
+              await run(
+                `/users/${userId}/services/${service.id}/extend`,
+                { extra_days: days.trim() || "0", extra_gb: gb.trim() || "0", reason: text },
+                { success: "مانده سرویس به‌روز شد" },
+              );
+              setPending(false);
+              reload();
+            },
+          })
+        }
       >
         تغییر مانده
       </Button>
@@ -160,16 +181,23 @@ function ExtendForm({ userId, service, reload }: { userId: number; service: Edit
   );
 }
 
-function DeleteButtons({ userId, service, reload }: { userId: number; service: EditService; reload: () => void }) {
+function DeleteButtons({ userId, service, reload, askReason }: { userId: number; service: EditService; reload: () => void; askReason: AskReason }) {
   const [pending, setPending] = useState(false);
   const label = `سرویس #${fa(service.id)}${service.pg_username ? ` (${service.pg_username})` : ""}`;
-  const remove = async (message: string, confirmLabel: string, fields: Record<string, string>, tone: "danger" | "warning", description?: string) => {
-    if (!(await confirm(message, { description, confirmLabel, tone }))) return;
-    setPending(true);
-    await run(`/users/${userId}/services/${service.id}/delete`, fields, { success: "سرویس حذف شد" });
-    setPending(false);
-    reload();
-  };
+  const remove = (message: string, confirmLabel: string, fields: Record<string, string>, tone: "danger" | "warning", description?: string) =>
+    askReason({
+      title: "حذف سرویس",
+      message: description ? `${message} ${description}` : message,
+      confirmLabel,
+      reasonLabel: "علت حذف",
+      tone,
+      onConfirm: async (text) => {
+        setPending(true);
+        await run(`/users/${userId}/services/${service.id}/delete`, { ...fields, reason: text }, { success: "سرویس حذف شد" });
+        setPending(false);
+        reload();
+      },
+    });
   if (service.is_external) {
     return (
       <div className="flex flex-wrap gap-2">
@@ -178,7 +206,7 @@ function DeleteButtons({ userId, service, reload }: { userId: number; service: E
           variant="outline"
           className="!rounded-lg"
           isDisabled={pending}
-          onPress={() => void remove(`${label} فقط از لیست مشتری جدا شود؟`, "جدا شود", {}, "warning", "حساب VPN در پاسارگارد حفظ می‌شود و مشتری دیگر آن را در ربات نمی‌بیند.")}
+          onPress={() => remove(`${label} فقط از لیست مشتری جدا شود؟`, "جدا شود", {}, "warning", "حساب VPN در پاسارگارد حفظ می‌شود و مشتری دیگر آن را در ربات نمی‌بیند.")}
         >
           جدا کردن از مشتری
         </Button>
@@ -187,7 +215,7 @@ function DeleteButtons({ userId, service, reload }: { userId: number; service: E
           variant="danger"
           className="!rounded-lg"
           isDisabled={pending}
-          onPress={() => void remove(`${label} از بیرون ربات اضافه شده است. حساب VPN آن در پاسارگارد هم برای همیشه حذف شود؟`, "حذف با حساب پاسارگارد", { delete_pg: "1" }, "danger", "این عمل برگشت‌ناپذیر است.")}
+          onPress={() => remove(`${label} از بیرون ربات اضافه شده است. حساب VPN آن در پاسارگارد هم برای همیشه حذف شود؟`, "حذف با حساب پاسارگارد", { delete_pg: "1" }, "danger", "این عمل برگشت‌ناپذیر است.")}
         >
           حذف همراه حساب پاسارگارد
         </Button>
@@ -201,7 +229,7 @@ function DeleteButtons({ userId, service, reload }: { userId: number; service: E
         variant="danger"
         className="!rounded-lg"
         isDisabled={pending}
-        onPress={() => void remove(`${label} و کاربر پاسارگارد مرتبط برای همیشه حذف شوند؟`, "حذف سرویس", {}, "danger", "این عمل برگشت‌ناپذیر است.")}
+        onPress={() => remove(`${label} و کاربر پاسارگارد مرتبط برای همیشه حذف شوند؟`, "حذف سرویس", {}, "danger", "این عمل برگشت‌ناپذیر است.")}
       >
         حذف سرویس
       </Button>
@@ -209,7 +237,7 @@ function DeleteButtons({ userId, service, reload }: { userId: number; service: E
   );
 }
 
-function ServiceItem({ edit, service, reload }: { edit: UserEdit; service: EditService; reload: () => void }) {
+function ServiceItem({ edit, service, reload, askReason }: { edit: UserEdit; service: EditService; reload: () => void; askReason: AskReason }) {
   const userId = edit.user.id;
   return (
     <li className="inset-tile flex flex-col gap-4 rounded-lg p-4">
@@ -229,25 +257,29 @@ function ServiceItem({ edit, service, reload }: { edit: UserEdit; service: EditS
         <Stat label="مانده زمان" value={service.time_label} />
       </div>
       <LinkButtons userId={userId} service={service} />
-      {edit.can.pg_update ? <RenewForm userId={userId} service={service} plans={edit.plans} reload={reload} /> : null}
-      {edit.can.pg_update ? <ExtendForm userId={userId} service={service} reload={reload} /> : null}
-      {edit.can.pg_delete ? <DeleteButtons userId={userId} service={service} reload={reload} /> : null}
+      {edit.can.pg_update ? <RenewForm userId={userId} service={service} plans={edit.plans} reload={reload} askReason={askReason} /> : null}
+      {edit.can.pg_update ? <ExtendForm userId={userId} service={service} reload={reload} askReason={askReason} /> : null}
+      {edit.can.pg_delete ? <DeleteButtons userId={userId} service={service} reload={reload} askReason={askReason} /> : null}
     </li>
   );
 }
 
 export function ServicesSection({ edit, reload }: Props) {
+  const [reason, setReason] = useState<ReasonRequest | null>(null);
   return (
     <GlassSection title="سرویس‌ها" description={edit.services.length ? `${fa(edit.services.length)} سرویس` : undefined}>
-      {edit.services.length === 0 ? (
+      {!edit.can.view_services ? (
+        <EmptyBlock icon="solar:lock-keyhole-minimalistic-linear" title="دسترسی به سرویس‌های مشتری ندارید." />
+      ) : edit.services.length === 0 ? (
         <EmptyBlock icon="solar:shield-network-linear" title="سرویسی برای این کاربر ثبت نشده است." />
       ) : (
         <ul className="flex flex-col gap-3">
           {edit.services.map((service) => (
-            <ServiceItem key={service.id} edit={edit} service={service} reload={reload} />
+            <ServiceItem key={service.id} edit={edit} service={service} reload={reload} askReason={setReason} />
           ))}
         </ul>
       )}
+      <ReasonDialog request={reason} onClose={() => setReason(null)} />
     </GlassSection>
   );
 }

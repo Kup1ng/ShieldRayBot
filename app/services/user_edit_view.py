@@ -13,11 +13,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import BotUser, Plan, WalletTransaction
 from app.services.authz import authz_from_staff, can_shop
-from app.services.bot_user_admin import ServiceSnapshot, list_service_snapshots, list_wallet_txs
+from app.services.bot_user_admin import (
+    ServiceSnapshot,
+    customer_service_actions,
+    list_service_snapshots,
+    list_wallet_txs,
+    may_manage_customer_services,
+)
 from app.services.color_tags import ColorTag, color_tag_meta
 from app.services.customer_marks import CustomerMarks, marks_for_staff, may_edit_private_marks
 from app.services.demo_users import DEMO_USERS_PERMISSION
-from app.services.pg_access import staff_user_actions
 from app.services.plans_catalog import list_catalog_plans
 from app.services.platform_identity import is_explicit_owner_staff
 from app.services.shop_customer_block import shop_block_form_context
@@ -37,6 +42,7 @@ class UserEditView:
     wallet_txs: list[WalletTransaction]
     wallet_nonce: str
     services: list[ServiceSnapshot]
+    can_view_services: bool
     plans: list[Plan]
     can_edit_private_marks: bool
     can_manage_users: bool
@@ -56,10 +62,12 @@ async def load_user_edit_view(session: AsyncSession, staff: dict, user: BotUser)
     user_id = int(user.id)
     # The purse and the ledger are the staff's own shop's; no other tenant's rows are mixed in.
     wallet_balance = await get_wallet_balance(session, user, shop_id=shop_scope)
-    services = await list_service_snapshots(session, user_id, shop_id=shop_scope)
+    # A customer's services are shown and changed only with the customer_services permission.
+    can_view_services = may_manage_customer_services(staff)
+    services = await list_service_snapshots(session, user_id, shop_id=shop_scope) if can_view_services else []
     wallet_txs = await list_wallet_txs(session, user_id, limit=WALLET_LEDGER_LIMIT, shop_id=shop_scope)
     plans = await list_catalog_plans(session, staff, include_trial=False)
-    pg_acts = staff_user_actions(staff)
+    pg_acts = customer_service_actions(staff)
     marks = await marks_for_staff(session, staff, user)
     return UserEditView(
         user=user,
@@ -69,6 +77,7 @@ async def load_user_edit_view(session: AsyncSession, staff: dict, user: BotUser)
         wallet_txs=wallet_txs,
         wallet_nonce=secrets.token_hex(8),
         services=services,
+        can_view_services=can_view_services,
         plans=plans,
         can_edit_private_marks=await may_edit_private_marks(session, staff, user),
         # Role, account-wide block, delete and the platform purse stay Owner-only.

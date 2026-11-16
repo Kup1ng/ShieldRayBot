@@ -90,7 +90,7 @@ export type UserEdit = {
   wallet: { balance: number; nonce: string; transactions: WalletTx[] };
   services: EditService[];
   plans: { id: number; label: string }[];
-  can: { manage: boolean; demo: boolean; private_marks: boolean; pg_create: boolean; pg_update: boolean; pg_delete: boolean; delete_user: boolean };
+  can: { manage: boolean; demo: boolean; private_marks: boolean; view_services: boolean; pg_create: boolean; pg_update: boolean; pg_delete: boolean; delete_user: boolean };
   shop_wallet: { nonce: string; max: number; daily: number } | null;
   shop_block: { blocked: boolean; reason: string } | null;
 };

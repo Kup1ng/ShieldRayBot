@@ -15,10 +15,17 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from app.db.models import (
     Base, BotUser, DeliveryFailure, Order, Payment, Plan, ServiceAddonPack, UserService,
 )
-from app.services.orders import DeliveryPendingReview, create_order, pay_with_wallet
+from app.services.orders import (
+    SAVED_NAME_TAKEN,
+    UNKNOWN_DELIVERY_NOTE,
+    DeliveryOutcomeUnknown,
+    create_order,
+    pay_with_wallet,
+)
 from app.services.pasarguard import PasarGuardError
 from app.services.service_addons import AddonPendingReview, create_addon_order
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
+from app.services.ux20 import retry_delivery
 
 GB = 1024**3
 DAY = 86400
@@ -58,7 +65,7 @@ class FakePanel:
 
     async def get_user_by_username(self, username):
         index = next(i for i, c in enumerate(self.creates) if c["username"] == username)
-        return {"id": 101 + index, "username": username}
+        return {"id": 101 + index, "username": username, "note": self.creates[index].get("note")}
 
 
 class WalletDeliveryFixture(unittest.IsolatedAsyncioTestCase):
@@ -102,6 +109,19 @@ class WalletDeliveryFixture(unittest.IsolatedAsyncioTestCase):
         payment = await self.session.scalar(select(Payment).where(Payment.order_id == order.id))
         return payment.status
 
+    async def payment_note(self, order: Order) -> str | None:
+        payment = await self.session.scalar(select(Payment).where(Payment.order_id == order.id))
+        await self.session.refresh(payment)
+        return payment.review_note
+
+    async def staff_retry(self, order: Order) -> Order:
+        """The failed-delivery queue's retry, with the Telegram send stubbed out."""
+        with (
+            patch("app.services.reseller_bots.open_notify_bot_for_user", AsyncMock(return_value=(object(), False))),
+            patch("app.services.delivery.send_delivery_to_user", AsyncMock()),
+        ):
+            return await retry_delivery(self.session, int(order.id))
+
 
 class AddonUnknownOutcomeTests(WalletDeliveryFixture):
     async def addon_order(self) -> Order:
@@ -142,30 +162,62 @@ class NewPurchaseUnknownOutcomeTests(WalletDeliveryFixture):
     async def test_lost_create_response_keeps_payment_for_staff(self):
         order = await create_order(self.session, user_id=1, plan_id=1)
         self.pg.lose_response = True
-        with self.assertRaises(DeliveryPendingReview):
+        with self.assertRaises(DeliveryOutcomeUnknown):
             await pay_with_wallet(self.session, order, self.user)
         await self.session.refresh(order)
         self.assertEqual(await self.balance(), 800)
         self.assertEqual(order.status, "paid")
         self.assertEqual(await self.payment_status(order), "approved")
+        self.assertEqual(await self.payment_note(order), UNKNOWN_DELIVERY_NOTE)
         failures = await self.session.scalar(
             select(func.count(DeliveryFailure.id)).where(DeliveryFailure.order_id == order.id)
         )
         self.assertEqual(failures, 1)
 
-    async def test_retry_after_a_lost_create_response_delivers_the_same_panel_user(self):
+    async def test_buyer_tapping_pay_again_after_a_lost_create_response_creates_nothing(self):
         order = await create_order(self.session, user_id=1, plan_id=1)
         self.pg.lose_response = True
-        with self.assertRaises(DeliveryPendingReview):
+        with self.assertRaises(DeliveryOutcomeUnknown):
             await pay_with_wallet(self.session, order, self.user)
         self.pg.lose_response = False
-        await pay_with_wallet(self.session, order, self.user)
+        with self.assertRaises(DeliveryOutcomeUnknown):
+            await pay_with_wallet(self.session, order, self.user)
+        await self.session.refresh(order)
+        self.assertEqual(order.status, "paid")
+        self.assertEqual(len(self.pg.creates), 1, "the buyer's retry must not reach the panel again")
+        self.assertEqual(await self.balance(), 800)
+
+    async def test_staff_retry_after_a_lost_create_response_delivers_the_same_panel_user(self):
+        order = await create_order(self.session, user_id=1, plan_id=1)
+        self.pg.lose_response = True
+        with self.assertRaises(DeliveryOutcomeUnknown):
+            await pay_with_wallet(self.session, order, self.user)
+        self.pg.lose_response = False
+        order = await self.staff_retry(order)
         await self.session.refresh(order)
         self.assertEqual(order.status, "delivered")
         self.assertEqual(len(self.pg.creates), 1, "a retry must not create a second panel user")
         service = await self.session.get(UserService, order.service_id)
         self.assertEqual(service.pg_username, self.pg.creates[0]["username"])
         self.assertEqual(await self.balance(), 800)
+
+    async def test_staff_retry_never_hands_over_a_user_this_order_did_not_create(self):
+        order = await create_order(self.session, user_id=1, plan_id=1)
+        self.pg.lose_response = True
+        with self.assertRaises(DeliveryOutcomeUnknown):
+            await pay_with_wallet(self.session, order, self.user)
+        self.pg.lose_response = False
+        # The saved name turns out to belong to another customer's panel user.
+        self.pg.creates[0]["note"] = "another customer"
+        with self.assertRaises(ValueError) as caught:
+            await self.staff_retry(order)
+        self.assertEqual(str(caught.exception), SAVED_NAME_TAKEN)
+        await self.session.refresh(order)
+        self.assertEqual(order.status, "paid")
+        self.assertIsNone(order.service_id)
+        services = await self.session.scalar(select(func.count(UserService.id)).where(UserService.bot_user_id == 1))
+        self.assertEqual(services, 1, "only the pre-existing service; nothing was handed over")
+        self.assertEqual((len(self.pg.creates), await self.balance()), (1, 800))
 
     async def test_panel_refusal_refunds_new_purchase(self):
         order = await create_order(self.session, user_id=1, plan_id=1)

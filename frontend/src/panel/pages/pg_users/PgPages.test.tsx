@@ -84,27 +84,32 @@ describe("PasarGuard users", () => {
     expect(screen.getByText("کاربری یافت نشد.")).toBeTruthy();
   });
 
-  it("deletes through the row menu after the old question, then reloads", async () => {
+  it("deletes through the row menu only with a typed reason, then reloads", async () => {
     get.mockResolvedValue(users([userRow(5)]));
     const ui = userEvent.setup();
     mount(<PgUsersContent />);
     await screen.findByText("user_5");
     await ui.click(screen.getByRole("button", { name: "عملیات user_5" }));
     await ui.click(await screen.findByRole("menuitem", { name: "حذف" }));
-    await waitFor(() => expect(action).toHaveBeenCalledWith("/pg/users/5/delete", {}));
-    expect(ask).toHaveBeenCalledWith("تأیید حذف", expect.objectContaining({ description: "کاربر پاسارگارد حذف شود؟" }));
+    expect(await screen.findByText("کاربر پاسارگارد حذف شود؟")).toBeTruthy();
+    const submit = screen.getByRole("button", { name: "حذف" });
+    expect(submit.hasAttribute("disabled") || submit.getAttribute("aria-disabled") === "true").toBe(true);
+    await ui.type(screen.getByRole("textbox", { name: /علت این عملیات/ }), "درخواست مشتری");
+    await ui.click(screen.getByRole("button", { name: "حذف" }));
+    await waitFor(() => expect(action).toHaveBeenCalledWith("/pg/users/5/delete", { reason: "درخواست مشتری" }));
     await waitFor(() => expect(get.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it("does not post when the question is answered no", async () => {
-    ask.mockResolvedValue(false);
+  it("does not post when the reason dialog is cancelled", async () => {
     get.mockResolvedValue(users([userRow(5)]));
     const ui = userEvent.setup();
     mount(<PgUsersContent />);
     await screen.findByText("user_5");
     await ui.click(screen.getByRole("button", { name: "عملیات user_5" }));
     await ui.click(await screen.findByRole("menuitem", { name: "ریست مصرف" }));
-    await waitFor(() => expect(ask).toHaveBeenCalled());
+    await screen.findByRole("textbox", { name: /علت این عملیات/ });
+    await ui.click(screen.getByRole("button", { name: "انصراف" }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: /علت این عملیات/ })).toBeNull());
     expect(action).not.toHaveBeenCalled();
   });
 
@@ -171,7 +176,7 @@ describe("PasarGuard users", () => {
     );
   });
 
-  it("runs a bulk operation for the eligible selected rows after asking", async () => {
+  it("runs a bulk operation for the eligible selected rows with the typed reason", async () => {
     get.mockResolvedValue(users([userRow(5), userRow(6, { ops: [] })]));
     const ui = userEvent.setup();
     mount(<PgUsersContent />);
@@ -179,8 +184,12 @@ describe("PasarGuard users", () => {
     await ui.click(screen.getByRole("checkbox", { name: /انتخاب user_5/ }));
     await ui.click(screen.getByRole("checkbox", { name: /انتخاب user_6/ }));
     await ui.click(await screen.findByRole("button", { name: /^حذف/ }));
-    await waitFor(() => expect(action).toHaveBeenCalledWith("/pg/users/bulk-action", { action: "delete", ids: [5], return_to: "/pg/users" }));
-    expect(ask).toHaveBeenCalledWith("حذف گروهی", expect.objectContaining({ description: expect.stringContaining("کاربر پاسارگارد حذف شوند") }));
+    expect(await screen.findByText(/کاربر پاسارگارد حذف شوند/)).toBeTruthy();
+    await ui.type(screen.getByRole("textbox", { name: /علت این عملیات/ }), "پاک‌سازی");
+    await ui.click(screen.getByRole("button", { name: "حذف" }));
+    await waitFor(() =>
+      expect(action).toHaveBeenCalledWith("/pg/users/bulk-action", { action: "delete", ids: [5], return_to: "/pg/users", reason: "پاک‌سازی" }),
+    );
   });
 
   it("puts the search text in the address and asks for page one of it", async () => {

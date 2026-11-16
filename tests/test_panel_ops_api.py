@@ -197,6 +197,15 @@ class ShopSettingsDataTests(OpsApiCase):
         self.assertTrue(color_keys)
         self.assertFalse([key for key in color_keys if key.startswith("btn_style_adm_")])
 
+    async def test_platform_only_setting_groups_never_reach_a_shop(self) -> None:
+        from app.services.users import PLATFORM_ONLY_SETTING_GROUPS, PLATFORM_ONLY_SETTING_KEYS
+
+        naming = (await self.get("/api/panel/shop-settings?tab=naming", shop_staff(SHOP_A))).json()
+        self.assertTrue(naming["sections"])
+        self.assertFalse({section["title"] for section in naming["sections"]} & PLATFORM_ONLY_SETTING_GROUPS)
+        keys = {field["key"] for section in naming["sections"] for field in section["fields"]}
+        self.assertFalse(keys & PLATFORM_ONLY_SETTING_KEYS)
+
     async def test_menu_tab_keeps_the_required_shop_button_and_hides_the_apply_button(self) -> None:
         extra = (await self.get("/api/panel/shop-settings?tab=menu", shop_staff(SHOP_A))).json()["extra"]
         keys = [item["key"] for item in extra["items"]]

@@ -13,6 +13,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.spa_pages import spa_response
 from app.db.models import BotUser, Plan
 from app.services.demo_users import set_demo_user
+from app.services.customer_action_notices import NoticeTarget, notify_customers
+from app.services.action_reasons import ReasonRequired, log_reasoned_action, reason_from_form
+from app.services.adjust_mode import signed_adjustment
+from app.services.bot_user_admin import (
+    CUSTOMER_SERVICES_PERMISSION,
+)
+from app.services.pg_access import staff_user_actions
+from app.services.platform_identity import is_explicit_owner_staff
 from app.services.shop_membership import assert_customer_in_staff_scope
 from app.services.shop_scope import (
     ShopScopeError,
@@ -101,6 +109,9 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
     # ``render`` is no longer used (the screens are the React export); the parameter keeps the
     # registration call unchanged.
     require_ops = require_perm("dashboard") if require_perm else require_admin
+    require_service_ops = (
+        require_perm(CUSTOMER_SERVICES_PERMISSION) if require_perm else require_admin
+    )
 
     @app.post("/users/{user_id}/demo")
     async def user_demo(
@@ -275,10 +286,14 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         form = await request.form()
 
         raw = str(form.get("amount") or "").strip()
-        note = str(form.get("note") or "").strip()
+        from app.services.shop_manual_adjust import ManualAdjustError, parse_reason
+
         try:
             amount = parse_admin_wallet_amount(raw)
             mode = parse_admin_wallet_mode(str(form.get("mode") or ""))
+            note = parse_reason(form.get("note"))
+        except ManualAdjustError as e:
+            return _redirect_user(user_id, err=str(e))
         except (TypeError, ValueError) as e:
             return _redirect_user(user_id, err=str(e) or "مبلغ نامعتبر است")
         try:
@@ -288,17 +303,34 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
                 key = f"user-page:{mode}:{user_id}:{amount}:{nonce}" if len(nonce) >= 8 else None
                 change = await adjust_reseller_wallet(
                     session, user, amount, mode=mode, actor=actor_label_from_staff(staff),
-                    note=note or None, idempotency_key=key,
+                    note=note, idempotency_key=key,
                 )
                 schedule_followups(change)
             else:
-                await admin_adjust_user_wallet(
+                from app.services.shop_manual_adjust import parse_request_key
+
+                try:
+                    request_key = parse_request_key(form.get("nonce"))
+                except ManualAdjustError as e:
+                    return _redirect_user(user_id, err=str(e))
+                change = await admin_adjust_user_wallet(
                     session,
                     user,
                     amount,
                     mode=mode,
                     actor=actor_label_from_staff(staff),
-                    note=note or None,
+                    note=note,
+                    request_key=request_key,
+                )
+                from app.services.manual_adjust_notices import schedule_wallet_notice
+
+                schedule_wallet_notice(
+                    user_id=int(user.id),
+                    mode=mode,
+                    amount=amount,
+                    balance=change.balance_after,
+                    shop_id=None,
+                    replayed=change.replayed,
                 )
         except ValueError as e:
             return _redirect_user(user_id, err=str(e))
@@ -307,6 +339,109 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         else:
             ok = f"از کیف پول {amount:,} تومان کسر شد"
         return _redirect_user(user_id, ok=ok)
+
+    @app.post("/users/{user_id}/points-adjust")
+    async def user_points_adjust(
+        user_id: int,
+        request: Request,
+        staff: dict = Depends(require_admin),
+        session: AsyncSession = Depends(get_db),
+    ):
+        """Platform owner: adjust the customer's platform points purse (shop_id=None)."""
+        from app.services.loyalty import admin_adjust_points
+        from app.services.notifications import actor_label_from_staff
+        from app.services.shop_manual_adjust import ManualAdjustError, parse_reason, parse_request_key
+
+        if not is_explicit_owner_staff(staff):
+            return RedirectResponse("/home", status_code=303)
+        loaded = await _require_scoped_user(session, staff, user_id)
+        if isinstance(loaded, RedirectResponse):
+            return loaded
+        user = loaded
+        form = await request.form()
+        mode = str(form.get("mode") or "").strip()
+        raw_points = str(form.get("points") or "").strip().replace(",", "").replace("٬", "")
+        try:
+            request_key = parse_request_key(form.get("nonce"))
+            reason = parse_reason(form.get("reason"))
+        except ManualAdjustError as exc:
+            return _redirect_user(user_id, err=str(exc))
+        if mode not in {"credit", "debit"}:
+            return _redirect_user(user_id, err="نوع تغییر نامعتبر است")
+        if not raw_points.isdigit() or len(raw_points) > 12:
+            return _redirect_user(user_id, err="امتیاز نامعتبر است")
+        points = int(raw_points)
+        if points < 1:
+            return _redirect_user(user_id, err="امتیاز باید مثبت باشد")
+        delta = points if mode == "credit" else -points
+        try:
+            change = await admin_adjust_points(
+                session,
+                user,
+                delta,
+                reason=reason,
+                admin_identity=str(actor_label_from_staff(staff) or "admin"),
+                shop_id=None,
+                request_key=request_key,
+            )
+        except ValueError as exc:
+            return _redirect_user(user_id, err=str(exc))
+        from app.services.manual_adjust_notices import schedule_points_notice
+
+        balance = int(change.tx.balance_after)
+        schedule_points_notice(
+            user_id=int(user.id),
+            mode=mode,
+            points=points,
+            balance=balance,
+            shop_id=None,
+            replayed=change.replayed,
+        )
+        verb = "افزوده شد" if mode == "credit" else "کسر شد"
+        return _redirect_user(user_id, ok=f"{points:,} امتیاز {verb} · مانده: {balance:,}")
+
+    @app.post("/users/{user_id}/shop-points")
+    async def user_shop_points_adjust(
+        user_id: int,
+        request: Request,
+        staff: dict = Depends(require_ops),
+        session: AsyncSession = Depends(get_db),
+    ):
+        """Shop staff: adjust this customer's points in the staff member's own shop."""
+        from app.services.shop_manual_adjust import ManualAdjustError
+        from app.services.shop_points_adjust import (
+            adjust_shop_points,
+            parse_points_request,
+            points_adjust_shop,
+        )
+
+        try:
+            points_adjust_shop(staff)
+        except PermissionError:
+            return RedirectResponse("/home", status_code=303)
+        loaded = await _require_scoped_user(session, staff, user_id)
+        if isinstance(loaded, RedirectResponse):
+            return loaded
+        form = await request.form()
+        try:
+            change = await adjust_shop_points(
+                session,
+                staff=staff,
+                request=parse_points_request(
+                    raw_customer_id=str(user_id),
+                    raw_points=form.get("points"),
+                    direction=form.get("mode"),
+                    reason=form.get("reason"),
+                    request_key=form.get("nonce"),
+                ),
+            )
+        except ManualAdjustError as exc:
+            return _redirect_user(user_id, err=str(exc))
+        verb = "افزوده شد" if change.direction == "credit" else "کسر شد"
+        return _redirect_user(
+            user_id,
+            ok=f"{change.points:,} امتیاز {verb} · مانده: {change.balance_after:,}",
+        )
 
     @app.post("/users/{user_id}/message")
     async def user_staff_message(
@@ -326,7 +461,12 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         body = str(form.get("body") or form.get("text") or "")
         try:
             await send_staff_dm(
-                session, user, body, shop_id=resolve_shop_scope_id(staff), actor=actor_label_from_staff(staff)
+                session,
+                user,
+                body,
+                shop_id=resolve_shop_scope_id(staff),
+                actor=actor_label_from_staff(staff),
+                sender_tg=int(staff.get("telegram_id") or 0),
             )
             await session.commit()
         except ValueError as e:
@@ -339,10 +479,9 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
     async def user_quick_renew(
         user_id: int,
         request: Request,
-        staff: dict = Depends(require_ops),
+        staff: dict = Depends(require_service_ops),
         session: AsyncSession = Depends(get_db),
     ):
-        from app.services.pg_access import staff_user_actions
         from app.services.users_quick import quick_renew_user
 
         form = await request.form()
@@ -351,6 +490,10 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
                 form, err="نقش پاسارگارد شما اجازه تمدید ندارد", uid=user_id
             )
 
+        try:
+            reason = reason_from_form(form)
+        except ReasonRequired as exc:
+            return _redirect_list_form(form, err=str(exc), uid=user_id)
         loaded = await _require_scoped_user(session, staff, user_id)
         if isinstance(loaded, RedirectResponse):
             return loaded
@@ -366,6 +509,15 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return _redirect_list_form(form, err=str(e), uid=user_id)
         except Exception as e:
             return _redirect_list_form(form, err=_op_err(e, prefix="تمدید ناموفق"), uid=user_id)
+        await log_reasoned_action(
+            session, staff, action="service_renew", target_type="service", target_id=svc.id, reason=reason
+        )
+        await notify_customers(
+            session,
+            [NoticeTarget(int(user.id), int(user.telegram_id or 0), svc.shop_id, svc.pg_username or "")],
+            action="service_renew",
+            reason=reason,
+        )
         return _redirect_list_form(
             form, ok=f"سرویس {label} تمدید شد", uid=user_id
         )
@@ -418,7 +570,12 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return _redirect_list_form(form, err="گیرنده‌ای در این فیلتر نیست")
         try:
             stats = await bulk_staff_dm(
-                session, targets, body, shop_id=resolve_shop_scope_id(staff), actor=actor_label_from_staff(staff)
+                session,
+                targets,
+                body,
+                shop_id=resolve_shop_scope_id(staff),
+                actor=actor_label_from_staff(staff),
+                sender_tg=int(staff.get("telegram_id") or 0),
             )
             await session.commit()
         except ValueError as e:
@@ -435,7 +592,7 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         user_id: int,
         service_id: int,
         request: Request,
-        staff: dict = Depends(require_ops),
+        staff: dict = Depends(require_service_ops),
         session: AsyncSession = Depends(get_db),
     ):
         from app.services.bot_user_admin import admin_renew_service, get_owned_service
@@ -445,6 +602,10 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return loaded
 
         form = await request.form()
+        try:
+            reason = reason_from_form(form)
+        except ReasonRequired as exc:
+            return _redirect_user(user_id, err=str(exc))
         try:
             svc = await get_owned_service(
                 session, bot_user_id=user_id, service_id=service_id,
@@ -466,6 +627,7 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         if plan is None:
             return _redirect_user(user_id, err="پلن تمدید را انتخاب کنید")
 
+        target = NoticeTarget(int(user_id), int(loaded.telegram_id or 0), svc.shop_id, svc.pg_username or "")
         try:
             await admin_renew_service(
                 session,
@@ -480,6 +642,10 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return _redirect_user(user_id, err=str(e))
         except Exception as e:
             return _redirect_user(user_id, err=_op_err(e, prefix="تمدید ناموفق"))
+        await log_reasoned_action(
+            session, staff, action="service_renew", target_type="service", target_id=service_id, reason=reason
+        )
+        await notify_customers(session, [target], action="service_renew", reason=reason)
         return _redirect_user(user_id, ok=f"سرویس #{service_id} تمدید شد")
 
     @app.post("/users/{user_id}/services/{service_id}/extend")
@@ -487,7 +653,7 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         user_id: int,
         service_id: int,
         request: Request,
-        staff: dict = Depends(require_ops),
+        staff: dict = Depends(require_service_ops),
         session: AsyncSession = Depends(get_db),
     ):
         from app.services.bot_user_admin import admin_extend_service, get_owned_service
@@ -497,6 +663,10 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return loaded
 
         form = await request.form()
+        try:
+            reason = reason_from_form(form)
+        except ReasonRequired as exc:
+            return _redirect_user(user_id, err=str(exc))
         try:
             svc = await get_owned_service(
                 session, bot_user_id=user_id, service_id=service_id,
@@ -514,6 +684,13 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         except ValueError:
             return _redirect_user(user_id, err="مقادیر تغییر مانده نامعتبر است")
         try:
+            extra_days, extra_gb = signed_adjustment(
+                str(form.get("mode") or "").strip() or None, days=extra_days, gb=extra_gb
+            )
+        except ValueError as e:
+            return _redirect_user(user_id, err=str(e))
+        target = NoticeTarget(int(user_id), int(loaded.telegram_id or 0), svc.shop_id, svc.pg_username or "")
+        try:
             await admin_extend_service(
                 session,
                 svc,
@@ -525,6 +702,10 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return _redirect_user(user_id, err=str(e))
         except Exception as e:
             return _redirect_user(user_id, err=_op_err(e, prefix="تغییر مانده ناموفق"))
+        await log_reasoned_action(
+            session, staff, action="service_extend", target_type="service", target_id=service_id, reason=reason
+        )
+        await notify_customers(session, [target], action="service_extend", reason=reason)
         return _redirect_user(user_id, ok=f"مانده سرویس #{service_id} به‌روز شد")
 
     @app.post("/users/{user_id}/services/{service_id}/delete")
@@ -532,7 +713,7 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         request: Request,
         user_id: int,
         service_id: int,
-        staff: dict = Depends(require_ops),
+        staff: dict = Depends(require_service_ops),
         session: AsyncSession = Depends(get_db),
     ):
         from app.services.bot_user_admin import admin_delete_service, get_owned_service
@@ -541,6 +722,11 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         if isinstance(loaded, RedirectResponse):
             return loaded
 
+        form = await request.form()
+        try:
+            reason = reason_from_form(form)
+        except ReasonRequired as exc:
+            return _redirect_user(user_id, err=str(exc))
         try:
             svc = await get_owned_service(
                 session, bot_user_id=user_id, service_id=service_id,
@@ -549,11 +735,10 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
         except ValueError as e:
             return _redirect_user(user_id, err=str(e))
 
-
         from app.services.service_import import admin_delete_pg_flag, is_external_service
 
-        form = await request.form()
         delete_pg = admin_delete_pg_flag(svc, explicit=form.get("delete_pg") == "1")
+        target = NoticeTarget(int(user_id), int(loaded.telegram_id or 0), svc.shop_id, svc.pg_username or "")
         try:
             info = await admin_delete_service(
                 session, svc, delete_pg=delete_pg, staff=staff
@@ -562,6 +747,13 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
             return _redirect_user(user_id, err=str(e))
         except Exception as e:
             return _redirect_user(user_id, err=_op_err(e, prefix="حذف سرویس ناموفق"))
+        await log_reasoned_action(
+            session, staff, action="service_delete", target_type="service", target_id=service_id, reason=reason
+        )
+        detached_only = is_external_service(svc) and not delete_pg
+        await notify_customers(
+            session, [target], action="service_detach" if detached_only else "service_delete", reason=reason
+        )
         if is_external_service(svc) and not delete_pg:
             return _redirect_user(user_id, ok=f"سرویس #{service_id} از لیست مشتری جدا شد؛ حساب پاسارگارد حفظ شد")
         note = " (پاسارگارد حذف شد)" if info.get("pg_deleted") else (
@@ -573,7 +765,7 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
     async def user_service_link(
         user_id: int,
         service_id: int,
-        staff: dict = Depends(require_ops),
+        staff: dict = Depends(require_service_ops),
         session: AsyncSession = Depends(get_db),
     ):
         from fastapi.responses import JSONResponse

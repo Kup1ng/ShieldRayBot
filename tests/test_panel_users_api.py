@@ -176,7 +176,10 @@ class UsersListTests(PanelUsersApiTestCase):
     async def test_abilities_follow_the_staff_members_panel_rights(self) -> None:
         plain = (await self.get_json("/api/panel/users"))["can"]
         self.assertEqual(plain, {"manage": False, "provision": True, "edit_services": False, "pg_update": False})
+        # The panel role alone is not enough: changing a customer's services needs customer_services.
         self.staff = shop_staff(SHOP_A, pg_user_actions={"update": True})
+        self.assertFalse((await self.get_json("/api/panel/users"))["can"]["edit_services"])
+        self.staff = shop_staff(SHOP_A, ["dashboard", "customer_services"], pg_user_actions={"update": True})
         body = await self.get_json("/api/panel/users")
         self.assertTrue(body["can"]["edit_services"])
         self.assertEqual(body["rows"][0]["bulk_ops"], ["renew"])
@@ -216,6 +219,7 @@ class UserCardTests(PanelUsersApiTestCase):
 
 class UserEditTests(PanelUsersApiTestCase):
     async def test_the_edit_screen_shows_only_the_shops_purse_ledger_and_services(self) -> None:
+        self.staff = shop_staff(SHOP_A, permissions=["dashboard", "customer_services"])
         body = await self.get_json("/api/panel/users/11/edit")
         self.assertEqual(body["wallet"]["balance"], 80)
         self.assertEqual([tx["reason"] for tx in body["wallet"]["transactions"]], ["shop credit"])
@@ -225,7 +229,18 @@ class UserEditTests(PanelUsersApiTestCase):
         self.assertFalse(body["can"]["manage"])
         self.assertFalse(body["can"]["delete_user"])
 
+    async def test_services_are_listed_only_with_the_customer_services_permission(self) -> None:
+        body = await self.get_json("/api/panel/users/11/edit")
+        self.assertEqual(body["services"], [])
+        self.assertFalse(body["can"]["view_services"])
+        self.staff = shop_staff(SHOP_A, permissions=["dashboard", "customer_services"])
+        body = await self.get_json("/api/panel/users/11/edit")
+        self.assertTrue(body["can"]["view_services"])
+        self.assertEqual([s["pg_username"] for s in body["services"]], ["shop_a_service"])
+
     async def test_subscription_links_and_tokens_never_leave_the_edit_endpoint(self) -> None:
+        # With the permission, so the service rows are in the answer and checked too.
+        self.staff = shop_staff(SHOP_A, permissions=["dashboard", "customer_services"])
         response = await self.client.get("/api/panel/users/11/edit")
         self.assert_no_secrets(response.text)
 

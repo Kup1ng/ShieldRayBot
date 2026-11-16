@@ -63,9 +63,9 @@ describe("bulk selection", () => {
     expect(selectedIds(new Set(["2", "x"]), rows)).toEqual(new Set([2]));
   });
 
-  it("asks a reason only for the delete action and fills in the count", () => {
+  it("asks a reason for every bulk action the server logs, and fills in the count", () => {
     const withReason = (Object.keys(BULK_META) as BulkOp[]).filter((op) => BULK_META[op].reasonLabel);
-    expect(withReason).toEqual(["delete"]);
+    expect(withReason).toEqual(["block", "unblock", "renew", "delete"]);
     expect(fill("{n} کاربر مسدود شوند؟", 3)).toBe("۳ کاربر مسدود شوند؟");
   });
 });

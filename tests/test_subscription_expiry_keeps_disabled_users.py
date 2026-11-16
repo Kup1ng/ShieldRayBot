@@ -62,29 +62,44 @@ class SubscriptionExpiryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.pg.status, {1: "active", 2: "disabled", 3: "active"})
         self.assertEqual(self.sub.access_status, "active")
 
-    async def test_a_renewal_that_lands_during_the_cut_wins(self):
+    async def renewal_commits_while_cutting(self, **renewal) -> None:
+        """While the expiry cuts user 1, the reseller's renewal commits in another session."""
         Session = async_sessionmaker(self.engine, expire_on_commit=False)
         real_disable = self.pg.set_disabled_by_id
 
         async def disable_while_renewing(uid, disabled):
+            result = await real_disable(uid, disabled)
             if disabled and uid == 1:
-                # The reseller's renewal commits while the expiry is still cutting users.
                 async with Session() as other:
                     await other.execute(
                         update(PgAdminSubscription).values(
                             renew_generation=PgAdminSubscription.renew_generation + 1,
                             expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+                            **renewal,
                         )
                     )
                     await other.commit()
-            return await real_disable(uid, disabled)
+            return result
 
         self.pg.set_disabled_by_id = disable_while_renewing
-        stats = await expire_subscription(self.session, self.sub)
-        self.assertEqual(stats.get("renewed"), 1)
+
+    async def assert_renewal_won(self, stats) -> None:
+        self.assertEqual(stats.get("aborted"), 1)
+        await self.session.refresh(self.sub)
         self.assertEqual(self.sub.access_status, "active")
         self.assertIsNone(self.sub.expiry_disabled_user_ids)
-        self.assertEqual(self.pg.status, {1: "active", 2: "disabled", 3: "active"})
+        # User 1 was cut by this pass and is given back; user 3 was never reached and keeps its
+        # own state; user 2 was disabled for another reason and stays disabled.
+        self.assertEqual(self.pg.status, {1: "active", 2: "disabled", 3: "limited"})
+
+    async def test_a_renewal_that_lands_during_the_cut_wins(self):
+        # A real renewal reopens the row before it moves the clock.
+        await self.renewal_commits_while_cutting(access_status="active", expired_at=None)
+        await self.assert_renewal_won(await expire_subscription(self.session, self.sub))
+
+    async def test_a_renewal_that_only_moves_the_clock_also_wins(self):
+        await self.renewal_commits_while_cutting()
+        await self.assert_renewal_won(await expire_subscription(self.session, self.sub))
 
 
 if __name__ == "__main__":

@@ -17,10 +17,10 @@ from app.api.id_params import DbId
 from app.api.trial_users_pages import MANAGE_PERMISSION, parse_cursor, trial_settings_href, trial_users_scope
 from app.db.models import BotUser
 from app.services.authz import authz_from_staff, can_shop
+from app.services.bot_user_admin import customer_service_actions
 from app.services.db_safe import recover_session
 from app.services.marketing_nav import marketing_sections
 from app.services.panel_users_payload import trial_users_payload, user_card_payload, user_edit_payload, users_list_payload
-from app.services.pg_access import staff_user_actions
 from app.services.platform_identity import is_explicit_owner_staff
 from app.services.shop_membership import assert_customer_in_staff_scope
 from app.services.shop_scope import ShopScopeError, resolve_shop_scope_id
@@ -99,7 +99,7 @@ def register_panel_users_api(
         shop_id = _shop_scope(staff)
         card = await build_user_card(session, user, shop_id=shop_id, show_private_marks=True)
         in_shop = is_explicit_owner_staff(staff) or shop_id is not None
-        pg_acts = staff_user_actions(staff)
+        pg_acts = customer_service_actions(staff)
         return _json(
             user_card_payload(
                 card,

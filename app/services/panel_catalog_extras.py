@@ -17,7 +17,9 @@ from app.services.gift_codes import (
     MAX_AMOUNT,
     MAX_USES,
     PURCHASE_TYPES,
+    code_plan_ids,
     describe_code,
+    gift_code_plan_options,
     gift_code_scope,
     list_gift_codes,
 )
@@ -30,6 +32,7 @@ from app.services.settings_tab_groups import (
     group_settings_tabs,
     tabs_with_message_variables,
 )
+from app.services.settings_form_payload import listed_tabs
 from app.services.users import SETTINGS_TABS
 
 
@@ -94,6 +97,7 @@ def serialize_gift_code(code: ChargeCode) -> dict[str, Any]:
         "state": detail["state"],
         "expiry_input": detail["expiry_input"],
         "expiry_label": detail["expiry_label"],
+        "plan_ids": sorted(code_plan_ids(code)),
     }
 
 
@@ -101,8 +105,11 @@ async def gift_codes_payload(session: AsyncSession, staff: dict) -> dict[str, An
     """The staff member's own shop codes, newest first and bounded. Raises ``PermissionError``."""
     shop_id = gift_code_scope(staff)
     codes = await list_gift_codes(session, shop_id=shop_id)
+    # The plans a code may be limited to: this shop's own, never another shop's.
+    plans = await gift_code_plan_options(session, shop_id=shop_id)
     return {
         "codes": [serialize_gift_code(c) for c in codes],
+        "plans": [{"id": plan_id, "name": name, "active": active} for plan_id, name, active in plans],
         "purchase_types": _options(PURCHASE_TYPES),
         "limits": {"max_amount": MAX_AMOUNT, "max_uses": MAX_USES, "list_limit": GIFT_CODE_LIST_LIMIT},
         "tabs": marketing_tabs(staff, "gift_codes"),
@@ -131,7 +138,7 @@ def message_variables_payload(staff: dict) -> dict[str, Any]:
                         "href": tab.href or f"{settings_base}?tab={tab.key}",
                         "active": tab.key == MESSAGE_VARIABLES_TAB_KEY,
                     }
-                    for tab in group.tabs
+                    for tab in listed_tabs(group)
                 ],
             }
             for group in groups

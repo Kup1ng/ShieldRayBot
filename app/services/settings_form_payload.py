@@ -11,9 +11,10 @@ import re
 from typing import Any
 
 from app.services.settings_button_labels import PLATFORM_ONLY_BTN_KEYS
-from app.services.settings_tab_groups import SettingsTabGroup
+from app.services.settings_tab_groups import SettingsTab, SettingsTabGroup
 from app.services.screen_titles import SCREEN_TEXT_TAB, platform_only_screen_text_keys
 from app.services.users import (
+    PLATFORM_ONLY_SETTING_GROUPS,
     SECRET_KEYS,
     SETTING_GROUPS,
     SETTING_VISIBILITY,
@@ -78,8 +79,12 @@ def field_payload(field: tuple, values: dict[str, str]) -> dict[str, Any]:
 
 
 def visible_groups(tab: str) -> dict[str, list[tuple]]:
-    """The groups a shop sees on one tab: platform-only buttons, screens and paths are removed."""
-    groups = {name: SETTING_GROUPS[name] for name in TAB_SETTING_GROUPS.get(tab, []) if name in SETTING_GROUPS}
+    """The groups a shop sees on one tab: platform-only groups, buttons, screens and paths are removed."""
+    groups = {
+        name: SETTING_GROUPS[name]
+        for name in TAB_SETTING_GROUPS.get(tab, [])
+        if name in SETTING_GROUPS and name not in PLATFORM_ONLY_SETTING_GROUPS
+    }
     if tab == "service_import":
         groups.pop(IMPORT_ADMINS_GROUP, None)
     if tab == "buttons":
@@ -105,6 +110,11 @@ def sections_payload(groups: dict[str, list[tuple]], values: dict[str, str], *, 
     ]
 
 
+def listed_tabs(group: SettingsTabGroup) -> tuple[SettingsTab, ...]:
+    """The tabs the React pages list: a merged tab is listed as its sections, each its own ``?tab=``."""
+    return tuple(section for tab in group.tabs for section in (tab.sections or (tab,)))
+
+
 def nav_payload(groups: tuple[SettingsTabGroup, ...], base: str) -> list[dict[str, Any]]:
     """The grouped tab strip; a tab with its own page links there instead of ``?tab=``."""
     return [
@@ -112,7 +122,7 @@ def nav_payload(groups: tuple[SettingsTabGroup, ...], base: str) -> list[dict[st
             "key": group.key,
             "label": group.label,
             "active": group.is_active,
-            "tabs": [{"key": tab.key, "label": tab.label, "href": tab.href or f"{base}?tab={tab.key}"} for tab in group.tabs],
+            "tabs": [{"key": tab.key, "label": tab.label, "href": tab.href or f"{base}?tab={tab.key}"} for tab in listed_tabs(group)],
         }
         for group in groups
     ]

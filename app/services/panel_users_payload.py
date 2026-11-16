@@ -188,6 +188,7 @@ def user_edit_payload(view: UserEditView) -> dict[str, Any]:
             "manage": view.can_manage_users,
             "demo": view.can_manage_demo_users,
             "private_marks": view.can_edit_private_marks,
+            "view_services": view.can_view_services,
             "pg_create": view.can_pg_create,
             "pg_update": view.can_pg_update,
             "pg_delete": view.can_pg_delete,

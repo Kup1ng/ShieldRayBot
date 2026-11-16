@@ -133,7 +133,8 @@ class TabRoutingTests(SettingsApiCase):
     async def test_the_nav_offers_every_tab_once_and_the_variables_page_as_a_link(self) -> None:
         nav = (await self.body("welcome"))["nav"]
         tabs = [item for group in nav["groups"] for item in group["tabs"]]
-        self.assertEqual(sorted(item["key"] for item in tabs if item["href"] is None), sorted(BOT_TABS))
+        # The Owner's bot connection is a system setting upstream; this page keeps it with the bot tabs.
+        self.assertEqual(sorted(item["key"] for item in tabs if item["href"] is None), sorted([*BOT_TABS, "bot"]))
         variables = [item for item in tabs if item["href"]]
         self.assertEqual([(item["key"], item["href"]) for item in variables], [("variables", "/message-variables")])
 

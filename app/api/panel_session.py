@@ -1,6 +1,6 @@
 """``GET /api/panel/session``: who is signed in, and the chrome the React panel draws for them.
 
-Read-only. The navigation is presentation (see ``app/services/panel_nav.py``); every page's data
+Read-only. The navigation is presentation (see ``app/services/panel_menu.py``); every page's data
 endpoint and every action keeps its own permission check.
 """
 
@@ -17,7 +17,7 @@ from app.services.csrf import CSRF_COOKIE, ensure_csrf_token
 from app.services.identity_chrome import hierarchy_identity
 from app.services.marketing_nav import marketing_sections
 from app.services.panel_brand import DEFAULT_BRAND
-from app.services.panel_nav import panel_nav
+from app.services.panel_menu import panel_nav
 from app.services.platform_identity import is_explicit_owner_staff
 
 logger = logging.getLogger(__name__)

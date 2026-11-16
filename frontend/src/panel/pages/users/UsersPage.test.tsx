@@ -95,16 +95,23 @@ describe("users list", () => {
     await waitFor(() => expect(get.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it("does not post when the question is answered no", async () => {
-    ask.mockResolvedValue(false);
+  it("renews quickly only with a typed reason, and sends nothing when the dialog is cancelled", async () => {
     get.mockResolvedValue(list([user(5)]));
     const ui = userEvent.setup();
     mount(<UsersContent />);
     await screen.findByText("مشتری ۵");
-    await ui.click(screen.getByRole("button", { name: "عملیات مشتری ۵" }));
-    await ui.click(await screen.findByRole("menuitem", { name: "تمدید سریع" }));
-    await waitFor(() => expect(ask).toHaveBeenCalled());
+    const openRenew = async () => {
+      await ui.click(screen.getByRole("button", { name: "عملیات مشتری ۵" }));
+      await ui.click(await screen.findByRole("menuitem", { name: "تمدید سریع" }));
+      return screen.findByRole("textbox", { name: /علت تمدید/ });
+    };
+    await openRenew();
+    await ui.click(screen.getByRole("button", { name: "انصراف" }));
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: /علت تمدید/ })).toBeNull());
     expect(action).not.toHaveBeenCalled();
+    await ui.type(await openRenew(), "درخواست مشتری");
+    await ui.click(screen.getByRole("button", { name: "تمدید" }));
+    await waitFor(() => expect(action).toHaveBeenCalledWith("/users/5/quick-renew", expect.objectContaining({ reason: "درخواست مشتری" })));
   });
 
   it("deletes only with a typed reason and sends it under both names the handler reads", async () => {
@@ -149,6 +156,23 @@ describe("users list", () => {
     mount(<UsersContent />);
     await screen.findByText("مشتری ۵");
     expect(get).toHaveBeenCalledWith("/api/panel/users?q=ali&filter=expiring");
+  });
+
+  it("looks a pasted subscription link up by POST and never puts it in the address or the list request", async () => {
+    const link = "https://panel.example/sub/SECRETTOKEN0123456789abcdef";
+    get.mockResolvedValue(list([user(5)]));
+    action.mockResolvedValue({ ok: false, message: "", location: "/users?err=not-found" });
+    const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);
+    const ui = userEvent.setup();
+    mount(<UsersContent />);
+    await screen.findByText("مشتری ۵");
+    await ui.type(screen.getByRole("textbox", { name: "جستجوی کاربران" }), link);
+    await ui.keyboard("{Enter}");
+    await waitFor(() => expect(action).toHaveBeenCalledWith("/users/find-by-link", { link }));
+    await waitFor(() => expect(assign).toHaveBeenCalledWith("/users?err=not-found"));
+    expect(window.location.search).not.toContain("SECRET");
+    expect(get.mock.calls.flat().join(" ")).not.toContain("SECRET");
+    assign.mockRestore();
   });
 });
 
