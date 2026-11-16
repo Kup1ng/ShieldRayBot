@@ -6,11 +6,12 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.models import Base, BotUser, Order, OrderStatus, Payment, PaymentStatus, Plan
+from app.db.models import Base, BotUser, Order, OrderStatus, Payment, PaymentStatus, Plan, UserService
 from app.services.notifications import notify_new_subscription, notify_wallet_topup_ok
 from app.services.trial_notify import notify_trial_claimed
+from tests.pgtest import pg_engine
 
 
 def _callbacks(markup) -> list[str]:
@@ -21,7 +22,7 @@ def _callbacks(markup) -> list[str]:
 
 class StaffNotifyViewUserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -38,6 +39,17 @@ class StaffNotifyViewUserTests(unittest.IsolatedAsyncioTestCase):
                 BotUser(id=5, telegram_id=5005, referral_code="s5", role="reseller"),
                 Plan(id=1, name="پلن ترکیبی", price=150_000, is_active=True),
                 Plan(id=2, name="تست", price=0, is_active=True, is_trial=True),
+            ]
+        )
+        await self.session.flush()
+        self.session.add_all(
+            UserService(id=service_id, bot_user_id=1, plan_id=plan_id, pg_user_id=service_id,
+                        pg_username=f"svc{service_id}")
+            for service_id, plan_id in ((11, 1), (12, 1), (13, 2), (14, 2))
+        )
+        await self.session.flush()
+        self.session.add_all(
+            [
                 Order(
                     id=38,
                     user_id=1,

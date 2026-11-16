@@ -15,11 +15,12 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan, ResellerProfile, WalletTransaction
 from app.services.billing import GB
 from app.services.reseller_packs import buy_addon_pack
+from tests.pgtest import pg_engine
 
 CHILD = "child-a"
 OWNER = "owner"
@@ -27,7 +28,7 @@ OWNER = "owner"
 
 class ResellerAddonOwnerBudgetTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

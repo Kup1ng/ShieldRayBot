@@ -11,13 +11,14 @@ import httpx
 import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, ChargeCode, Order, Plan
 from app.services.gift_codes import MAX_CODE_PLANS, describe_code, validate_rules
 from app.services.orders import apply_discount, apply_discount_to_order
 from app.services.ux20 import create_charge_code
 from tests.test_gift_code_page import GiftCodeHarness, _reseller
+from tests.pgtest import pg_engine, pg_sync_engine
 
 SHOP, OTHER_SHOP = 3, 2
 PLAN_50, PLAN_100, PLAN_OTHER, TRIAL, OTHER_SHOP_PLAN, PLATFORM_PLAN = 10, 11, 12, 13, 20, 30
@@ -26,7 +27,7 @@ PLAN_50, PLAN_100, PLAN_OTHER, TRIAL, OTHER_SHOP_PLAN, PLATFORM_PLAN = 10, 11, 1
 class PlanLimitedCodeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.tmp.name}/test.db")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -35,6 +36,9 @@ class PlanLimitedCodeTests(unittest.IsolatedAsyncioTestCase):
                 BotUser(id=1, telegram_id=1, referral_code="one"),
                 BotUser(id=OTHER_SHOP, telegram_id=2, referral_code="two"),
                 BotUser(id=SHOP, telegram_id=3, referral_code="shop"),
+            ])
+            await session.flush()
+            session.add_all([
                 Plan(id=PLAN_50, name="50 گیگ", price=100_000, owner_reseller_id=SHOP),
                 Plan(id=PLAN_100, name="100 گیگ", price=200_000, owner_reseller_id=SHOP),
                 Plan(id=PLAN_OTHER, name="10 گیگ", price=50_000, owner_reseller_id=SHOP),
@@ -141,8 +145,6 @@ class PlanLimitPageTests(GiftCodeHarness):
 
         async with self.Session() as session:
             session.add_all([
-                BotUser(id=5, telegram_id=5, referral_code="s5"),
-                BotUser(id=6, telegram_id=6, referral_code="s6"),
                 Plan(id=PLAN_50, name="پلن <b>پنجاه</b>", price=100_000, owner_reseller_id=5),
                 Plan(id=PLAN_100, name="پلن صد", price=200_000, owner_reseller_id=5, is_active=False),
                 Plan(id=TRIAL, name="تست پنج", price=0, owner_reseller_id=5, is_trial=True),
@@ -210,7 +212,7 @@ class PlanIdsMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("charge_code_plan_ids_migration", path)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE charge_codes (id INTEGER PRIMARY KEY, code VARCHAR(64))"))
             conn.execute(sa.text("INSERT INTO charge_codes (id, code) VALUES (1, 'KEEP')"))

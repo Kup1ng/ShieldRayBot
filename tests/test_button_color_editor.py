@@ -4,15 +4,14 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot.handlers import button_colors as ui_module
-from app.db.models import ResellerSetting, Setting
+from app.db.models import BotUser, ResellerSetting, Setting
 from app.services.button_color_editor import (
     color_groups,
     find_color_item,
@@ -28,6 +27,7 @@ from app.services.users import (
     reset_shop_reseller_id,
     set_shop_reseller_id,
 )
+from tests.pgtest import pg_engine
 
 SHOP_A = 501
 SHOP_B = 502
@@ -41,11 +41,16 @@ class _DatabaseCase(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401  (registers every table on Base)
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "button-colors.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.Session() as session:
+            session.add_all(
+                BotUser(id=shop_id, telegram_id=shop_id, referral_code=f"shop{shop_id}", role="reseller")
+                for shop_id in (SHOP_A, SHOP_B)
+            )
+            await session.commit()
         clear_settings_cache()
 
     async def asyncTearDown(self) -> None:

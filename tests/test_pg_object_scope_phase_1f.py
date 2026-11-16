@@ -4,10 +4,9 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.services.pg_object_scope import (
     assert_owned_host,
@@ -20,6 +19,7 @@ from app.services.plans_catalog import (
     template_allowed_for_staff,
 )
 import app.services.pasarguard as pasarguard_mod
+from tests.pgtest import pg_engine
 
 
 class PgObjectScopePureTests(unittest.TestCase):
@@ -216,8 +216,7 @@ class StaffCacheIsolationTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "1f-cache.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

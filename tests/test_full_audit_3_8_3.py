@@ -174,16 +174,6 @@ class PlaintextPasswordUpgradeTests(unittest.TestCase):
                 self.assertTrue(wa.verify_web_admin("admin", "Str0ng!Pass9"))
 
 
-class BackupManifestPathTests(unittest.TestCase):
-    def test_manifest_uses_relative_db_path(self):
-        src = (ROOT / "app/services/backup.py").read_text(encoding="utf-8")
-        # Relative archive members only (never absolute live paths).
-        self.assertIn('SQLITE_DB_MEMBER = "data/bot.db"', src)
-        self.assertIn('POSTGRES_DUMP_MEMBER = "data/postgres.dump"', src)
-        self.assertIn('"db_path": db_member', src)
-        self.assertNotIn('"db_path": str(db_src)', src)
-
-
 class SessionCookieHardeningTests(unittest.TestCase):
     def test_login_cookie_keeps_samesite_lax(self):
         """lax preserves gateway/top-level return navigations; CSRF is Origin/Referer."""

@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import sqlite3
 import stat
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 from cryptography.fernet import Fernet
+from sqlalchemy import text
 
 from app.services import backup as backup_mod
 from app.services import backup_env
 from app.services.secret_box import _hkdf_fernet_key, _legacy_fernet_key, decrypts_with_secret
 
 from tests import test_backup_postgres_restore as pg_case
+from tests.pgtest import new_schema, pg_sync_engine, sync_url
 
 PG_URL = pg_case.PG_URL
 requires_pg = pg_case.requires_pg
@@ -74,24 +75,28 @@ class TestMergeRestoredEnv:
 
 
 class TestStoredSecretsReadable:
-    def _db(self, tmp_path: Path, token: str | None) -> str:
-        path = tmp_path / "secrets.db"
-        with sqlite3.connect(path) as conn:
-            conn.execute("CREATE TABLE reseller_profiles (pg_admin_password_enc TEXT, pg_api_key_enc TEXT)")
-            if token is not None:
-                conn.execute("INSERT INTO reseller_profiles VALUES (?, NULL)", (token,))
-        return f"sqlite+aiosqlite:///{path}"
+    def _db(self, token: str | None) -> str:
+        schema = new_schema()
+        engine = pg_sync_engine(schema=schema)
+        try:
+            with engine.begin() as conn:
+                conn.execute(text("CREATE TABLE reseller_profiles (pg_admin_password_enc TEXT, pg_api_key_enc TEXT)"))
+                if token is not None:
+                    conn.execute(text("INSERT INTO reseller_profiles VALUES (:token, NULL)"), {"token": token})
+        finally:
+            engine.dispose()
+        return sync_url(schema)
 
-    def test_secret_of_this_server_reads_them(self, tmp_path):
+    def test_secret_of_this_server_reads_them(self):
         token = Fernet(_hkdf_fernet_key(b"kept")).encrypt(b"pg-pass").decode()
-        assert backup_env.stored_secrets_readable(self._db(tmp_path, token), "kept") is True
+        assert backup_env.stored_secrets_readable(self._db(token), "kept") is True
 
-    def test_another_server_secret_does_not(self, tmp_path):
+    def test_another_server_secret_does_not(self):
         token = Fernet(_hkdf_fernet_key(b"old")).encrypt(b"pg-pass").decode()
-        assert backup_env.stored_secrets_readable(self._db(tmp_path, token), "new") is False
+        assert backup_env.stored_secrets_readable(self._db(token), "new") is False
 
-    def test_nothing_stored_means_nothing_to_warn_about(self, tmp_path):
-        assert backup_env.stored_secrets_readable(self._db(tmp_path, None), "new") is None
+    def test_nothing_stored_means_nothing_to_warn_about(self):
+        assert backup_env.stored_secrets_readable(self._db(None), "new") is None
 
     def test_legacy_key_still_counts(self):
         token = Fernet(_legacy_fernet_key(b"kept")).encrypt(b"x").decode()

@@ -8,6 +8,7 @@ from __future__ import annotations
 import ast
 import unittest
 from pathlib import Path
+from tests.pgtest import pg_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -134,11 +135,11 @@ class ShopOwnerIdPrincipalTests(unittest.TestCase):
 
 class _ScopeCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base, BotUser, ResellerSetting, Setting
 
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

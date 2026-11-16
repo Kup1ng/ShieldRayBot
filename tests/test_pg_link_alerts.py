@@ -6,16 +6,16 @@ import asyncio
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram.exceptions import TelegramRetryAfter
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.services import pg_link_alerts as alerts
 from app.services import pg_link_health as health
 from app.services import pg_read_resilience as resilience
 from app.services.users import get_setting, set_setting
+from tests.pgtest import pg_engine
 
 
 class LinkAlertTests(unittest.IsolatedAsyncioTestCase):
@@ -24,7 +24,7 @@ class LinkAlertTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'alerts.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

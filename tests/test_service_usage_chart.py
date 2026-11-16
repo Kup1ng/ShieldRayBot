@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi import FastAPI
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.miniapp_service_usage import USAGE_UNAVAILABLE, register_miniapp_service_usage
 from app.db.models import Base, BotUser, UserService
@@ -24,6 +24,7 @@ from app.services.service_usage_chart import (
     usage_window,
 )
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine
 
 GB = 1024**3
 # 14:20 in Tehran (UTC+03:30).
@@ -148,13 +149,14 @@ class ClientUsageParamsTests(unittest.IsolatedAsyncioTestCase):
 
 class MiniUsageRouteTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
         self.session.add_all([
             BotUser(id=1, telegram_id=101, referral_code="owner", role="user"),
             BotUser(id=2, telegram_id=102, referral_code="other", role="user"),
+            BotUser(id=7, telegram_id=107, referral_code="shop7", role="reseller"),
             UserService(id=10, bot_user_id=1, pg_user_id=110, pg_username="mine"),
             UserService(id=20, bot_user_id=2, pg_user_id=120, pg_username="theirs"),
             UserService(id=30, bot_user_id=1, pg_user_id=130, pg_username="shop-sold", shop_id=7),

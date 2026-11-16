@@ -93,12 +93,10 @@ class PlansUiNamingTests(unittest.TestCase):
         self.assertIn("_plan_naming_fields.html", html)
 
     def test_model_has_columns(self):
-        src = Path("app/db/models.py").read_text(encoding="utf-8")
-        self.assertIn("pg_username_prefix", src)
-        self.assertIn("pg_username_suffix", src)
-        self.assertIn("pg_username_pattern", src)
-        migrate = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("pg_username_prefix", migrate)
+        from app.db.models import Plan
+
+        for column in ("pg_username_prefix", "pg_username_suffix", "pg_username_pattern"):
+            self.assertIn(column, Plan.__table__.c)
 
     def test_deliver_passes_plan(self):
         src = Path("app/services/orders.py").read_text(encoding="utf-8")

@@ -13,6 +13,8 @@ from urllib.parse import urlparse
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import get_settings
+from app.db.engine_url import pg_connection_parts
 from app.services import backup as backup_service
 from app.services import panel_brand, pwa
 from app.services.panel_update import STEPS as UPDATE_STEPS
@@ -150,6 +152,15 @@ def update_status_view(status: dict[str, Any]) -> dict[str, Any]:
     return {field: status.get(field) for field in UPDATE_STATUS_FIELDS}
 
 
+def _database_label() -> str:
+    """The PostgreSQL database as host:port/name, never with its credentials."""
+    try:
+        parts = pg_connection_parts(get_settings().database_url)
+    except ValueError:
+        return ""
+    return f"postgresql://{parts['host']}:{parts['port']}/{parts['dbname']}"
+
+
 async def backup_payload(session: AsyncSession) -> dict[str, Any]:
     """Backups, restore progress, the schedule form and Telegram delivery state."""
     from app.services.updates import local_version
@@ -158,10 +169,9 @@ async def backup_payload(session: AsyncSession) -> dict[str, Any]:
     backups = await asyncio.to_thread(backup_service.list_backups)
     restore = await asyncio.to_thread(backup_service.resolve_stale_restore_status)
     warnings = await asyncio.to_thread(backup_service.read_restore_notice)
-    db_path = await asyncio.to_thread(backup_service.sqlite_db_path)
     return {
         "local_version": local_version(),
-        "db_path": str(db_path),
+        "db_path": _database_label(),
         "max_backups": MAX_KEPT_BACKUPS,
         "last_auto_backup_at": values.get(LAST_OK_KEY) or "",
         "last_verify": _verify_state(values),

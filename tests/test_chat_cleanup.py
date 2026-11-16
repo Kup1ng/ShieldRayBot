@@ -15,8 +15,10 @@ from app.bot import chat_cleanup, chat_screen, nav_inline
 from app.bot.handlers import shop
 from app.bot.chat_cleanup import DELETE_WINDOW_SECONDS, ThrowawayLog
 from app.bot.chat_screen import ChatScreenMiddleware
-from app.db.models import ResellerSetting, Setting
+from app.db.models import BotChatMessage, ResellerSetting, Setting
+from app.services.chat_message_ledger import LedgerWriter
 from app.services.users import DEFAULT_SETTINGS, clear_settings_cache
+from tests.pgtest import pg_engine
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
 
 PANEL = InlineKeyboardMarkup(inline_keyboard=[])
@@ -43,7 +45,15 @@ class _Chat:
 
 
 class CleanupTests(unittest.IsolatedAsyncioTestCase):
-    def setUp(self) -> None:
+    async def asyncSetUp(self) -> None:
+        # The process-wide ledger holds connections of another event loop; each test needs its own.
+        self.engine = pg_engine()
+        async with self.engine.begin() as conn:
+            await conn.run_sync(BotChatMessage.__table__.create)
+        self.addAsyncCleanup(self.engine.dispose)
+        patcher = patch.object(chat_cleanup, "writer", LedgerWriter(async_sessionmaker(self.engine, expire_on_commit=False)))
+        patcher.start()
+        self.addCleanup(patcher.stop)
         patcher = patch.object(chat_cleanup, "_log", ThrowawayLog())
         patcher.start()
         self.addCleanup(patcher.stop)

@@ -2,12 +2,11 @@
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import event
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import (
     Base,
@@ -23,6 +22,7 @@ from app.jobs import scheduler as jobs
 from app.services.service_automation import notify_once
 from app.services.usage_alerts import TOPUP_CALLBACK, AlertExtras, alert_extras, time_alert_markup, traffic_alert_markup
 from app.services.users import _SETTINGS_CACHE, clear_settings_cache, set_setting
+from tests.pgtest import pg_engine
 
 
 def buttons(markup) -> list[str]:
@@ -32,7 +32,7 @@ def buttons(markup) -> list[str]:
 class AlertCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'alerts.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

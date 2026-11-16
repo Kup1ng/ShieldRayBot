@@ -7,11 +7,12 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
-from app.db.models import Order, OrderStatus, Plan, ServiceAddonPack, UserService
+from app.db.models import BotUser, Order, OrderStatus, Plan, ServiceAddonPack, UserService
 from app.services.service_addons import _apply_pack_to_service, apply_service_addon
+from tests.pgtest import pg_engine
 
 NOW = 2_000_000_000
 DAY = 86400
@@ -259,10 +260,13 @@ class OnHoldAddonQuotaTests(unittest.IsolatedAsyncioTestCase):
 
 class OnHoldAddonDeliveryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.Session() as session:
+            session.add(BotUser(id=1, telegram_id=101, referral_code="u1", role="user"))
+            await session.commit()
 
     async def asyncTearDown(self):
         await self.engine.dispose()
@@ -276,6 +280,11 @@ class OnHoldAddonDeliveryTests(unittest.IsolatedAsyncioTestCase):
                     UserService(
                         id=1, bot_user_id=1, plan_id=7, pg_user_id=9, pg_username="u1"
                     ),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
                     Order(
                         id=1,
                         user_id=1,
@@ -337,6 +346,7 @@ class OnHoldAddonDeliveryTests(unittest.IsolatedAsyncioTestCase):
                             await session.delete(
                                 await session.get(model, 1 if model is not Plan else 7)
                             )
+                            await session.flush()  # children first: the orders/services tables reference each other
                         await session.commit()
                 pg.modify_user_by_id.assert_awaited_once()
 

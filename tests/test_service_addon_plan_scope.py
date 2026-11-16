@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
-import tempfile
 import unittest
 from pathlib import Path
 
 import sqlalchemy as sa
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, Plan, ServiceAddonPack, UserService
 from app.services.service_addons import (
@@ -22,6 +21,7 @@ from app.services.service_addons import (
     plan_duration_months_for_form,
     replace_plan_scoped_packs_from_form,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -74,7 +74,7 @@ class PackMatchTests(unittest.TestCase):
 
 class PlanScopedListTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -282,7 +282,7 @@ class PlanScopedListTests(unittest.IsolatedAsyncioTestCase):
 
 class ReplacePlanScopedPacksFormTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -339,6 +339,8 @@ class ReplacePlanScopedPacksFormTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_form_replace_clears_when_switch_off_and_rejects_other_shop(self) -> None:
         async with self.Session() as session:
+            session.add(BotUser(id=99, telegram_id=199, referral_code="shop99", role="reseller"))
+            await session.flush()
             session.add_all(
                 [
                     Plan(
@@ -420,32 +422,31 @@ class MigrationTests(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(migration)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = sa.create_engine(f"sqlite:///{Path(tmp) / 'm.db'}")
-            with engine.begin() as conn:
-                conn.execute(
-                    sa.text(
-                        "CREATE TABLE plans (id INTEGER PRIMARY KEY, name VARCHAR(128))"
-                    )
+        engine = pg_sync_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE plans (id INTEGER PRIMARY KEY, name VARCHAR(128))"
                 )
-                conn.execute(
-                    sa.text(
-                        "CREATE TABLE service_addon_packs ("
-                        "id INTEGER PRIMARY KEY, name VARCHAR(128), kind VARCHAR(16), "
-                        "amount FLOAT, price INTEGER, is_general BOOLEAN, is_active BOOLEAN)"
-                    )
+            )
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE service_addon_packs ("
+                    "id INTEGER PRIMARY KEY, name VARCHAR(128), kind VARCHAR(16), "
+                    "amount FLOAT, price INTEGER, is_general BOOLEAN, is_active BOOLEAN)"
                 )
-                with Operations.context(MigrationContext.configure(conn)):
-                    migration.upgrade()
-                    migration.upgrade()
-                    cols = {c["name"] for c in sa.inspect(conn).get_columns("service_addon_packs")}
-                    self.assertIn("plan_id", cols)
-                    self.assertIn("button_style", cols)
-                    migration.downgrade()
-                    cols = {c["name"] for c in sa.inspect(conn).get_columns("service_addon_packs")}
-                    self.assertNotIn("plan_id", cols)
-                    self.assertNotIn("button_style", cols)
-            engine.dispose()
+            )
+            with Operations.context(MigrationContext.configure(conn)):
+                migration.upgrade()
+                migration.upgrade()
+                cols = {c["name"] for c in sa.inspect(conn).get_columns("service_addon_packs")}
+                self.assertIn("plan_id", cols)
+                self.assertIn("button_style", cols)
+                migration.downgrade()
+                cols = {c["name"] for c in sa.inspect(conn).get_columns("service_addon_packs")}
+                self.assertNotIn("plan_id", cols)
+                self.assertNotIn("button_style", cols)
+        engine.dispose()
 
     def test_customer_extra_rates_upgrade_twice_and_downgrade(self) -> None:
         from alembic.migration import MigrationContext
@@ -459,27 +460,26 @@ class MigrationTests(unittest.TestCase):
         assert spec.loader is not None
         spec.loader.exec_module(migration)
 
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = sa.create_engine(f"sqlite:///{Path(tmp) / 'm.db'}")
-            with engine.begin() as conn:
-                conn.execute(
-                    sa.text(
-                        "CREATE TABLE plans (id INTEGER PRIMARY KEY, name VARCHAR(128))"
-                    )
+        engine = pg_sync_engine()
+        with engine.begin() as conn:
+            conn.execute(
+                sa.text(
+                    "CREATE TABLE plans (id INTEGER PRIMARY KEY, name VARCHAR(128))"
                 )
-                with Operations.context(MigrationContext.configure(conn)):
-                    migration.upgrade()
-                    migration.upgrade()
-                    cols = {c["name"] for c in sa.inspect(conn).get_columns("plans")}
-                    self.assertIn("allow_buy_extra", cols)
-                    self.assertIn("extra_gb_price", cols)
-                    self.assertIn("extra_month_price", cols)
-                    migration.downgrade()
-                    cols = {c["name"] for c in sa.inspect(conn).get_columns("plans")}
-                    self.assertNotIn("allow_buy_extra", cols)
-                    self.assertNotIn("extra_gb_price", cols)
-                    self.assertNotIn("extra_month_price", cols)
-            engine.dispose()
+            )
+            with Operations.context(MigrationContext.configure(conn)):
+                migration.upgrade()
+                migration.upgrade()
+                cols = {c["name"] for c in sa.inspect(conn).get_columns("plans")}
+                self.assertIn("allow_buy_extra", cols)
+                self.assertIn("extra_gb_price", cols)
+                self.assertIn("extra_month_price", cols)
+                migration.downgrade()
+                cols = {c["name"] for c in sa.inspect(conn).get_columns("plans")}
+                self.assertNotIn("allow_buy_extra", cols)
+                self.assertNotIn("extra_gb_price", cols)
+                self.assertNotIn("extra_month_price", cols)
+        engine.dispose()
 
 
 if __name__ == "__main__":

@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from unittest.mock import patch
 
 import httpx
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.gift_code_pages import legacy_gift_modal_redirect, register_gift_code_pages
 from app.services.gift_codes import gift_code_scope
+from tests.pgtest import pg_engine
 
 OWNER = {
     "role": "admin",
@@ -104,11 +103,11 @@ class GiftCodeHarness(unittest.IsolatedAsyncioTestCase):
         from app.api import spa_pages
         from app.api.panel_catalog_api import register_panel_catalog_api
         from app.db import Base
-        from app.db.models import ChargeCode
+        from app.db.models import BotUser, ChargeCode
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'g.db'}")
+        engine = pg_engine()
         self.engine = engine
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -116,6 +115,8 @@ class GiftCodeHarness(unittest.IsolatedAsyncioTestCase):
         async with self.Session() as session:
             session.add_all(
                 [
+                    BotUser(id=5, telegram_id=105, referral_code="shop5", role="reseller"),
+                    BotUser(id=6, telegram_id=106, referral_code="shop6", role="reseller"),
                     ChargeCode(code="PLATFORMCODE", amount=1000, reseller_id=None, note="<script>x</script>"),
                     ChargeCode(code="SHOPFIVECODE", amount=2000, reseller_id=5),
                     ChargeCode(code="SHOPSIXCODE", amount=3000, reseller_id=6),

@@ -252,7 +252,6 @@ class Order(Base):
         Index("ix_orders_created_at", "created_at"),
         Index(
             "uq_orders_service_quota_mutation", "service_id", unique=True,
-            sqlite_where=text("service_mutation_pending = true"),
             postgresql_where=text("service_mutation_pending = true"),
         ),
         # One open order per shop may hold a chosen service name (platform orders: shop 0).
@@ -261,7 +260,6 @@ class Order(Base):
             text("coalesce(reseller_id, 0)"),
             "requested_username",
             unique=True,
-            sqlite_where=text(OPEN_NAMED_ORDER_SQL),
             postgresql_where=text(OPEN_NAMED_ORDER_SQL),
         ),
         Index("ix_orders_shop_amount_created", "reseller_id", "amount", "created_at"),
@@ -319,7 +317,6 @@ class Payment(Base):
         # Receipts waiting for a decision, oldest first: what the scheduled approval scans.
         Index(
             "ix_payments_pending_receipt", "receipt_at",
-            sqlite_where=text("status = 'pending' AND receipt_at IS NOT NULL"),
             postgresql_where=text("status = 'pending' AND receipt_at IS NOT NULL"),
         ),
         Index("ix_payments_wallet_shop_amount", "wallet_shop_id", "amount", "created_at"),
@@ -397,7 +394,6 @@ class PaymentSettlement(Base):
             "payment_id",
             "channel",
             unique=True,
-            sqlite_where=text("status IN ('created','awaiting','settling')"),
             postgresql_where=text("status IN ('created','awaiting','settling')"),
         ),
         # Duplicate provider events within a tenant.
@@ -408,7 +404,6 @@ class PaymentSettlement(Base):
             "tenant_key",
             "external_ref",
             unique=True,
-            sqlite_where=text("external_ref IS NOT NULL AND status IN ('settling','settled')"),
             postgresql_where=text("external_ref IS NOT NULL AND status IN ('settling','settled')"),
         ),
     )
@@ -460,7 +455,6 @@ class UserService(Base):
         # A panel user can be imported into «سرویس‌های من» by one customer only.
         Index(
             "uq_user_services_imported_pg_user", "pg_user_id", unique=True,
-            sqlite_where=text("remark = 'imported'"),
             postgresql_where=text("remark = 'imported'"),
         ),
         # New services waiting for the first-use check; the check stamps the row, so it leaves the index.
@@ -468,17 +462,14 @@ class UserService(Base):
         Index("ix_user_services_quota_expire_at", "quota_expire_at"),
         Index(
             "ix_user_services_volume_exhausted", "volume_exhausted_at",
-            sqlite_where=text("volume_exhausted_at IS NOT NULL"),
             postgresql_where=text("volume_exhausted_at IS NOT NULL"),
         ),
         Index(
             "ix_user_services_panel_missing", "shop_id",
-            sqlite_where=text("panel_missing_at IS NOT NULL"),
             postgresql_where=text("panel_missing_at IS NOT NULL"),
         ),
         Index(
             "ix_user_services_first_use_pending", "created_at",
-            sqlite_where=text("first_use_checked_at IS NULL"),
             postgresql_where=text("first_use_checked_at IS NULL"),
         ),
     )
@@ -591,12 +582,10 @@ class BotUserShop(Base):
     __table_args__ = (
         Index(
             "uq_bot_user_shops_shop", "bot_user_id", "shop_id", unique=True,
-            sqlite_where=text("shop_id IS NOT NULL"),
             postgresql_where=text("shop_id IS NOT NULL"),
         ),
         Index(
             "uq_bot_user_shops_platform", "bot_user_id", unique=True,
-            sqlite_where=text("shop_id IS NULL"),
             postgresql_where=text("shop_id IS NULL"),
         ),
         Index("ix_bot_user_shops_shop_user", "shop_id", "bot_user_id"),
@@ -647,7 +636,6 @@ class ServiceImportRequest(Base):
             "bot_user_id",
             "panel_user_id",
             unique=True,
-            sqlite_where=text("status = 'pending'"),
             postgresql_where=text("status = 'pending'"),
         ),
         Index("ix_service_import_requests_shop_status", "shop_id", "status"),
@@ -887,7 +875,6 @@ class BroadcastLog(Base):
             "uq_broadcast_logs_request_key",
             "request_key",
             unique=True,
-            sqlite_where=text("request_key IS NOT NULL"),
             postgresql_where=text("request_key IS NOT NULL"),
         ),
     )
@@ -1479,7 +1466,6 @@ class WalletTransaction(Base):
             "uq_wallet_tx_idempotency",
             "idempotency_key",
             unique=True,
-            sqlite_where=text("idempotency_key IS NOT NULL"),
             postgresql_where=text("idempotency_key IS NOT NULL"),
         ),
     )
@@ -1554,7 +1540,6 @@ class OrgPrincipal(Base):
             "uq_org_principals_single_owner",
             "depth",
             unique=True,
-            sqlite_where=text("depth = 0 AND parent_id IS NULL"),
             postgresql_where=text("depth = 0 AND parent_id IS NULL"),
         ),
     )
@@ -2083,12 +2068,10 @@ class LuckyWheelUserState(Base):
     __table_args__ = (
         Index(
             "uq_lucky_wheel_state_shop", "user_id", "reseller_id", unique=True,
-            sqlite_where=text("reseller_id IS NOT NULL"),
             postgresql_where=text("reseller_id IS NOT NULL"),
         ),
         Index(
             "uq_lucky_wheel_state_platform", "user_id", unique=True,
-            sqlite_where=text("reseller_id IS NULL"),
             postgresql_where=text("reseller_id IS NULL"),
         ),
     )
@@ -2164,7 +2147,6 @@ class ServiceCancellation(Base):
     __tablename__ = "service_cancellations"
     __table_args__ = (Index("ix_service_cancellations_notification", "notification_status", "id"), Index(
         "uq_service_cancellations_open", "service_id", unique=True,
-        sqlite_where=text("status IN ('pending','processing','review','approved')"),
         postgresql_where=text("status IN ('pending','processing','review','approved')"),
     ),)
 
@@ -2191,7 +2173,6 @@ class TargetedCampaign(Base):
     __table_args__ = (
         Index(
             "uq_targeted_campaigns_request_key", "request_key", unique=True,
-            sqlite_where=text("request_key IS NOT NULL"),
             postgresql_where=text("request_key IS NOT NULL"),
         ),
     )
@@ -2277,7 +2258,7 @@ class ConnectionMonitorState(Base):
     __table_args__ = (
         UniqueConstraint("reseller_id", "probe_id", name="uq_monitor_state_shop_probe"),
         Index("uq_monitor_state_main_probe", "probe_id", unique=True,
-              sqlite_where=text("reseller_id IS NULL"), postgresql_where=text("reseller_id IS NULL")),
+              postgresql_where=text("reseller_id IS NULL")),
         Index("ix_monitor_state_lease", "probe_id", "cycle_lease_until"),
     )
 
@@ -2302,10 +2283,9 @@ class ConnectionMonitorTarget(Base):
         UniqueConstraint("reseller_id", "pg_host_id", name="uq_monitor_target_shop_host"),
         Index("uq_monitor_target_shop_config", "reseller_id", "subscription_key", unique=True),
         Index("uq_monitor_target_main_config", "subscription_key", unique=True,
-              sqlite_where=text("reseller_id IS NULL AND subscription_key IS NOT NULL"),
               postgresql_where=text("reseller_id IS NULL AND subscription_key IS NOT NULL")),
         Index("uq_monitor_target_main_host", "pg_host_id", unique=True,
-              sqlite_where=text("reseller_id IS NULL"), postgresql_where=text("reseller_id IS NULL")),
+              postgresql_where=text("reseller_id IS NULL")),
         Index("ix_monitor_target_due", "reseller_id", "test_enabled", "next_check_at", "id"),
         Index("ix_monitor_target_public", "reseller_id", "test_enabled", "is_public", "display_order", "id"),
         Index("ix_monitor_target_lease", "reseller_id", "claim_until"),
@@ -2376,7 +2356,6 @@ class ShopStaffAction(Base):
             "uq_shop_staff_actions_request_key",
             "request_key",
             unique=True,
-            sqlite_where=text("request_key IS NOT NULL"),
             postgresql_where=text("request_key IS NOT NULL"),
         ),
     )

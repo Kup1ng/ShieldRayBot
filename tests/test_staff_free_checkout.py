@@ -5,11 +5,10 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import (
     Base,
@@ -23,6 +22,7 @@ from app.db.models import (
     Role,
 )
 from app.services import staff_free_checkout as free
+from tests.pgtest import pg_engine
 
 SHOP_ID = 2
 OTHER_SHOP_ID = 3
@@ -33,7 +33,7 @@ PRICE = 120_000
 class ShopFixture(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'free.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.sessions = async_sessionmaker(self.engine, expire_on_commit=False)

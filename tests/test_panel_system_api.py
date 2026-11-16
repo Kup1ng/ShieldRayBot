@@ -11,12 +11,13 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.panel_system_api import register_panel_system_api
 from app.db.models import Base
 from app.services import panel_system
 from app.services.users import set_setting
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0}
 SHOP = {"role": "reseller", "bot_user_id": 7, "permissions": ["shop_settings"]}
@@ -88,7 +89,7 @@ def update_context(**overrides: Any) -> dict[str, Any]:
 
 class SystemApiCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -226,8 +227,10 @@ class PwaTabTests(SystemApiCase):
         self.assertIn("blue", {preset["key"] for preset in data["brand"]["presets"]})
 
     async def test_a_shop_brand_never_appears_in_the_owner_brand(self) -> None:
-        from app.db.models import ResellerSetting
+        from app.db.models import BotUser, ResellerSetting
 
+        self.session.add(BotUser(id=7, telegram_id=107, referral_code="shop7", role="reseller"))
+        await self.session.flush()
         self.session.add(ResellerSetting(reseller_user_id=7, key="panel_brand_name", value="Shop Seven"))
         await self.session.commit()
         data = await self.get_json("/api/panel/system/pwa")

@@ -6,14 +6,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 
 class Phase1DiagActionMappingTests(unittest.IsolatedAsyncioTestCase):
     async def _session(self):
         from app.db.models import Base
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)

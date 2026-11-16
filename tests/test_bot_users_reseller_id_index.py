@@ -18,32 +18,20 @@ class BotUsersResellerIdIndexTests(unittest.TestCase):
             col.index, "bot_users.reseller_id must be indexed (tenant-isolation queries filter on it)"
         )
 
-    def test_migration_creates_index_on_sqlite(self):
-        import tempfile
-        from pathlib import Path
-
-        from sqlalchemy import create_engine, inspect
+    def test_migration_creates_index_on_postgresql(self):
+        from sqlalchemy import inspect
 
         from app.db.alembic_runner import upgrade_head
+        from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, sync_url
 
-        with tempfile.TemporaryDirectory() as td:
-            db_path = Path(td) / "idx.db"
-            url = f"sqlite+aiosqlite:///{db_path}"
-            upgrade_head(url)
-            sync_eng = create_engine(f"sqlite:///{db_path}")
-            try:
-                insp = inspect(sync_eng)
-                names = {ix["name"] for ix in insp.get_indexes("bot_users")}
-                self.assertIn("ix_bot_users_reseller_id", names)
-            finally:
-                sync_eng.dispose()
-
-    def test_ensure_indexes_statement_present(self):
-        """Legacy pre-Alembic SQLite bootstrap path must also get this index."""
-        from pathlib import Path
-
-        src = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("ix_bot_users_reseller_id ON bot_users (reseller_id)", src)
+        schema = ensure_schema(new_schema())
+        upgrade_head(sync_url(schema))
+        engine = pg_sync_engine(schema=schema)
+        try:
+            names = {ix["name"] for ix in inspect(engine).get_indexes("bot_users")}
+            self.assertIn("ix_bot_users_reseller_id", names)
+        finally:
+            engine.dispose()
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""Additive random-discount schema for Alembic and legacy SQLite startup."""
+"""Additive random-discount schema applied by Alembic revision 0112."""
 from __future__ import annotations
 
 from sqlalchemy import Connection, inspect, text

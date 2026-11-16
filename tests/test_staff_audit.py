@@ -11,7 +11,7 @@ import httpx
 import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.services.staff_audit import (
     PAGE_SIZE,
@@ -22,6 +22,7 @@ from app.services.staff_audit import (
     staff_action_views,
     staff_audit_scope,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SHOP_A = 71
@@ -66,13 +67,20 @@ class StaffAuditScopeTests(unittest.TestCase):
 class AuditDbHarness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from app.db import Base
+        from app.db.models import BotUser
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'audit.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.Session() as session:
+            session.add_all([
+                BotUser(id=shop_id, telegram_id=7000 + shop_id, referral_code=f"shop{shop_id}", role="reseller")
+                for shop_id in (SHOP_A, SHOP_B)
+            ])
+            await session.commit()
 
     async def asyncTearDown(self):
         await self.engine.dispose()
@@ -308,7 +316,7 @@ class StaffAuditMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("staff_actions_migration", ROOT / "alembic/versions/0078_shop_staff_actions.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             conn.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
             conn.execute(sa.text("INSERT INTO bot_users VALUES (1)"))

@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import spa_pages
 from app.api.panel_resellers_api import register_panel_resellers_api
@@ -37,6 +37,7 @@ from app.services.platform_identity import is_explicit_owner_staff
 from app.services.principal_web_identity import ROLE_PRINCIPAL
 from app.services.reseller_panel_list import LIST_SCAN_LIMIT
 from app.services.secret_box import encrypt_secret
+from tests.pgtest import pg_engine
 
 SECRETS = {
     "pg_admin_password_enc": "PGPASSWORDSECRET",
@@ -78,7 +79,7 @@ def shop_staff(shop_id: int) -> dict[str, Any]:
 
 class PanelResellersApiCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)

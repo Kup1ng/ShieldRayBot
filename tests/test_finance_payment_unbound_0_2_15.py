@@ -16,7 +16,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -46,8 +47,7 @@ class FinancePaymentUnboundSourceGuards(unittest.TestCase):
 class FinanceOrdersPaymentsLiveTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory(prefix="finance-unbound-")
-        db_path = Path(self._tmpdir.name) / "t.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         from app.db.models import Base
 
         async with self.engine.begin() as conn:

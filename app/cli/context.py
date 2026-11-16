@@ -140,5 +140,33 @@ def web_port(root: Path) -> int:
         return 9000
 
 
+MIGRATE_FROM_SQLITE_HINT = (
+    "to move an old SQLite database: pgclock migrate --from-sqlite "
+    "--source 'sqlite+aiosqlite:///…' --target 'postgresql+asyncpg://…'"
+)
+
+
 def database_url(root: Path) -> str:
-    return env_get(root, "DATABASE_URL", "") or f"sqlite+aiosqlite:///{root / 'data' / 'bot.db'}"
+    """The configured DATABASE_URL, or "" when none is set (there is no default database)."""
+    return env_get(root, "DATABASE_URL", "")
+
+
+def database_url_problem(url: str) -> str:
+    """Why this DATABASE_URL cannot run ShieldRay, or "" when it is a PostgreSQL URL."""
+    scheme = (url or "").split(":", 1)[0].split("+", 1)[0].strip().lower()
+    if not url:
+        return f"DATABASE_URL is not set; ShieldRay needs a PostgreSQL URL ({MIGRATE_FROM_SQLITE_HINT})"
+    if scheme == "sqlite":
+        return f"DATABASE_URL points to SQLite, which is no longer supported ({MIGRATE_FROM_SQLITE_HINT})"
+    if scheme not in {"postgresql", "postgres"}:
+        return f"DATABASE_URL must be a PostgreSQL URL ({MIGRATE_FROM_SQLITE_HINT})"
+    return ""
+
+
+def require_postgresql_url(root: Path) -> str:
+    """The configured PostgreSQL URL; raises CliError (naming the migrate command) otherwise."""
+    url = database_url(root)
+    problem = database_url_problem(url)
+    if problem:
+        raise CliError(problem)
+    return url

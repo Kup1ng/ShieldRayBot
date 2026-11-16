@@ -157,8 +157,9 @@ class WholesaleLogicTests(unittest.TestCase):
     def test_order_has_quantity(self):
         src = (ROOT / "app/db/models.py").read_text(encoding="utf-8")
         self.assertIn("quantity: Mapped[int]", src)
-        mig = (ROOT / "app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn('ADD COLUMN quantity', mig)
+        from app.db.models import Order
+
+        self.assertIn("quantity", Order.__table__.c)
         orders = (ROOT / "app/services/orders.py").read_text(encoding="utf-8")
         self.assertIn("create_wholesale_order", orders)
         self.assertIn("quantity=qty", orders)

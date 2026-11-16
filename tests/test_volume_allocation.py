@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -12,11 +11,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import func, select, text
 from sqlalchemy.dialects import postgresql
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.schema import CreateTable
 
 from app.db import Base
@@ -52,6 +50,7 @@ from app.services.volume_allocation import (
     threshold_level,
     volume_threshold_signals,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -59,9 +58,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class VolumeHarness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'vol.db'}"
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -782,7 +779,7 @@ class OversoldListAndMigrationTests(VolumeHarness):
         migration = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(
                 text(

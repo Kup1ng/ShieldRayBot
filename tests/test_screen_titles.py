@@ -5,7 +5,6 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram.fsm.context import FSMContext
@@ -13,11 +12,11 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import MessageEntity
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot.handlers import screen_editor as ui_module
 from app.bot.screen_registry import SCREENS
-from app.db.models import ResellerSetting, Setting
+from app.db.models import BotUser, ResellerSetting, Setting
 from app.services.screen_editor import EditorActor, edit_mode_store
 from app.services.screen_titles import (
     SCREEN_TITLE_DEFAULTS,
@@ -35,6 +34,7 @@ from app.services.screen_titles import (
     with_caption,
 )
 from app.services.users import DEFAULT_SETTINGS, clear_settings_cache
+from tests.pgtest import pg_engine
 
 # What the menus rendered before titles became settings; the defaults must keep them byte-for-byte.
 OLD_HEADINGS = {
@@ -265,10 +265,13 @@ class TitleEditorFlowTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401  (registers every table on Base)
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'titles.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.Session() as session:
+            session.add(BotUser(id=SHOP_A, telegram_id=SHOP_A, referral_code="shopa", role="reseller"))
+            await session.commit()
         self.state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=1, user_id=1))
         clear_settings_cache()
 

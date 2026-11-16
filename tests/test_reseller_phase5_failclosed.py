@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan
 from app.services.billing import GB
@@ -18,11 +18,12 @@ from app.services.pg_admin_subscription import (
     record_unit_extra,
     renew_subscription,
 )
+from tests.pgtest import pg_engine
 
 
 class Phase5FailClosedTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -32,6 +33,8 @@ class Phase5FailClosedTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unreadable_owner_blocks_capacity_growth(self) -> None:
         async with self.Session() as session:
+            session.add(ResellerPlan(id=1, name="plan"))
+            await session.flush()
             session.add(
                 PgAdminSubscription(
                     pg_username="shop3", plan_id=1, access_status=STATUS_ACTIVE,
@@ -66,6 +69,8 @@ class Phase5FailClosedTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_unreadable_owner_allows_same_capacity_renew(self) -> None:
         async with self.Session() as session:
+            session.add(ResellerPlan(id=1, name="plan"))
+            await session.flush()
             session.add(
                 PgAdminSubscription(
                     pg_username="shop3", plan_id=1, access_status=STATUS_ACTIVE,
@@ -86,6 +91,8 @@ class Phase5FailClosedTests(unittest.IsolatedAsyncioTestCase):
     async def test_record_unit_extra_blocks_growth_when_owner_unreadable(self) -> None:
         """Regression: budget must use pre-flush previous totals, not the already-written row."""
         async with self.Session() as session:
+            session.add(ResellerPlan(id=1, name="plan"))
+            await session.flush()
             session.add(
                 PgAdminSubscription(
                     pg_username="shop3", plan_id=1, access_status=STATUS_ACTIVE,

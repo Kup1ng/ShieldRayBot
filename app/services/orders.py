@@ -2849,12 +2849,6 @@ async def renew_service_with_plan(
     if request_key is None:
         session.add(order)
     else:
-        # SQLite's legacy transaction mode needs BEGIN before a first SAVEPOINT.
-        connection = await session.connection()
-        if connection.dialect.name == "sqlite":
-            raw = await connection.get_raw_connection()
-            if not raw.driver_connection.in_transaction:
-                await connection.exec_driver_sql("BEGIN")
         try:
             async with session.begin_nested():
                 session.add(order)

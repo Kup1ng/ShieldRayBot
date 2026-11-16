@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import secrets
 import tempfile
 import unittest
@@ -10,9 +9,8 @@ from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.schema import CreateSchema, DropSchema
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import (
     Base, BotUser, DiscountCode, Order, Payment, Plan, RandomDiscount, RandomDiscountDraw,
@@ -30,6 +28,7 @@ from app.services.random_discounts import (
 )
 from app.services.service_addons import create_addon_order
 from app.services.users import _SETTINGS_CACHE, reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
 SHOP = {"role": "reseller", "bot_user_id": 2, "permissions": ["random_discounts"]}
@@ -38,16 +37,7 @@ SHOP = {"role": "reseller", "bot_user_id": 2, "permissions": ["random_discounts"
 class RandomDiscountTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        test_url = os.environ.get("PGCLOCKBOT_RANDOM_TEST_URL")
-        self.admin_engine = None
-        if test_url:
-            self.schema = "random_test_" + secrets.token_hex(8)
-            self.admin_engine = create_async_engine(test_url)
-            async with self.admin_engine.begin() as connection:
-                await connection.execute(CreateSchema(self.schema))
-            self.engine = create_async_engine(test_url, connect_args={"server_settings": {"search_path": self.schema}})
-        else:
-            self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.tmp.name}/random.db")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -69,8 +59,6 @@ class RandomDiscountTests(unittest.IsolatedAsyncioTestCase):
             Plan(id=4, name="تست", price=0, is_trial=True),
         ])
         await self.session.flush()
-        if test_url:
-            await self.session.execute(text("SELECT setval(pg_get_serial_sequence('plans', 'id'), 4)"))
         await self.session.commit()
         self.contact = patch("app.services.orders.require_purchase_contact", AsyncMock())
         self.contact.start()
@@ -79,10 +67,6 @@ class RandomDiscountTests(unittest.IsolatedAsyncioTestCase):
         self.contact.stop()
         await self.session.close()
         await self.engine.dispose()
-        if self.admin_engine:
-            async with self.admin_engine.begin() as connection:
-                await connection.execute(DropSchema(self.schema, cascade=True))
-            await self.admin_engine.dispose()
         self.tmp.cleanup()
         reset_shop_reseller_id(self.token)
         _SETTINGS_CACHE.clear()

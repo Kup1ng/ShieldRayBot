@@ -7,10 +7,11 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, PgAdminSubscription
 from app.services.pg_admin_subscription import expire_subscription, restore_subscription_access
+from tests.pgtest import pg_engine
 
 
 class FakePanel:
@@ -29,7 +30,7 @@ class FakePanel:
 
 class SubscriptionExpiryTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

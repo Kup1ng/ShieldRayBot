@@ -6,14 +6,14 @@ import tempfile
 import time
 import unittest
 from datetime import datetime
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, Plan, UserService
 from app.services.bot_user_admin import admin_renew_service
+from tests.pgtest import pg_engine
 
 GB = 1024**3
 DAY = 86400
@@ -47,7 +47,7 @@ class FakePG:
 class AdminRenewFreshStartTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'a.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

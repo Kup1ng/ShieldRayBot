@@ -12,7 +12,6 @@ import os
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
@@ -41,7 +40,8 @@ from aiogram.types import (
     Update,
     User,
 )
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 BOT_ID = 777000
 TOKEN = "123456:TEST"
@@ -210,7 +210,7 @@ class ChatSim:
         from app.services.users import clear_settings_cache
 
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'sim.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

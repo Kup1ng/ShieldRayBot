@@ -15,14 +15,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.panel_pg_infra_api import register_panel_pg_infra_api
-from app.db.models import Base, PgStaffAccess, ResellerPlan, ResellerProfile
+from app.db.models import Base, BotUser, PgStaffAccess, ResellerPlan, ResellerProfile
 from app.services import pg_admins_panel, pg_nodes_panel, pg_overview_panel
 from app.services.pasarguard import PasarGuardError
 from app.services.pg_panel_errors import safe_persian_text, safe_pg_error
 from app.services.pg_read import PgReadDenied
+from tests.pgtest import pg_engine
 
 GB = 1024**3
 HASH_SECRET = "PBKDF2-HASH-SECRET"
@@ -91,7 +92,7 @@ class FakePg:
 
 class InfraCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -411,6 +412,7 @@ class AdminsTests(InfraCase):
         ]
         self.pg.details = {"sam": {"total_users": 7, "max_users": 20, "used_traffic": 2 * GB, "data_limit": 10 * GB, "lifetime_used_traffic": 9 * GB}}
         self.session.add_all(seed_plans())
+        self.session.add(BotUser(id=40, telegram_id=40, referral_code="rex40", role="reseller"))
         await self.session.flush()
         self.session.add_all(
             [

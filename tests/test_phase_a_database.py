@@ -1,33 +1,18 @@
-"""Phase A — Alembic, SQLite→PG migration, validation, engine-aware backup."""
+"""Phase A — Alembic, SQLite→PG migration, validation, PostgreSQL backup."""
 
 from __future__ import annotations
 
-import json
-import os
-import uuid
 from pathlib import Path
 
 import pytest
 
-PG_URL = os.environ.get(
-    "PGCLOCK_TEST_PG_URL",
-    "postgresql+asyncpg://pgclock:pgclock@127.0.0.1:5432/pgclock_mig",
+from app.services import backup_postgres as pg_backup
+from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, run_database_url, sync_url
+
+requires_pg_tools = pytest.mark.skipif(
+    pg_backup.find_tool("pg_dump") is None or pg_backup.find_tool("pg_restore") is None,
+    reason="pg_dump / pg_restore are not installed",
 )
-PG_AVAILABLE = False
-try:
-    from sqlalchemy import create_engine, text
-
-    from app.db.engine_url import to_sync_url
-
-    _e = create_engine(to_sync_url(PG_URL))
-    with _e.connect() as c:
-        c.execute(text("SELECT 1"))
-    _e.dispose()
-    PG_AVAILABLE = True
-except Exception:
-    PG_AVAILABLE = False
-
-requires_pg = pytest.mark.skipif(not PG_AVAILABLE, reason="PostgreSQL test DB unavailable")
 
 
 def _seed_sqlite(db_path: Path) -> str:
@@ -130,30 +115,26 @@ def test_engine_url_helpers():
     assert sync.startswith("postgresql+psycopg://")
 
 
-@requires_pg
 def test_alembic_upgrade_and_downgrade_postgres():
-    from app.db.alembic_runner import current_revision, downgrade_one, upgrade_head
-    from app.db.engine_url import to_sync_url
-    from sqlalchemy import create_engine, text
+    from alembic.script import ScriptDirectory
 
-    # Reset public schema
-    eng = create_engine(to_sync_url(PG_URL))
-    with eng.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
-        conn.execute(text("GRANT ALL ON SCHEMA public TO pgclock"))
-        conn.execute(text("GRANT ALL ON SCHEMA public TO public"))
-    eng.dispose()
+    from app.db.alembic_runner import alembic_config, current_revision, downgrade_one, upgrade_head
+    from sqlalchemy import text
 
-    upgrade_head(PG_URL)
-    assert current_revision(PG_URL) == "0001_baseline"
+    schema = ensure_schema(new_schema())
+    url = sync_url(schema)
+    scripts = ScriptDirectory.from_config(alembic_config(url))
+    head = scripts.get_current_head()
 
-    eng = create_engine(to_sync_url(PG_URL))
+    upgrade_head(url)
+    assert current_revision(url) == head
+
+    eng = pg_sync_engine(schema=schema)
     with eng.connect() as conn:
         tables = {
             r[0]
             for r in conn.execute(
-                text("SELECT tablename FROM pg_tables WHERE schemaname='public'")
+                text("SELECT tablename FROM pg_tables WHERE schemaname = :schema"), {"schema": schema}
             )
         }
         assert "bot_users" in tables
@@ -165,110 +146,56 @@ def test_alembic_upgrade_and_downgrade_postgres():
             for r in conn.execute(
                 text(
                     "SELECT indexname FROM pg_indexes "
-                    "WHERE tablename='wallet_transactions'"
-                )
+                    "WHERE tablename='wallet_transactions' AND schemaname = :schema"
+                ),
+                {"schema": schema},
             )
         }
         assert "uq_wallet_referral_reason" in idx
     eng.dispose()
 
-    downgrade_one(PG_URL)
-    assert current_revision(PG_URL) is None
+    downgrade_one(url)
+    assert current_revision(url) == scripts.get_revision(head).down_revision
 
 
-@requires_pg
 def test_sqlite_to_pg_migration_and_validation(tmp_path):
     from app.db.alembic_runner import upgrade_head
-    from app.db.engine_url import to_sync_url
     from app.db.sqlite_to_pg import migrate_sqlite_to_postgres
     from app.db.validate import compare_databases
-    from sqlalchemy import create_engine, text
 
     db_path = tmp_path / "src.db"
     source = _seed_sqlite(db_path)
 
-    eng = create_engine(to_sync_url(PG_URL))
-    with eng.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
-        conn.execute(text("GRANT ALL ON SCHEMA public TO pgclock"))
-    eng.dispose()
-    upgrade_head(PG_URL)
+    target = sync_url(ensure_schema(new_schema()))
+    upgrade_head(target)
 
-    result = migrate_sqlite_to_postgres(source, PG_URL, validate=True)
+    result = migrate_sqlite_to_postgres(source, target, validate=True)
     assert result.ok, result.errors
     assert result.tables_copied["bot_users"] == 2
     assert result.tables_copied["settings"] == 1
     assert result.tables_copied["reseller_profiles"] == 1
     assert result.validation and result.validation.ok
 
-    report = compare_databases(source, PG_URL)
+    report = compare_databases(source, target)
     assert report.ok, report.mismatches
     assert report.extras["wallet_balance_sum"]["source"] == report.extras["wallet_balance_sum"]["target"]
     assert report.extras["billing_balance_sum"]["source"] == 777
 
 
-def test_engine_aware_sqlite_backup_roundtrip(tmp_path, monkeypatch):
-    from app.services import backup as backup_mod
-
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    (data_dir / "backups").mkdir()
-    db_path = data_dir / "bot.db"
-    source = _seed_sqlite(db_path)
-    (tmp_path / ".env").write_text(f'DATABASE_URL="{source}"\n', encoding="utf-8")
-    (data_dir / "web_admin.json").write_text('{"username":"admin"}', encoding="utf-8")
-
-    monkeypatch.setenv("DATABASE_URL", source)
-    import app.config as config
-
-    config.get_settings.cache_clear()
-    monkeypatch.setattr(config, "ROOT_DIR", tmp_path)
-    monkeypatch.setattr(config, "DATA_DIR", data_dir)
-    monkeypatch.setattr(backup_mod, "ROOT_DIR", tmp_path)
-    monkeypatch.setattr(backup_mod, "DATA_DIR", data_dir)
-    monkeypatch.setattr(backup_mod, "BACKUP_DIR", data_dir / "backups")
-
-    created = backup_mod.create_backup(note="phase-a-test", include_env=True, created_by="test")
-    assert created["ok"]
-    assert created["db_engine"] == "sqlite"
-    zip_path = Path(created["path"])
-    ok, err, manifest = backup_mod.validate_backup_archive(zip_path)
-    assert ok, err
-    assert manifest["db_engine"] == "sqlite"
-
-    # Mismatch: pretend live engine is postgresql
-    monkeypatch.setattr(backup_mod, "current_db_engine", lambda: "postgresql")
-    restored = backup_mod.restore_backup(
-        zip_path, restore_env=False, safety_backup=False, restart=False, actor="test"
-    )
-    assert restored["ok"] is False
-    assert "موتور" in restored["error"] or "engine" in restored["error"].lower() or "postgresql" in restored["error"]
-
-    config.get_settings.cache_clear()
-
-
-@requires_pg
+@requires_pg_tools
 def test_engine_aware_postgres_backup(tmp_path, monkeypatch):
     from app.db.alembic_runner import upgrade_head
-    from app.db.engine_url import to_sync_url
     from app.services import backup as backup_mod
-    from sqlalchemy import create_engine, text
 
-    eng = create_engine(to_sync_url(PG_URL))
-    with eng.begin() as conn:
-        conn.execute(text("DROP SCHEMA public CASCADE"))
-        conn.execute(text("CREATE SCHEMA public"))
-        conn.execute(text("GRANT ALL ON SCHEMA public TO pgclock"))
-    eng.dispose()
-    upgrade_head(PG_URL)
+    upgrade_head(sync_url(ensure_schema(new_schema())))
+    database_url = run_database_url()
 
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     (data_dir / "backups").mkdir()
-    (tmp_path / ".env").write_text(f'DATABASE_URL="{PG_URL}"\n', encoding="utf-8")
+    (tmp_path / ".env").write_text(f'DATABASE_URL="{database_url}"\n', encoding="utf-8")
 
-    monkeypatch.setenv("DATABASE_URL", PG_URL)
+    monkeypatch.setenv("DATABASE_URL", database_url)
     import app.config as config
 
     config.get_settings.cache_clear()
@@ -285,5 +212,6 @@ def test_engine_aware_postgres_backup(tmp_path, monkeypatch):
     assert ok, err
     assert manifest["db_engine"] == "postgresql"
     assert any(f.get("path") == "data/postgres.dump" for f in manifest["files"])
+    assert manifest["db_path"] == "data/postgres.dump"
 
     config.get_settings.cache_clear()

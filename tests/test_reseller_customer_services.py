@@ -5,11 +5,10 @@ from __future__ import annotations
 import tempfile
 import unittest
 from dataclasses import replace
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.bot.handlers.action_reason import KEY_DONE_FOR, KEY_REASON
@@ -19,6 +18,7 @@ from app.db.models import Base, BotUser, Plan, ResellerProfile, Role, UserServic
 from app.services import bot_feedback_texts as feedback
 from app.services.bot_user_admin import ServiceSnapshot
 from app.services.staff_cards import format_staff_customer_card
+from tests.pgtest import pg_engine
 
 
 class StaffCardFormatTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class StaffCardFormatTests(unittest.TestCase):
 class ResellerServiceScopeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'svc.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

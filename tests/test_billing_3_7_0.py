@@ -185,15 +185,20 @@ class SchemaPresenceTests(unittest.TestCase):
         self.assertEqual(ResellerBillingTransaction.__tablename__, "reseller_billing_transactions")
         self.assertEqual(ResellerBillingRate.__tablename__, "reseller_billing_rates")
 
-    def test_migrate_adds_billing_columns(self):
-        from pathlib import Path
+    def test_migrations_create_billing_columns(self):
+        import sqlalchemy as sa
 
-        from app.db import session as sess
+        from app.db.alembic_runner import upgrade_head
+        from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, sync_url
 
-        src = Path(sess.__file__).read_text(encoding="utf-8")
-        self.assertIn("billing_mode", src)
-        self.assertIn("billing_balance", src)
-        self.assertIn("billing_watermark_bytes", src)
+        schema = ensure_schema(new_schema())
+        upgrade_head(sync_url(schema))
+        engine = pg_sync_engine(schema=schema)
+        try:
+            columns = {c["name"] for c in sa.inspect(engine).get_columns("reseller_profiles")}
+        finally:
+            engine.dispose()
+        self.assertLessEqual({"billing_mode", "billing_balance", "billing_watermark_bytes"}, columns)
 
 
 if __name__ == "__main__":

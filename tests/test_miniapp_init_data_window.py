@@ -18,7 +18,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Base, BotUser
 from app.services.miniapp_auth import (
@@ -33,6 +33,7 @@ from app.services.miniapp_auth import (
     validate_webapp_init_data,
 )
 from app.services.users import clear_settings_cache
+from tests.pgtest import pg_engine
 
 TOKEN = "123456:MAIN"
 OTHER_BOT_TOKEN = "654321:SHOP"
@@ -92,7 +93,7 @@ class InitDataWindowTests(unittest.TestCase):
 class LoadMiniUserRefusalTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         clear_settings_cache()
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(self.engine, expire_on_commit=False)

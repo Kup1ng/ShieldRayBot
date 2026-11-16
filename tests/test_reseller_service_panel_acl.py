@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from tests.reason_support import ReasonedState
 from app.bot.handlers import reseller_customer_services as handler
 from app.db.models import Base, BotUser, Plan, ResellerProfile, Role, UserService
 from app.services import bot_feedback_texts as feedback
 from app.services import bot_principal_identity as identity
+from tests.pgtest import pg_engine
 
 SHOP_ID = 2
 CUSTOMER_ID = 4
@@ -33,7 +33,7 @@ def shop_staff(**user_actions: bool) -> dict:
 class ShopBotServicePanelAclTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'acl.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

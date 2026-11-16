@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient

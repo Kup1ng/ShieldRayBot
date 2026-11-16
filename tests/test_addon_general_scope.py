@@ -3,16 +3,14 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import sqlalchemy as sa
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import BotUser, Plan, PlanCategory, ServiceAddonPack, UserService
 from app.services.plan_categories import delete_category
@@ -24,6 +22,7 @@ from app.services.service_addons import (
 )
 from app.services.shop_scope import ShopScopeError
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = {
@@ -42,7 +41,7 @@ class AddonCase(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'a.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -56,12 +55,21 @@ class AddonCase(unittest.IsolatedAsyncioTestCase):
                 BotUser(id=6, telegram_id=106, referral_code="u6", role="user", reseller_id=5),
                 PlanCategory(id=1, name="VIP", audience="users"),
                 PlanCategory(id=2, name="Eco", audience="users"),
+            ])
+            await session.flush()
+            session.add_all([
                 Plan(id=1, name="vip", price=1, category_id=1),
                 Plan(id=2, name="eco", price=1, category_id=2),
                 Plan(id=3, name="bare", price=1),
+            ])
+            await session.flush()
+            session.add_all([
                 UserService(id=10, bot_user_id=1, plan_id=1, pg_user_id=1, pg_username="vip-svc"),
                 UserService(id=11, bot_user_id=1, plan_id=3, pg_user_id=2, pg_username="bare-svc"),
                 UserService(id=12, bot_user_id=6, plan_id=1, pg_user_id=3, pg_username="shop-svc"),
+            ])
+            await session.flush()
+            session.add_all([
                 ServiceAddonPack(id=1, name="G5", kind="volume", amount=5, price=800, is_general=True),
                 ServiceAddonPack(id=2, name="G10", kind="volume", amount=10, price=1000, is_general=True),
                 ServiceAddonPack(id=3, name="VIP10", kind="volume", amount=10, price=3000, category_id=1, is_general=False),
@@ -272,7 +280,7 @@ class MigrationTests(unittest.TestCase):
         from alembic.operations import Operations
 
         migration = self._migration()
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE service_addon_packs (id INTEGER PRIMARY KEY, name TEXT, category_id INTEGER)"))
             conn.execute(text("INSERT INTO service_addon_packs VALUES (1, 'plain', NULL), (2, 'vip', 7)"))
@@ -294,7 +302,7 @@ class MigrationTests(unittest.TestCase):
         from alembic.operations import Operations
 
         migration = self._migration()
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             migration.upgrade()
             migration.downgrade()

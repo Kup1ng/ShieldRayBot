@@ -4,23 +4,22 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import CustomerNotice
 from app.services import customer_notice_queue as queue
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 T0 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
@@ -29,7 +28,7 @@ T0 = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
 class QueueCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'q.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -130,7 +129,7 @@ class QueueMigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         self.addCleanup(engine.dispose)
         with engine.begin() as conn:
             for down in (False, False, True, True):

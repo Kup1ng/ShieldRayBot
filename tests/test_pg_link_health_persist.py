@@ -9,9 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.services import pg_link_health as health
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -22,9 +23,7 @@ class PersistLinkHealthTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'persist.db'}"
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -91,7 +90,7 @@ class PgLinkHealthStateMigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             with Operations.context(MigrationContext.configure(conn)):
                 migration.upgrade()

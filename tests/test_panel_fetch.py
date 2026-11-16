@@ -2,25 +2,23 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from itsdangerous import URLSafeTimedSerializer
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import app as app_module
 from app.api import panel_fetch
 from app.db import Base
 from app.db.models import BotUser, ResellerProfile
 from app.services.setup_wizard import ensure_web_secret
+from tests.pgtest import pg_engine
 
 SESSION_VERSION = "session-version"
 PASSWORD_HASH = "h" * 40
@@ -57,7 +55,7 @@ class RedirectPayloadTests(unittest.TestCase):
 class RefusedRequestTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'p.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         session_factory = async_sessionmaker(self.engine, expire_on_commit=False)

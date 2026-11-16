@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.panel_marketing_api import register_panel_marketing_api
 from app.db.models import (
@@ -29,6 +26,7 @@ from app.db.models import (
 from app.services.authz import authz_from_staff, can_shop
 from app.services.platform_identity import is_explicit_owner_staff
 from app.services.users import _SETTINGS_CACHE, reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "permissions": [], "org_principal_id": 1, "org_depth": 0, "org_parent_id": None, "org_status": "active"}
 LEGACY_ADMIN = {"role": "admin", "permissions": []}
@@ -41,7 +39,7 @@ def _reseller(permissions: list[str], shop_id: int | None = 2) -> dict:
 class MarketingApiCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'marketing.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

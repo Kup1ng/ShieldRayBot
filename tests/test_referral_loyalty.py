@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import tempfile
 import unittest
 from pathlib import Path
+from tests.pgtest import pg_engine
 
 # Force sqlite for unit tests
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 
 def _run(coro):
@@ -18,14 +17,13 @@ def _run(coro):
 
 class LoyaltyEngineTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db import Base
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "loy.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -655,7 +653,6 @@ class LoyaltyEngineTests(unittest.IsolatedAsyncioTestCase):
 
 class LoyaltyStaticContractTests(unittest.TestCase):
     def test_handlers_and_panel_wired(self):
-        from pathlib import Path
 
         bot_init = Path("app/bot/__init__.py").read_text()
         self.assertIn("loyalty", bot_init)
@@ -766,7 +763,6 @@ class LoyaltyStaticContractTests(unittest.TestCase):
         self.assertFalse(_reward_in_scope(platform_rw, 42))
 
     def test_tier_save_requires_admin(self):
-        from pathlib import Path
 
         src = Path("app/api/loyalty_pages.py").read_text()
         self.assertIn('async def loyalty_tier_save', src)

@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, Payment, PaymentMethod, PaymentStatus, Role
 from app.services import bbc_settlement as flow
 from app.services.payment_providers import bezanbecard as bbc
 from app.services.users import clear_settings_cache, set_setting
+from tests.pgtest import pg_engine
 
 KEY = "platform-key-123456"
 PANEL = "https://panel.test:9000"
@@ -48,7 +46,7 @@ class GatewayLinkRequestTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         clear_settings_cache()
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'links.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)

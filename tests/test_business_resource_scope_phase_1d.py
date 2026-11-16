@@ -8,12 +8,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.services.shop_scope import (
     ShopScopeError,
@@ -22,6 +21,7 @@ from app.services.shop_scope import (
     bot_user_in_scope,
     resolve_shop_scope_id,
 )
+from tests.pgtest import pg_engine
 
 
 def _find_route(app: FastAPI, path: str, method: str):
@@ -31,6 +31,18 @@ def _find_route(app: FastAPI, path: str, method: str):
         ):
             return route
     raise AssertionError(f"route not found: {method} {path}")
+
+
+async def _seed_owners(session_factory, *user_ids: int, plan: bool = False) -> None:
+    """Rows the fixtures point at (shop owners, the buyer, the plan): PostgreSQL enforces the keys."""
+    from app.db.models import BotUser, Plan
+
+    async with session_factory() as session:
+        session.add_all([BotUser(id=uid, telegram_id=900_000 + uid, referral_code=f"own{uid}") for uid in user_ids])
+        await session.flush()
+        if plan:
+            session.add(Plan(id=1, name="plan", price=1000, duration_days=30))
+        await session.commit()
 
 
 class BusinessScopePureTests(unittest.TestCase):
@@ -172,11 +184,11 @@ class RetryDeliveryRouteTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "1d.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        await _seed_owners(self.Session, 1, 10, 20, plan=True)
 
         from app.api.ux20_pages import register_ux20_pages
 
@@ -297,11 +309,11 @@ class UserWalletRouteScopeTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "1d-users.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        await _seed_owners(self.Session, 55)
 
         from app.api.user_pages import register_user_pages
 
@@ -405,11 +417,11 @@ class LoyaltyAdjustRouteTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "1d-loyalty.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        await _seed_owners(self.Session, 77)
 
         from app.api.loyalty_pages import register_loyalty_pages
 

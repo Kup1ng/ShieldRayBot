@@ -7,9 +7,9 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import httpx
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.models import Base, Order, Payment, ResellerProfile
+from app.db.models import Base, BotUser, Order, Payment, ResellerProfile
 from app.services.receipt_files import (
     RECEIPT_MAX_BYTES,
     fetch_telegram_file,
@@ -17,6 +17,7 @@ from app.services.receipt_files import (
     safe_telegram_file_path,
 )
 from app.services.secret_box import seal_bot_token
+from tests.pgtest import pg_engine
 
 
 
@@ -55,10 +56,15 @@ class ReceiptSourceGuardsTests(unittest.TestCase):
 
 class ReceiptBotTokenTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
+        self.session.add_all([
+            BotUser(id=3, telegram_id=103, referral_code="shop3", role="reseller"),
+            BotUser(id=5, telegram_id=105, referral_code="shop5", role="reseller"),
+        ])
+        await self.session.flush()
         self.session.add(ResellerProfile(user_id=3, bot_token=seal_bot_token("SHOP_TOKEN")))
         self.session.add(ResellerProfile(user_id=5, bot_token=None))
         await self.session.flush()

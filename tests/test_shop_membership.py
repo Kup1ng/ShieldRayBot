@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, BotUserShop, Order, OrderStatus, ResellerProfile
@@ -25,6 +22,7 @@ from app.services.shop_scope import ShopScopeError, assert_bot_user_in_scope
 from app.services.users import get_or_create_user
 from app.services.users_ops import scoped_users_where
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION
+from tests.pgtest import pg_engine
 
 SHOP_ID = 5
 HISTORY_USER, NEW_TG = 1, 999
@@ -33,7 +31,7 @@ HISTORY_USER, NEW_TG = 1, 999
 class MembershipTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'm.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

@@ -9,6 +9,7 @@ from pathlib import Path
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
+from tests.pgtest import pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 TABLE = "service_import_offer_dismissals"
@@ -26,7 +27,7 @@ def _load_migration():
 class ServiceImportOfferMigrationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.migration = _load_migration()
-        self.engine = sa.create_engine("sqlite:///:memory:")
+        self.engine = pg_sync_engine()
         self.addCleanup(self.engine.dispose)
         with self.engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))

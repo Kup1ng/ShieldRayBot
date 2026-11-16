@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import spa_pages
 from app.api.panel_ops_api import register_panel_ops_api
@@ -31,6 +31,7 @@ from app.db.models import (
 from app.services import tickets_panel
 from app.services.authz import authz_from_staff, can_shop
 from app.services.settings_form_payload import field_payload, media_url
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_parent_id": None, "org_status": "active", "permissions": []}
 SHOP_A, SHOP_B = 10, 20
@@ -45,7 +46,7 @@ def shop_staff(shop_id: int | None, permissions: list[str] | None = None, **extr
 
 class OpsApiCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

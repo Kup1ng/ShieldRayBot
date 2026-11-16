@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tests.pgtest import pg_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 RESELLERS_HTML = (ROOT / "app/web/templates/resellers.html").read_text(encoding="utf-8")
@@ -41,13 +42,13 @@ class ResellerCreateOptionsTests(unittest.IsolatedAsyncioTestCase):
     async def test_create_form_offers_only_active_subscription_plans(self):
         from unittest.mock import AsyncMock, patch
 
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db import Base
         from app.db.models import ResellerPlan
         from app.services.reseller_panel_list import create_options_payload
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         async with async_sessionmaker(engine, expire_on_commit=False)() as session:

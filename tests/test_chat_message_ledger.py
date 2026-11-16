@@ -14,7 +14,7 @@ import sqlalchemy as sa
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy import func, select
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot import chat_cleanup, nav_inline
 from app.bot.chat_cleanup import ThrowawayLog
@@ -28,6 +28,7 @@ from app.services.chat_message_ledger import (
     purge_expired,
 )
 from tests.test_chat_cleanup import _Chat
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 PANEL = InlineKeyboardMarkup(inline_keyboard=[])
@@ -36,7 +37,7 @@ PANEL = InlineKeyboardMarkup(inline_keyboard=[])
 class LedgerCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'chat.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -151,7 +152,7 @@ class WriterTests(LedgerCase):
 
     async def test_a_failed_write_is_logged_and_dropped(self) -> None:
         await self.engine.dispose()
-        broken = LedgerWriter(async_sessionmaker(create_async_engine("sqlite+aiosqlite:///:memory:")))
+        broken = LedgerWriter(async_sessionmaker(pg_engine()))
         broken.add((1, 100), 7, KIND_THROWAWAY)
         await broken.flush()  # the table does not exist there: logged, not raised
 
@@ -184,7 +185,7 @@ class MigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             migration.upgrade()
             migration.upgrade()

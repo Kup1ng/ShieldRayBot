@@ -8,17 +8,18 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.miniapp_renewal import register_miniapp_renewal
 from app.db.models import Base, BotUser, Plan, PlanCategory, UserService
+from tests.pgtest import pg_engine
 
 SHOP = 900
 
 
 class RenewalOptionsTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.addAsyncCleanup(self.engine.dispose)
@@ -32,6 +33,9 @@ class RenewalOptionsTests(unittest.IsolatedAsyncioTestCase):
             PlanCategory(id=10, name="<b>اقتصادی</b>", owner_reseller_id=None, audience="users"),
             PlanCategory(id=11, name="خالی", owner_reseller_id=None, audience="users"),
             PlanCategory(id=12, name="فروشگاه", owner_reseller_id=SHOP, audience="users"),
+        ])
+        await self.session.flush()
+        self.session.add_all([
             Plan(id=1, name="ماهانه", price=100, data_limit_gb=50, duration_days=30, category_id=10, is_active=True),
             Plan(id=2, name="ماهانه کم", price=80, data_limit_gb=20, duration_days=30, category_id=10, is_active=True),
             Plan(id=3, name="بدون دسته", price=90, data_limit_gb=40, duration_days=30, is_active=True),

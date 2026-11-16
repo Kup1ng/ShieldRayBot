@@ -57,6 +57,10 @@ class _RenewalFlow(unittest.IsolatedAsyncioTestCase):
                 PlanCategory(id=11, name="ویژه", owner_reseller_id=None, audience="users"),
                 PlanCategory(id=12, name="خالی", owner_reseller_id=None, audience="users"),
                 PlanCategory(id=13, name="فروشگاه دیگر", owner_reseller_id=950, audience="users"),
+            ])
+            # Plans reference their categories by foreign key, so the categories go in first.
+            await session.flush()
+            session.add_all([
                 Plan(id=1, name="ماهانه ۵۰", price=100, data_limit_gb=50, duration_days=30, category_id=10, is_active=True),
                 Plan(id=2, name="ماهانه ۲۰", price=80, data_limit_gb=20, duration_days=30, category_id=10, is_active=True),
                 Plan(id=3, name="سه‌ماهه", price=300, data_limit_gb=200, duration_days=90, category_id=11, is_active=True),

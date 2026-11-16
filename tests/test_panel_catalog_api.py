@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import spa_pages
 from app.api.panel_catalog_api import register_panel_catalog_api
@@ -31,6 +29,7 @@ from app.services.authz import authz_from_staff, can_shop
 from app.services.panel_catalog_plans import DEFAULT_WHOLESALE_TIERS, parse_wholesale_tiers, serialize_custom
 from app.services.platform_identity import is_explicit_owner_staff
 from app.services.users import _SETTINGS_CACHE
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "permissions": [], "org_principal_id": 1, "org_depth": 0, "org_parent_id": None, "org_status": "active"}
 SHOP2 = {"role": "reseller", "permissions": ["plans", "catalog_discounts", "shop_settings"], "bot_user_id": 2}
@@ -50,7 +49,7 @@ RESELLER_ROW_KEYS = {
 class CatalogApiCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'c.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -119,6 +118,11 @@ class CatalogApiCase(unittest.IsolatedAsyncioTestCase):
                 [
                     PlanCategory(id=1, name="PlatformCat", owner_reseller_id=None),
                     PlanCategory(id=2, name="Shop2Cat", owner_reseller_id=2),
+                ]
+            )
+            await session.flush()
+            session.add_all(
+                [
                     Plan(id=1, name="PlatformPlan", price=100, duration_days=30, owner_reseller_id=None, pg_template_id=99),
                     Plan(id=2, name="Shop2Plan", price=200, duration_days=30, owner_reseller_id=2, category_id=2, pg_group_ids="1,2"),
                     Plan(id=3, name="Shop3Plan", price=300, duration_days=30, owner_reseller_id=3),

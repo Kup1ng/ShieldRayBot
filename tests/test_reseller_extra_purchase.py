@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan, ResellerProfile, WalletTransaction
 from app.services.billing import GB
@@ -24,11 +24,12 @@ from app.services.reseller_capacity import (
     raise_admin_limit,
     volume_raiser,
 )
+from tests.pgtest import pg_engine
 
 
 class ExtraPurchaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

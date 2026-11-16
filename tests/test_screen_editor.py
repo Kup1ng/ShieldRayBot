@@ -6,7 +6,6 @@ import tempfile
 from datetime import datetime, timezone
 import time
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram.fsm.context import FSMContext
@@ -14,7 +13,7 @@ from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import CallbackQuery, Chat, InlineKeyboardMarkup, Message, MessageEntity, Update, User
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot import keyboards as kb
 from app.bot import menu_nav as nav
@@ -33,6 +32,7 @@ from app.services.screen_editor import (
 from app.services.rich_text import button_icon_custom_emoji_id
 from app.services.users import DEFAULT_SETTINGS, clear_settings_cache
 from tests.test_bot_ui_keyboard_snapshots import default_ui, sample_reseller_profile
+from tests.pgtest import pg_engine
 
 OWNER = EditorActor(user_id=7, shop_id=None)
 SHOP_A = 501
@@ -230,10 +230,13 @@ class EditorFlowTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401  (registers every table on Base)
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'editor.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.Session() as session:
+            session.add(BotUser(id=SHOP_A, telegram_id=SHOP_A, referral_code="shop501", role="reseller"))
+            await session.commit()
         self.state = FSMContext(storage=MemoryStorage(), key=StorageKey(bot_id=1, chat_id=1, user_id=1))
         clear_settings_cache()
 
@@ -468,13 +471,14 @@ class EditorInputRoutingTests(unittest.IsolatedAsyncioTestCase):
         import app.bot as bot_package
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'routing.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
         async with self.Session() as session:
             session.add(BotUser(id=OWNER.user_id, telegram_id=OWNER.user_id, referral_code="own", role="admin"))
             session.add(BotUser(id=SHOP_OWNER.user_id, telegram_id=SHOP_OWNER.user_id, referral_code="shp", role="reseller"))
+            session.add(BotUser(id=SHOP_A, telegram_id=SHOP_A, referral_code="shop501", role="reseller"))
             await session.commit()
         self.on_shop_bot = False
         clear_settings_cache()

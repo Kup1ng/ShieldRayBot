@@ -5,6 +5,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from tests.pgtest import pg_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,13 +49,13 @@ class LoyaltyTransactionsPayloadTests(unittest.IsolatedAsyncioTestCase):
     async def test_ledger_rows_carry_a_user_label_and_no_user_id(self):
         import tempfile
 
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base, BotUser, PointsTransaction
         from app.services.loyalty_panel import loyalty_transactions
 
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = create_async_engine(f"sqlite+aiosqlite:///{Path(tmp) / 'ledger.db'}")
+        with tempfile.TemporaryDirectory():
+            engine = pg_engine()
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
             try:

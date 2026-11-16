@@ -5,14 +5,11 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
-import tempfile
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.api.miniapp_order_payments import register_miniapp_order_payments
 from app.db.models import BotUser, Order, OrderStatus, Payment, Plan, UserService
@@ -260,18 +257,7 @@ class PlanPaymentTests(OrderPaymentFixture):
 
 
 class ConcurrentPaymentTests(OrderPaymentFixture):
-    """Two requests at once need two real connections, so this case uses a database file."""
-
-    async def asyncSetUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        url = f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'pay.db'}"
-        with patch("tests.test_miniapp_shop_readonly.create_async_engine",
-                   lambda _url: create_async_engine(url, connect_args={"timeout": 30})):
-            await super().asyncSetUp()
-
-    async def asyncTearDown(self) -> None:
-        await super().asyncTearDown()
-        self.tmp.cleanup()
+    """Two requests at once, each on its own session and connection."""
 
     async def test_concurrent_double_tap_opens_one_payment(self) -> None:
         key = new_key()

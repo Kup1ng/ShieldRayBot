@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot import marketing_panels as panels
 from app.bot.handlers import cashback_tools
 from app.db.models import BotUser, CashbackRule, Role
 from app.services.cashback_rules import CashbackSettings, list_rules, load_settings, set_rule_enabled
+from tests.pgtest import pg_engine
 
 
 def _callbacks(markup) -> list[str]:
@@ -85,7 +83,7 @@ class CashbackDbCase(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'c.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -98,6 +96,8 @@ class CashbackDbCase(unittest.IsolatedAsyncioTestCase):
 class CashbackRuleServiceTests(CashbackDbCase):
     async def test_platform_cannot_toggle_a_shop_rule(self):
         async with self.Session() as session:
+            session.add(BotUser(id=5, telegram_id=5005, role=Role.RESELLER.value, referral_code="SH5"))
+            await session.flush()
             session.add(
                 CashbackRule(
                     shop_id=5,
@@ -117,6 +117,8 @@ class CashbackRuleServiceTests(CashbackDbCase):
 
     async def test_shop_cannot_toggle_platform_or_other_shop_rule(self):
         async with self.Session() as session:
+            session.add(BotUser(id=5, telegram_id=5005, role=Role.RESELLER.value, referral_code="SH5"))
+            await session.flush()
             session.add_all(
                 [
                     CashbackRule(

@@ -4,19 +4,17 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 import sqlalchemy as sa
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 from app.db.models import (
@@ -39,6 +37,7 @@ from app.services.payment_settlement import (
     psp_poll_delay,
 )
 from app.services.users import clear_settings_cache, set_setting
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 PAY_URL = "https://pay.sunpay.test"
@@ -74,7 +73,7 @@ class PollFairnessTests(unittest.IsolatedAsyncioTestCase):
         clear_settings_cache()
         await close_client()
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 't.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
@@ -218,7 +217,7 @@ class NextCheckMigrationTests(unittest.TestCase):
         )
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE payment_settlements (id INTEGER PRIMARY KEY, status TEXT)"))
             conn.execute(text("INSERT INTO payment_settlements VALUES (1, 'awaiting'), (2, 'settled')"))

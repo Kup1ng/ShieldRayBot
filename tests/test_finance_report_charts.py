@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import async_sessionmaker

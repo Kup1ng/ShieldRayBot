@@ -154,14 +154,23 @@ class SchemaAddonTests(unittest.TestCase):
         self.assertTrue(hasattr(ResellerPlan, "allow_buy_extra"))
         self.assertTrue(hasattr(ResellerPlan, "extra_gb_price"))
 
-    def test_migrate_script(self):
-        src = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("billing_suspended_at", src)
-        self.assertIn("allow_buy_extra", src)
-        alem = Path("alembic/versions/0005_payg_suspend_plan_addons.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("billing_suspended_user_ids", alem)
+    def test_upgrade_adds_the_suspend_and_addon_columns(self):
+        from sqlalchemy import inspect
+
+        from app.db.alembic_runner import upgrade_head
+        from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, sync_url
+
+        schema = ensure_schema(new_schema())
+        upgrade_head(sync_url(schema))
+        engine = pg_sync_engine(schema=schema)
+        try:
+            inspector = inspect(engine)
+            profile_columns = {column["name"] for column in inspector.get_columns("reseller_profiles")}
+            plan_columns = {column["name"] for column in inspector.get_columns("reseller_plans")}
+        finally:
+            engine.dispose()
+        self.assertLessEqual({"billing_suspended_at", "billing_suspended_user_ids"}, profile_columns)
+        self.assertLessEqual({"allow_buy_extra", "extra_gb_price"}, plan_columns)
 
 
 if __name__ == "__main__":

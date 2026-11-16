@@ -5,17 +5,17 @@ from __future__ import annotations
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, Setting
 from app.jobs import scheduler
 from app.services.daily_report import is_report_due, report_hour
 from app.services.users import clear_settings_cache
+from tests.pgtest import pg_engine
 
 
 def at(hour: int, minute: int = 0) -> datetime:
@@ -35,7 +35,7 @@ class DueTests(unittest.TestCase):
 class JobTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'r.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

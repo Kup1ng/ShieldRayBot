@@ -25,6 +25,7 @@ from app.services.service_cancellations import approve_cancellation, cancellatio
 from app.services.service_renewals import assert_service_quota_available
 from app.services.users import _SETTINGS_CACHE, reset_shop_reseller_id, set_shop_reseller_id
 from app.services.numbers import to_fa_digits
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
@@ -64,7 +65,7 @@ class CustomerFeaturesTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(text(f'CREATE SCHEMA "{self.schema}"'))
             self.engine = create_async_engine(pg_url, connect_args={"server_settings": {"search_path": self.schema}})
         else:
-            self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'features.db'}")
+            self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -508,7 +509,7 @@ class CustomerFeatureMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("customer_migration", ROOT / "alembic/versions/0039_customer_features.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
             conn.execute(text("CREATE TABLE user_services (id INTEGER PRIMARY KEY, pg_username TEXT)"))

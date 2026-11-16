@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from unittest.mock import AsyncMock, patch
 from urllib.parse import parse_qs, urlsplit
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +26,8 @@ class ShopTopupWebReviewTests(RoutesHarness):
         notify.start()
         self.addCleanup(notify.stop)
         async with AsyncSession(bind=self.engine, expire_on_commit=False) as session:
+            session.add(BotUser(id=OTHER_SHOP_ID, telegram_id=106, referral_code="shop-other", role="reseller"))
+            await session.flush()
             session.add(BotUser(id=7, telegram_id=107, referral_code="cust7", role="user", reseller_id=SHOP_ID))
             for payment_id, shop in ((41, SHOP_ID), (42, OTHER_SHOP_ID), (43, None)):
                 session.add(Payment(

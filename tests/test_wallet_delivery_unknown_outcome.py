@@ -6,11 +6,10 @@ import json
 import tempfile
 import time
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import (
     Base, BotUser, DeliveryFailure, Order, Payment, Plan, ServiceAddonPack, UserService,
@@ -26,6 +25,7 @@ from app.services.pasarguard import PasarGuardError
 from app.services.service_addons import AddonPendingReview, create_addon_order
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
 from app.services.ux20 import retry_delivery
+from tests.pgtest import pg_engine
 
 GB = 1024**3
 DAY = 86400
@@ -71,7 +71,7 @@ class FakePanel:
 class WalletDeliveryFixture(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'wallet.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

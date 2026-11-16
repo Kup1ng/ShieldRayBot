@@ -6,20 +6,22 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.db.models import Base, BotUser, Order
+from app.db.models import Base, BotUser, Order, Plan, UserService
 from app.services.notifications import notify_new_subscription
+from tests.pgtest import pg_engine
 
 
 class RenewalSubscriptionReportTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
         self.session.add_all(
             [
+                Plan(id=2, name="Renewal plan", price=160_000),
                 BotUser(
                     id=1,
                     telegram_id=91087008,
@@ -28,6 +30,13 @@ class RenewalSubscriptionReportTests(unittest.IsolatedAsyncioTestCase):
                     username="Niloofar_kj",
                     full_name="Niloofar",
                 ),
+            ]
+        )
+        await self.session.flush()
+        self.session.add(UserService(id=11, bot_user_id=1, plan_id=2, pg_user_id=11, pg_username="renewed"))
+        await self.session.flush()
+        self.session.add_all(
+            [
                 Order(
                     id=281,
                     user_id=1,

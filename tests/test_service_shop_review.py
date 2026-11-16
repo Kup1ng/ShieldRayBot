@@ -2,20 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, Order, OrderStatus, ResellerProfile, UserService
 from app.services.service_scope import customer_may_use_service, list_customer_services
 from app.services.service_shop_review import assign_service_shop, list_services_under_review
 from app.services.shop_membership import is_member
+from tests.pgtest import pg_engine
 
 SHOP_ID, CUSTOMER_ID, REVIEW_SVC, SETTLED_SVC = 5, 7, 21, 22
 
@@ -23,7 +21,7 @@ SHOP_ID, CUSTOMER_ID, REVIEW_SVC, SETTLED_SVC = 5, 7, 21, 22
 class ServiceShopReviewTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'r.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

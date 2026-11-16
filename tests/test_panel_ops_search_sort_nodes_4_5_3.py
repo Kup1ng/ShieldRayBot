@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unittest
 from pathlib import Path
+from tests.pgtest import pg_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,12 +56,12 @@ class NodeTrafficTests(unittest.TestCase):
 
 class OrdersCancelServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_order_rejects_pending_payment(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base, BotUser, Order, OrderStatus, Payment, PaymentStatus, Role
         from app.services.orders import cancel_order
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -89,12 +90,12 @@ class OrdersCancelServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(pay.status, PaymentStatus.REJECTED.value)
 
     async def test_cancel_blocks_delivered(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base, BotUser, Order, OrderStatus, Role
         from app.services.orders import cancel_order
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -113,11 +114,11 @@ class OrdersCancelServiceTests(unittest.IsolatedAsyncioTestCase):
 
 class SingleDeliveryGuaranteeTests(unittest.IsolatedAsyncioTestCase):
     async def _session(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         return async_sessionmaker(engine, expire_on_commit=False)

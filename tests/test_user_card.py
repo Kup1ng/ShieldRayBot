@@ -9,13 +9,14 @@ from typing import Any
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.panel_users_api import register_panel_users_api
 from app.db.models import Base, BotUser, BotUserShop, Order, Plan, ShopWallet, UserService
 from app.services.authz import authz_from_staff, can_shop
 from app.services.user_card import build_user_card
 from app.services.users_ops import expire_tone
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
 SHOP_A, SHOP_B = 10, 20
@@ -28,7 +29,7 @@ def shop_staff(shop_id: int) -> dict[str, Any]:
 
 class UserCardTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()

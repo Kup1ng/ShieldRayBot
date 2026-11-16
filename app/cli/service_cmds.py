@@ -11,13 +11,14 @@ from typing import Any
 from app.cli.context import (
     CliContext,
     SERVICE_NAME,
-    env_get,
+    database_url,
+    database_url_problem,
     service_unit_installed,
     sudo_systemctl,
     systemctl,
     web_port,
 )
-from app.cli.output import CliError, header, info, kv, ok, warn
+from app.cli.output import CliError, err, header, info, kv, ok, warn
 
 FALLBACK_LOG = Path("/tmp/pgclock-panel.log")
 
@@ -54,13 +55,11 @@ def cmd_status(ctx: CliContext) -> int:
     else:
         warn(f"web health :{port} unreachable ({health.get('error')})")
 
-    db = env_get(ctx.root, "DATABASE_URL", "")
-    if "postgresql" in db:
-        kv("database", "postgresql")
-    elif "sqlite" in db:
-        kv("database", "sqlite")
-    else:
-        kv("database", db or "(default sqlite)")
+    problem = database_url_problem(database_url(ctx.root))
+    if problem:
+        err(problem)
+        return 1
+    kv("database", "postgresql")
     return 0
 
 

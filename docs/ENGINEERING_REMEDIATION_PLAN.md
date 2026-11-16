@@ -83,7 +83,7 @@ Goal: no blocking work in async code, no per-row queries, bounded queries.
 1. **Blocking calls.** For each of the 9 `time.sleep`, 3 `urllib.request`, and the `ASYNC` findings, confirm whether it runs in a thread, a CLI process or the event loop. Move any event-loop case to `asyncio.sleep` / `httpx.AsyncClient` / `asyncio.to_thread`. `panel_update.py`, `service_control.py`, `ssl_certs.py`, `host_metrics.py` are the first to check. Also look for bcrypt hashing, image generation (`qrcode_gen.py`) and backup file I/O called directly from handlers.
 2. **N+1 audit.** Add a small test helper that counts SQL statements for a request or handler (SQLAlchemy `before_cursor_execute` event). Use it on the heaviest screens first: admin user list, orders/payments lists, reseller dashboard, the Mini App shop payload, service lists, `check_expiring_services` and the campaign and automation ticks. Where the count grows with the number of rows, batch the query (`IN (...)`) or eager-load. Record before/after counts in each pull request.
 3. **Unbounded reads.** Find `.all()` on tables that grow (`orders`, `payments`, `bot_users`, `user_services`, notifications), add `LIMIT`/keyset pagination, and move totals into `COUNT`/`SUM` queries.
-4. **Indexes.** Review the filter and join columns of the queries from step 2 with `EXPLAIN` on PostgreSQL and SQLite; add missing indexes through migrations.
+4. **Indexes.** Review the filter and join columns of the queries from step 2 with `EXPLAIN` on PostgreSQL; add missing indexes through migrations.
 5. **Panel call fan-out.** Find places that call PasarGuard once per row (service lists, expiry checks, reseller overviews). Replace with page-limited fetches, `asyncio.gather` under a `Semaphore`, and the existing short TTL cache; make sure a panel outage degrades to local data.
 6. **Settings reads.** Find handlers that call `get_all_settings` more than once per request and load it once.
 7. **Telegram throughput.** Confirm broadcast and campaign sending respect rate limits and `RetryAfter` (campaigns already do); align `broadcast.py` with the same lease/resume design if it does not.
@@ -123,7 +123,7 @@ Exit: `F401`, `F8xx`, `UP` are zero; the mypy allow-list covers all of `app/serv
 2. Make the full suite a required CI check once it is green.
 3. Add coverage reporting for `app/services` and require tests for new commerce code through the pull request template (not a global percentage gate).
 4. Add concurrency and failure-injection tests for each state machine: payment review, delivery, renewal, add-on, cancellation, campaign. They must exercise duplicate calls, crash between claim and finalize, and unknown panel outcome.
-5. Add a PostgreSQL job to CI (service container) for the migration tests and the partial-index behavior; SQLite alone cannot prove the PostgreSQL path.
+5. Done: SQLite support was removed and every test runs on PostgreSQL (`tests/conftest.py`, `tests/pgtest.py`); CI jobs that run pytest have a PostgreSQL service.
 6. Speed: the full suite takes about five minutes. Run it in parallel (`pytest-xdist`) once tests are isolated; keep the curated security suite as a fast first job.
 
 Exit: full suite green and required; PostgreSQL migration job present.

@@ -7,18 +7,16 @@ never appear, count or get reversed on the other side.
 from __future__ import annotations
 
 import importlib.util
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import sqlalchemy as sa
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import (
@@ -56,6 +54,7 @@ from app.services.users import (
     set_shop_reseller_id,
 )
 from app.services.wallet import get_wallet_balance
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SHOP, OTHER_SHOP = 10, 11
@@ -65,7 +64,7 @@ PLATFORM_REFERRER, SHOP_REFERRER, CUSTOMER, STRANGER = 20, 21, 22, 23
 class CrossShopCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'x.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -353,7 +352,7 @@ class ReferralShopMigrationTests(unittest.TestCase):
         from alembic.operations import Operations
 
         migration = self.load()
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(sa.text(
                 "CREATE TABLE bot_users (id INTEGER PRIMARY KEY, referred_by_id INTEGER, reseller_id INTEGER)"

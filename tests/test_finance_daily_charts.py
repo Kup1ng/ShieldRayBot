@@ -2,23 +2,21 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy.exc import OperationalError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, Order
 from app.services.dashboard_trend import TEHRAN
 from app.services.finance_charts import finance_charts, method_segments
 from tests.test_update_owner_only import OWNER_SESSION, RoutesHarness
+from tests.pgtest import pg_engine
 
 NOW = datetime(2026, 10, 17, 12, 0, tzinfo=TEHRAN)
 SHOP = 5
@@ -36,7 +34,7 @@ def order(user_id: int, when: datetime, *, status: str = "delivered", shop: int 
 class DailyChartTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'c.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
