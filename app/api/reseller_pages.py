@@ -381,6 +381,9 @@ def register_reseller_pages(app, *, render, require_admin, get_db, require_staff
                     depth=form.get("depth"),
                 ),
             )
+            # Provisioning only flushes; without this the new principal vanished with the session
+            # while its PasarGuard admin already existed.
+            await session.commit()
         except ChildProvisionError as exc:
             return RedirectResponse(f"/resellers?err={_q(exc.message)}", status_code=303)
         except Exception:
