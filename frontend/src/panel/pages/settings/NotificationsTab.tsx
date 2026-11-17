@@ -3,6 +3,7 @@
 import { useState, type FormEvent } from "react";
 
 import { run, usePending } from "../../core/actions";
+import { StatusChip } from "../../ui/Data";
 import { SwitchInput } from "../../ui/Fields";
 import { GlassSection } from "../../ui/Page";
 import { SaveBar } from "../../settings-ui/GroupSections";
@@ -27,14 +28,14 @@ function AdminNotifyForm({ items, reload }: { items: NotificationsExtra["items"]
   };
   return (
     <form onSubmit={submit} className="flex flex-col gap-6">
-      <GlassSection title="نوتیفیکیشن ادمین اصلی" description="برای کدام رویدادها در تلگرام پیام بگیرید. این تنظیمات فقط برای ادمین اصلی است و روی نمایندگان اثر ندارد.">
+      <GlassSection title="هشدارهای ادمین اصلی" description="برای کدام رویدادها در تلگرام پیام بگیرید. این تنظیمات فقط برای ادمین اصلی است و روی نمایندگان اثر ندارد.">
         <div className="flex flex-col gap-4">
           {items.map((item) => (
-            <SwitchInput key={item.key} label={item.title} help={item.help} checked={Boolean(on[item.key])} onChange={(value) => setOn((prev) => ({ ...prev, [item.key]: value }))} />
+            <SwitchInput key={item.key} label={item.system ? <>{item.title} <StatusChip color="default">سیستم</StatusChip></> : item.title} help={item.help} checked={Boolean(on[item.key])} onChange={(value) => setOn((prev) => ({ ...prev, [item.key]: value }))} />
           ))}
         </div>
       </GlassSection>
-      <SaveBar label="ذخیره نوتیفیکیشن‌های ادمین" pending={pending} />
+      <SaveBar label="ذخیره هشدارهای ادمین" pending={pending} />
     </form>
   );
 }

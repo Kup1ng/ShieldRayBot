@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import ResellerSetting, Setting
 from app.services import settings_panel
+from app.services.notifications import SYSTEM_NOTIFY_KEYS
 from app.services.rich_text import pack_rich_text
 from app.services.users import (
     DEFAULT_SETTINGS,
@@ -245,8 +246,15 @@ class SpecialTabTests(SettingsApiCase):
     async def test_the_notifications_tab_reports_the_saved_switches(self) -> None:
         extra = (await self.body("notifications"))["extra"]
         self.assertTrue(extra["items"])
-        self.assertTrue(all(set(item) == {"key", "title", "help", "on"} for item in extra["items"]))
+        self.assertTrue(all(set(item) == {"key", "title", "help", "on", "system"} for item in extra["items"]))
         self.assertTrue(all(item["key"].startswith("notify_") for item in extra["items"]))
+
+    async def test_alerts_about_the_panel_itself_are_marked_system(self) -> None:
+        items = (await self.body("notifications"))["extra"]["items"]
+        system = {item["key"] for item in items if item["system"]}
+        self.assertTrue(system)
+        self.assertEqual(system, SYSTEM_NOTIFY_KEYS & {item["key"] for item in items})
+        self.assertNotIn("notify_new_order", system)
 
     async def test_the_daily_report_tab_fills_an_empty_template_and_lists_the_metrics(self) -> None:
         async with self.Session() as session:

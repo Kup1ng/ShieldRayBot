@@ -17,8 +17,9 @@ vi.mock("../system", () => ({ SYSTEM_TAB_VIEWS: { general: () => <p>نمای ع�
 import { ColorsTab } from "./ColorsTab";
 import { GenericTab } from "./GenericTab";
 import { MenuTab } from "./MenuTab";
+import { NotificationsTab } from "./NotificationsTab";
 import { SettingsPage } from "./SettingsPage";
-import type { ColorsExtra, MenuExtra, SettingField, TabData } from "./types";
+import type { ColorsExtra, MenuExtra, NotificationsExtra, SettingField, TabData } from "./types";
 
 const field = (patch: Partial<SettingField>): SettingField => ({ key: "k", label: "L", kind: "text", help: "", options: [], value: "", show_when: null, variables: null, ...patch });
 const NAV = { kind: "bot" as const, panel_tabs: [], security_href: "/security", groups: [{ key: "look", label: "ظاهر و متن‌ها", is_active: true, tabs: [{ key: "welcome", label: "خوش‌آمد و هویت", href: null }, { key: "messages", label: "متن پیام‌ها", href: null }] }] };
@@ -149,6 +150,21 @@ describe("menu tab", () => {
     render(<MenuTab data={{ tab: "menu", nav: NAV, preview: "chat", preview_values: {}, extra }} reload={() => undefined} />);
     expect(screen.queryByRole("button", { name: "حذف خرید سرویس از منو" })).toBeNull();
     expect(screen.getByRole("button", { name: "حذف کیف پول از منو" })).toBeTruthy();
+  });
+});
+
+describe("notifications tab", () => {
+  it("marks only the alerts about the panel itself as system", () => {
+    const extra: NotificationsExtra = {
+      items: [
+        { key: "notify_new_order", title: "سفارش جدید", help: "", on: true, system: false },
+        { key: "notify_panel_update", title: "نسخهٔ جدید پنل", help: "", on: false, system: true },
+      ],
+    };
+    render(<NotificationsTab data={{ tab: "notifications", nav: NAV, groups: [], extra }} reload={() => undefined} />);
+    expect(screen.getAllByText("سیستم")).toHaveLength(1);
+    expect(screen.getByText("نسخهٔ جدید پنل").closest("label")?.textContent).toContain("سیستم");
+    expect(screen.getByText("هشدارهای ادمین اصلی")).toBeTruthy();
   });
 });
 

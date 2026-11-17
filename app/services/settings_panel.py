@@ -32,7 +32,7 @@ from app.services.daily_report import (
 )
 from app.services.home_overview import check_bot_connection
 from app.services.message_variables import template_variable_specs
-from app.services.notifications import PLATFORM_NOTIFY_PREFS, get_notify_prefs
+from app.services.notifications import PLATFORM_NOTIFY_PREFS, SYSTEM_NOTIFY_KEYS, get_notify_prefs
 from app.services.payment_destinations import (
     enrich_payment_settings,
     parse_payment_cards,
@@ -296,7 +296,7 @@ async def _notifications_extra(session: AsyncSession) -> dict[str, Any]:
     prefs = await get_notify_prefs(session)
     return {
         "items": [
-            {"key": key, "title": title, "help": help_text, "on": bool(prefs.get(key))}
+            {"key": key, "title": title, "help": help_text, "on": bool(prefs.get(key)), "system": key in SYSTEM_NOTIFY_KEYS}
             for key, title, help_text, _default in PLATFORM_NOTIFY_PREFS
         ]
     }

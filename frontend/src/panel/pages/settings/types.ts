@@ -43,7 +43,7 @@ export type ColorSection = {
 };
 export type ColorsExtra = { sections: ColorSection[]; style_options: StyleOption[] };
 
-export type NotificationsExtra = { items: Array<{ key: string; title: string; help: string; on: boolean }> };
+export type NotificationsExtra = { items: Array<{ key: string; title: string; help: string; on: boolean; system: boolean }> };
 
 export type DailyReportExtra = {
   metric_groups: Array<{ id: string; label: string; metrics: Array<{ key: string; title_fa: string; description_fa: string; token: string; default_on: boolean }> }>;
