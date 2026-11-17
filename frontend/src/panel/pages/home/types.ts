@@ -55,6 +55,11 @@ export type LinkHealth = {
   paused: boolean;
   retry_in_sec: number;
   recent_failures: { label: string; count: number }[];
+  /** Owner only, and only while the link is not healthy. */
+  can_reconnect: boolean;
+  budget_exhaustion: { label: string; count: number } | null;
+  /** Set when the figures come from before the last restart. */
+  prior_boot_note: string | null;
 };
 
 export type Redirect = { redirect: string };
@@ -148,6 +153,8 @@ export type InboxData = {
     suspended: { label: string; balance: number }[];
     low: { label: string; balance: number }[];
     threshold: number;
+    /** Charges whose panel outcome is unknown; the Owner decides each one. */
+    review: number;
     max_names: number;
   };
   action_center: ActionCenter;

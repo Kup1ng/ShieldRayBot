@@ -7,21 +7,21 @@ import { SectionBadge } from "@/components/ui/SectionBadge";
 
 import { ApiError, api, isUnknownOutcome } from "../../core/api";
 import { haptic } from "../../core/telegram";
-import { invalidateResource, useResource } from "../../state/resources";
 import { failureText, useMini } from "../../state/store";
 import { InvoiceCard, type InvoiceLine } from "../../ui/flow/InvoiceCard";
 import { StepFooter } from "../../ui/flow/StepFooter";
-import { EmptyState, ErrorState, LoadingRows, Settled } from "../../ui/ScreenState";
+import { ErrorState, LoadingRows } from "../../ui/ScreenState";
 import { ActionButton } from "../../ui/ActionButton";
 import { openTopup } from "../account/topup";
 import { priceView } from "../shop/catalogPrice";
 import { CARD_PAY_UNKNOWN, WALLET_ID, readStart, type OrderChoice, type OrderPayStart, type OrderPayment } from "../shop/orderPay";
 import { PayPicker, usePayMethods, usePayPicker } from "../shop/PayPicker";
 import { PaymentStages } from "../shop/PaymentStages";
-import { PlanPicker } from "../shop/PlanPicker";
 import { InsetBlock } from "../shop/parts";
-import { defaultPlanId, durationLabel, volumeLabel } from "../shop/planGroups";
-import type { Plan, PlansPayload } from "../shop/types";
+import { durationLabel, volumeLabel } from "../shop/planGroups";
+import type { Plan } from "../shop/types";
+import { RenewCategoryPlans, RenewChoices } from "./RenewChoices";
+import { categoryGroups, type RenewPlan, type RenewalOptions } from "./renewalOptions";
 import { RENEW_UNKNOWN_OUTCOME, type RenewPreview } from "./types";
 import { useLoad } from "./useLoad";
 
@@ -255,50 +255,58 @@ function RenewInvoice({
   );
 }
 
-/** Renewal as full-page steps inside the service screen: plan → invoice + payment → receipt → ticket. */
-export function RenewFlow({ serviceId, onExit }: { serviceId: number; onExit: () => void }) {
-  const [picked, setPicked] = useState<number | null>(null);
-  const [step, setStep] = useState<"plans" | "invoice">("plans");
-  const fetched = useResource<PlansPayload>("plans");
-  // A pull-to-refresh reloads the catalog; the open invoice (and a started payment) stay on screen meanwhile.
-  const [last, setLast] = useState<PlansPayload | null>(null);
-  if (fetched.status === "ready" && fetched.data !== last) setLast(fetched.data);
-  const plans = fetched.status !== "ready" && last ? ({ status: "ready", data: last } as const) : fetched;
+type RenewView = { step: "choices" } | { step: "category"; key: string } | { step: "invoice"; plan: RenewPlan; from: string | null };
 
-  if (plans.status !== "ready") {
+/** Renewal as full-page steps inside the service screen: plan (current, then categories) → invoice + payment → receipt → ticket. */
+export function RenewFlow({ serviceId, onExit }: { serviceId: number; onExit: () => void }) {
+  const [view, setView] = useState<RenewView>({ step: "choices" });
+  // The choices are read fresh each time the renewal opens: they depend on this service's plan.
+  const { state, reload } = useLoad(() => api<RenewalOptions>(`/api/mini/service/${serviceId}/renewal-options`));
+
+  if (state.status === "loading") {
     return (
       <>
         <SectionBadge icon="solar:refresh-circle-bold" title="تمدید سرویس" />
-        <Settled resource={plans} rows={3} onRetry={() => invalidateResource("plans")}>
-          {() => null}
-        </Settled>
+        <LoadingRows rows={3} />
+      </>
+    );
+  }
+  if (state.status === "error") {
+    return (
+      <>
+        <SectionBadge icon="solar:refresh-circle-bold" title="تمدید سرویس" />
+        <ErrorState message={state.error} onRetry={() => reload()} />
+        <ActionButton tone="neutral" icon="solar:arrow-right-linear" onPress={onExit}>
+          بازگشت به سرویس
+        </ActionButton>
       </>
     );
   }
 
+  const options = state.data;
+  if (view.step === "invoice") {
+    const back = () => setView(view.from ? { step: "category", key: view.from } : { step: "choices" });
+    return (
+      <RenewInvoice key={view.plan.id} serviceId={serviceId} plan={view.plan} walletEnabled={options.wallet_pay_enabled} onBack={back} onExit={onExit} />
+    );
+  }
+
+  // An unknown or emptied category (the catalog changed) goes back to the choices.
+  const group = view.step === "category" ? categoryGroups(options).find((g) => g.key === view.key) : undefined;
+  const from = group ? group.key : null;
+  const pick = (plan: RenewPlan) => {
+    haptic("select");
+    setView({ step: "invoice", plan, from });
+  };
+
   return (
-    <Settled resource={plans} rows={3} onRetry={() => invalidateResource("plans")}>
-      {(data) => {
-        const list = (data.plans ?? []).filter((p) => !p.is_trial);
-        if (!list.length) {
-          return (
-            <>
-              <SectionBadge icon="solar:refresh-circle-bold" title="تمدید سرویس" />
-              <EmptyState title="پلنی برای تمدید فعال نیست." />
-            </>
-          );
-        }
-        const chosen = list.find((p) => p.id === (picked ?? defaultPlanId(list))) ?? list[0];
-        if (step === "invoice") {
-          return <RenewInvoice key={chosen.id} serviceId={serviceId} plan={chosen} walletEnabled={data.wallet_pay_enabled} onBack={() => setStep("plans")} onExit={onExit} />;
-        }
-        return (
-          <>
-            <SectionBadge icon="solar:refresh-circle-bold" title="تمدید سرویس" />
-            <PlanPicker plans={list} plan={chosen} onSelect={setPicked} onNext={() => setStep("invoice")} />
-          </>
-        );
-      }}
-    </Settled>
+    <>
+      <SectionBadge icon="solar:refresh-circle-bold" title="تمدید سرویس" />
+      {group ? (
+        <RenewCategoryPlans group={group} onPick={pick} onBack={() => setView({ step: "choices" })} />
+      ) : (
+        <RenewChoices options={options} onPick={pick} onOpenCategory={(key) => setView({ step: "category", key })} />
+      )}
+    </>
   );
 }

@@ -30,4 +30,9 @@ describe("parentOf", () => {
     expect(parentOf("ticket", "user")?.parent).toBe("support");
     expect(parentOf("home", "user")).toBeNull();
   });
+
+  it("opens the owner's subscription from the services list", () => {
+    expect(routeFromHash("#subscription").view).toBe("subscription");
+    expect(parentOf("subscription", "reseller")?.parent).toBe("services");
+  });
 });

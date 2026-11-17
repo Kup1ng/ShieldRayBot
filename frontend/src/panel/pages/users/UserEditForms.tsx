@@ -169,6 +169,60 @@ export function ShopWalletSection({ edit, reload }: SectionProps) {
   );
 }
 
+const POINTS_MODE_LABEL = "نوع تنظیم امتیاز";
+
+export function PlatformPointsSection({ edit, reload }: SectionProps) {
+  const platform = edit.platform_points;
+  if (!platform) return null;
+  return (
+    <GlassSection title="تنظیم امتیاز" description="امتیاز پلتفرم این کاربر. علت الزامی است و فقط در دفترکل ثبت می‌شود؛ برای مشتری ارسال نمی‌شود.">
+      <WalletAdjustForm
+        action={`/users/${edit.user.id}/points-adjust`}
+        nonce={platform.nonce}
+        confirmMessage="امتیاز این کاربر مطابق مقدار و نوع انتخاب‌شده تغییر کند؟"
+        amountLabel="امتیاز"
+        amountField="points"
+        noteField="reason"
+        noteLabel="علت"
+        noteRequired
+        noteMax={200}
+        minAmount={1}
+        modeLabel={POINTS_MODE_LABEL}
+        successText="امتیاز به‌روز شد"
+        onDone={reload}
+      />
+    </GlassSection>
+  );
+}
+
+export function ShopPointsSection({ edit, reload }: SectionProps) {
+  const shop = edit.shop_points;
+  if (!shop) return null;
+  return (
+    <GlassSection
+      title="تغییر امتیاز در این فروشگاه"
+      description={`فقط امتیاز همین فروشگاه تغییر می‌کند. هر بار حداکثر ${money(shop.max)} امتیاز و روزانه برای کل فروشگاه ${money(shop.daily)} امتیاز. علت در گزارش کارکنان ثبت می‌شود.`}
+    >
+      <WalletAdjustForm
+        action={`/users/${edit.user.id}/shop-points`}
+        nonce={shop.nonce}
+        confirmMessage="امتیاز این مشتری در فروشگاه شما تغییر کند؟"
+        confirmDescription="این کار در گزارش کارکنان ثبت می‌شود."
+        amountLabel="امتیاز"
+        amountField="points"
+        noteField="reason"
+        noteLabel="علت"
+        noteRequired
+        noteMax={200}
+        minAmount={1}
+        modeLabel={POINTS_MODE_LABEL}
+        successText="امتیاز به‌روز شد"
+        onDone={reload}
+      />
+    </GlassSection>
+  );
+}
+
 export function ShopBlockSection({ edit, reload }: SectionProps) {
   const block = edit.shop_block;
   const [reason, setReason] = useState("");

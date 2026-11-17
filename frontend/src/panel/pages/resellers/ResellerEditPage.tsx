@@ -18,8 +18,10 @@ import { GlassSection, PageHeader } from "../../ui/Page";
 import { Loadable, LoadingBlock } from "../../ui/States";
 import { ColorTagPanel } from "./ColorTagDialog";
 import { CapacitySection, PgLimitsSection } from "./EditCapacity";
+import { CreditSection } from "./EditCredit";
 import { nextStep } from "./editFields";
 import { EditProfileForm } from "./EditProfileForm";
+import { RotationRetry } from "./EditRotation";
 import { FixedWalletSection, PaygSection } from "./EditWallet";
 import { roleLabel } from "./labels";
 import { ReasonDialog, type ReasonRequest } from "./ReasonDialog";
@@ -171,6 +173,7 @@ function EditBody({ id }: { id: number }) {
             </GlassSection>
             <RoleSection key={data.user.role} data={data} onSettled={settled} />
             <EditProfileForm key={JSON.stringify(data.profile) + data.selected_perms.join()} data={data} onSettled={settled} />
+            <RotationRetry shopId={data.user.id} pending={data.profile.pg_password_rotation_pending} onSettled={settled} />
             {data.pg_limits ? <PgLimitsSection limits={data.pg_limits} /> : null}
             {data.pg_subscription ? <CapacitySection key={data.topup_nonce} shopId={data.user.id} sub={data.pg_subscription} onSettled={settled} /> : null}
             {data.is_payg && data.payg ? (
@@ -178,6 +181,7 @@ function EditBody({ id }: { id: number }) {
             ) : (
               <FixedWalletSection key={data.topup_nonce} shopId={data.user.id} balance={data.user.wallet_balance} nonce={data.topup_nonce} onSettled={settled} />
             )}
+            {data.is_payg && data.credit ? <CreditSection shopId={data.user.id} credit={data.credit} onSettled={settled} /> : null}
             <DangerSections data={data} onSettled={settled} />
           </div>
         )}

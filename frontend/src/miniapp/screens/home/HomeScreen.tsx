@@ -15,6 +15,7 @@ import { type Club } from "../club/clubKit";
 import { openTopup } from "../account/topup";
 import { AdminHome } from "../ops/AdminHome";
 import { ShopPeek } from "../ops/ShopPeek";
+import { SubscriptionLink } from "../subscription/SubscriptionLink";
 
 /** Figma dashboard: the large round avatar. The name stays for screen readers and the shop's caption sits under it. */
 function ProfileHeader() {
@@ -172,6 +173,7 @@ function CustomerHome() {
       <NoticeBanner text={me.brand?.notice} />
 
       {persona === "reseller" ? <ShopPeek /> : null}
+      <SubscriptionLink />
     </>
   );
 }

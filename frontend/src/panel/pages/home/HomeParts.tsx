@@ -7,6 +7,7 @@ import { IconTile, type TileTone } from "@/components/ui/IconTile";
 import { Icon } from "@/icons/Icon";
 
 import { GlassSection } from "../../ui/Page";
+import { run, usePending } from "../../core/actions";
 import { fa } from "../../core/format";
 import { StatusChip, Ltr } from "../../ui/Data";
 import { describeChange } from "./format";
@@ -118,9 +119,41 @@ function ms(value: number | null) {
   return value === null ? "—" : <Ltr>{fa(value)} ms</Ltr>;
 }
 
-export function LinkHealthCard({ health }: { health: LinkHealth }) {
+export const RECONNECT_PATH = "/pg-link/reconnect";
+const STATS_NOTE = "آمار همین سرور از آخرین راه‌اندازی؛ با هر ری‌استارت از صفر شروع می‌شود.";
+
+function ReconnectButton({ onDone }: { onDone: () => void }) {
+  const { pending, track } = usePending();
+  const reconnect = () =>
+    track(() =>
+      run(RECONNECT_PATH, {}, {
+        ask: {
+          title: "ارتباط مجدد با پاسارگارد؟",
+          text: "اتصال ذخیره‌شده بازنشانی می‌شود و یک بررسی کوتاه به پاسارگارد فرستاده می‌شود.",
+          confirmLabel: "ارتباط مجدد",
+          tone: "warning",
+        },
+        refresh: onDone,
+      }),
+    );
   return (
-    <GlassSection title="سلامت ارتباط با پاسارگارد" actions={<StatusChip color={health.tone}>{health.label}</StatusChip>}>
+    <Button size="sm" variant="outline" isPending={pending} onPress={reconnect} aria-label="ارتباط مجدد با پاسارگارد">
+      ارتباط مجدد
+    </Button>
+  );
+}
+
+export function LinkHealthCard({ health, onReconnected = () => undefined }: { health: LinkHealth; onReconnected?: () => void }) {
+  return (
+    <GlassSection
+      title="سلامت ارتباط با پاسارگارد"
+      actions={
+        <>
+          <StatusChip color={health.tone}>{health.label}</StatusChip>
+          {health.can_reconnect ? <ReconnectButton onDone={onReconnected} /> : null}
+        </>
+      }
+    >
       <div className="grid gap-3 md:grid-cols-3">
         <dl className="inset-tile flex flex-col gap-2 rounded-lg p-4">
           <dt className="text-xs font-semibold text-muted">زمان پاسخ</dt>
@@ -144,9 +177,10 @@ export function LinkHealthCard({ health }: { health: LinkHealth }) {
           ) : (
             <Fact label="خطا">ندارد</Fact>
           )}
+          {health.budget_exhaustion ? <Fact label={health.budget_exhaustion.label}>{fa(health.budget_exhaustion.count)}</Fact> : null}
         </dl>
       </div>
-      <p className="text-xs text-muted">آمار همین سرور از آخرین راه‌اندازی؛ با هر ری‌استارت از صفر شروع می‌شود.</p>
+      <p className="text-xs text-muted">{health.prior_boot_note ?? STATS_NOTE}</p>
     </GlassSection>
   );
 }

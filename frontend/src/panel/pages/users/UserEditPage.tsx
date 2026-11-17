@@ -18,8 +18,10 @@ import {
   DeleteUserSection,
   DemoSection,
   NoteSection,
+  PlatformPointsSection,
   RoleSection,
   ShopBlockSection,
+  ShopPointsSection,
   ShopWalletSection,
   TagSection,
   WalletSection,
@@ -52,11 +54,19 @@ function Identity({ edit }: { edit: UserEdit }) {
             <RiskTagChip tag={edit.tag} />
           </p>
         </div>
-        <div className="inset-tile flex min-w-44 flex-col gap-0.5 rounded-lg px-4 py-3">
-          <span className="text-xs text-muted">کیف پول</span>
-          <strong className={`num text-lg ${tone}`}>
-            <bdi dir="ltr">{money(wallet.balance)}</bdi> تومان
-          </strong>
+        <div className="flex flex-wrap gap-3">
+          <div className="inset-tile flex min-w-44 flex-col gap-0.5 rounded-lg px-4 py-3">
+            <span className="text-xs text-muted">کیف پول</span>
+            <strong className={`num text-lg ${tone}`}>
+              <bdi dir="ltr">{money(wallet.balance)}</bdi> تومان
+            </strong>
+          </div>
+          <div className="inset-tile flex min-w-32 flex-col gap-0.5 rounded-lg px-4 py-3">
+            <span className="text-xs text-muted">امتیاز</span>
+            <strong className="num text-lg text-foreground">
+              <bdi dir="ltr">{money(edit.points.balance)}</bdi>
+            </strong>
+          </div>
         </div>
       </div>
     </GlassSection>
@@ -72,7 +82,7 @@ function Anchor({ id, children }: { id: string; children: React.ReactNode }) {
   );
 }
 
-function EditBody({ edit, reload }: { edit: UserEdit; reload: () => void }) {
+export function EditBody({ edit, reload }: { edit: UserEdit; reload: () => void }) {
   const props = { edit, reload };
   const forms = [
     edit.can.demo ? <DemoSection key="demo" {...props} /> : null,
@@ -84,6 +94,11 @@ function EditBody({ edit, reload }: { edit: UserEdit; reload: () => void }) {
         <WalletSection {...props} />
       </Anchor>
     ) : null,
+    edit.platform_points ? (
+      <Anchor key="points" id="user-points">
+        <PlatformPointsSection {...props} />
+      </Anchor>
+    ) : null,
     edit.shop_block ? (
       <Anchor key="block" id="user-shop-block">
         <ShopBlockSection {...props} />
@@ -92,6 +107,11 @@ function EditBody({ edit, reload }: { edit: UserEdit; reload: () => void }) {
     edit.shop_wallet ? (
       <Anchor key="shop-wallet" id="user-shop-wallet">
         <ShopWalletSection {...props} />
+      </Anchor>
+    ) : null,
+    edit.shop_points ? (
+      <Anchor key="shop-points" id="user-shop-points">
+        <ShopPointsSection {...props} />
       </Anchor>
     ) : null,
     edit.can.pg_create ? <AssignPlanSection key="plan" {...props} /> : null,

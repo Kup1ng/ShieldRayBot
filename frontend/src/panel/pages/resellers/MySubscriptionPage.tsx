@@ -12,18 +12,20 @@ import { FormGrid, SelectInput } from "../../ui/Fields";
 import { GlassSection, PageHeader, StatTile } from "../../ui/Page";
 import { Loadable, Notice } from "../../ui/States";
 import { capacityText, RELATION_COLOR } from "./labels";
-import type { PackageChoice, SubscriptionData, SubscriptionOverview } from "./types";
+import { MyAccountTabs } from "./MyAccountTabs";
+import type { ExtrasOffer, PackageChoice, SubscriptionData, SubscriptionOverview } from "./types";
 
 const PATH = "/api/panel/my-subscription";
 
-/** The old page's confirmation: renewing the current package versus moving to another one. */
+/** The old page's confirmation: renewing the current package versus moving to another one, with what it drops. */
 export function renewAsk(choice: PackageChoice): { title: string; text: string; confirmLabel: string } {
   const current = choice.relation === "current";
+  const base = current
+    ? `تمدید «${choice.name}» با ${toman(choice.price)} از کیف پول؟`
+    : `تغییر به «${choice.name}» و پرداخت ${toman(choice.price)} از کیف پول؟ ظرفیت بستهٔ جدید همین حالا اعمال می‌شود.`;
   return {
     title: current ? "تمدید بسته" : `${choice.label} بسته`,
-    text: current
-      ? `تمدید «${choice.name}» با ${toman(choice.price)} از کیف پول؟`
-      : `تغییر به «${choice.name}» و پرداخت ${toman(choice.price)} از کیف پول؟ ظرفیت بستهٔ جدید همین حالا اعمال می‌شود.`,
+    text: [base, ...choice.warnings].join(" "),
     confirmLabel: "پرداخت و تمدید",
   };
 }
@@ -123,7 +125,7 @@ function ChoicesTable({ overview, reload }: { overview: SubscriptionOverview; re
   );
 }
 
-function ExtraForm({ kind, unit, options, reload }: { kind: "gb" | "users"; unit: number; options: number[]; reload: () => void }) {
+function ExtraForm({ kind, unit, options, generation, reload }: { kind: "gb" | "users"; unit: number; options: number[]; generation: number; reload: () => void }) {
   const [amount, setAmount] = useState(String(options[0] ?? ""));
   const [pending, setPending] = useState(false);
   const gb = kind === "gb";
@@ -133,7 +135,7 @@ function ExtraForm({ kind, unit, options, reload }: { kind: "gb" | "users"; unit
     try {
       await run(
         "/my-subscription/extra",
-        { kind, amount },
+        { kind, amount, generation },
         {
           ask: {
             title: gb ? "خرید حجم اضافه" : "خرید کاربر اضافه",
@@ -150,7 +152,7 @@ function ExtraForm({ kind, unit, options, reload }: { kind: "gb" | "users"; unit
   return (
     <div className="flex flex-col gap-3">
       <SelectInput
-        label={gb ? `حجم اضافه (گیگی ${toman(unit)})` : `کاربر اضافه (هر نفر ${toman(unit)})`}
+        label={gb ? `نرخ هر گیگ: ${toman(unit)} — یک پله انتخاب کنید` : `نرخ هر کاربر: ${toman(unit)} — یک پله انتخاب کنید`}
         value={amount}
         onChange={setAmount}
         options={options.map((n) => ({ id: String(n), label: `${fa(n)} ${noun} — ${toman(n * unit)}` }))}
@@ -162,6 +164,14 @@ function ExtraForm({ kind, unit, options, reload }: { kind: "gb" | "users"; unit
       </div>
     </div>
   );
+}
+
+/** One sentence on whether bought capacity survives the next renewal. */
+export function extrasKeepText(extras: Pick<ExtrasOffer, "keep_on_renew">): string {
+  const lifetime = extras.keep_on_renew
+    ? "ظرفیت اضافه تا پایان دوره می‌ماند و در تمدید بعدی هم حساب می‌شود."
+    : "ظرفیت اضافه تا پایان همین دوره می‌ماند؛ بستهٔ فعلی در تمدید آن را حفظ نمی‌کند.";
+  return `${lifetime} هر نوع را جدا بخرید.`;
 }
 
 function Content({ data, reload }: { data: SubscriptionData; reload: () => void }) {
@@ -178,14 +188,14 @@ function Content({ data, reload }: { data: SubscriptionData; reload: () => void 
       <Summary overview={overview} wallet={data.wallet} botUsername={data.bot_username} />
       {overview.users_used === null ? <div className="mb-6"><Notice tone="warning">مصرف فعلی از پنل خوانده نشد؛ بسته‌های کوچک‌تر هنگام خرید دوباره بررسی می‌شوند.</Notice></div> : null}
       <div className="flex flex-col gap-6">
-        <GlassSection title="تمدید یا تغییر بسته" description="با تمدید، مدت بسته از تاریخ انقضای فعلی اضافه می‌شود و ظرفیت بستهٔ انتخابی همین حالا اعمال می‌شود. مصرف کاربران صفر می‌شود و هزینه از کیف پول کسر می‌شود.">
+        <GlassSection title="تمدید یا تغییر بسته" description="با تمدید، ظرفیت بستهٔ انتخابی اعمال می‌شود، مصرف خود ادمین (حجم بسته) صفر می‌شود و هزینه از کیف پول کسر می‌شود. مصرف مشتریان دست‌نخورده می‌ماند. انتقال زمان باقی‌مانده و حفظ حجم/کاربر اضافه را تنظیمات همان بسته مشخص می‌کند. بستهٔ بدون زمان تمدید نمی‌شود؛ برای افزایش از بسته‌های اضافه یا ارتقا استفاده کنید.">
           <ChoicesTable overview={overview} reload={reload} />
         </GlassSection>
-        {extras && (extras.gb_price || extras.user_price) ? (
-          <GlassSection title="خرید ظرفیت اضافه" description="ظرفیت اضافه تا پایان دوره می‌ماند و در تمدید بعدی هم حساب می‌شود.">
+        {extras && ((extras.gb_price && extras.gb_options.length) || (extras.user_price && extras.user_options.length)) ? (
+          <GlassSection title="خرید ظرفیت اضافه" description={extrasKeepText(extras)}>
             <FormGrid>
-              {extras.gb_price ? <ExtraForm kind="gb" unit={extras.gb_price} options={extras.gb_options} reload={reload} /> : null}
-              {extras.user_price ? <ExtraForm kind="users" unit={extras.user_price} options={extras.user_options} reload={reload} /> : null}
+              {extras.gb_price && extras.gb_options.length ? <ExtraForm kind="gb" unit={extras.gb_price} options={extras.gb_options} generation={overview.generation} reload={reload} /> : null}
+              {extras.user_price && extras.user_options.length ? <ExtraForm kind="users" unit={extras.user_price} options={extras.user_options} generation={overview.generation} reload={reload} /> : null}
             </FormGrid>
           </GlassSection>
         ) : null}
@@ -200,6 +210,7 @@ function Body() {
   return (
     <>
       <PageHeader icon="solar:card-bold" tone="green" title="اشتراک من" description="بستهٔ فروشگاه شما، تمدید و خرید ظرفیت اضافه از کیف پول" />
+      <MyAccountTabs active="subscription" />
       <Loadable state={state}>{(data) => <Content data={data} reload={state.reload} />}</Loadable>
     </>
   );

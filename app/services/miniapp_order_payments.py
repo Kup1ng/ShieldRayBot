@@ -44,6 +44,7 @@ from app.db.models import Order, OrderStatus, Payment, PaymentStatus, UserServic
 from app.services.catalog_pricing import sale_price
 from app.services.chat_records import keeps_sent
 from app.services.crypto_rates import CryptoQuote, attach_quote, format_amount, quote_from_settings, validity_note
+from app.services.custom_service_name import name_order_at_checkout
 from app.services.db_safe import rollback_quiet
 from app.services.funnel_events import STEP_PAY_START, record_order_funnel
 from app.services.message_variables import DOMAIN_PAYMENT, render_message_template
@@ -573,16 +574,20 @@ async def _pay(session: AsyncSession, order: Order, user_id: int, choice: PayCho
 
 
 async def pay_plan_order(
-    session: AsyncSession, *, user_id: int, shop_id: int | None, ui: dict, req: PlanPayment
+    session: AsyncSession, *, user_id: int, shop_id: int | None, ui: dict, req: PlanPayment,
+    service_name: str | None = None,
 ) -> OrderPayment:
     """Open (or find again) the payment of a plan order of this shop.
 
     The caller has set the shop context to ``shop_id``, so ``create_order`` sells only that
-    shop's plans and records the order as that shop's.
+    shop's plans and records the order as that shop's. A shop that requires a service name gets
+    it stored on the order before the payment opens; an order that already has its name keeps it,
+    so a repeated request is safe.
     """
     _destination(ui, req.choice, "order:new")
     async with _start_lock(user_id, shop_id):
         order = await _plan_order(session, user_id, shop_id, req)
+        await name_order_at_checkout(session, order, buyer_id=user_id, raw=service_name)
         return await _pay(session, order, user_id, req.choice, ui)
 
 

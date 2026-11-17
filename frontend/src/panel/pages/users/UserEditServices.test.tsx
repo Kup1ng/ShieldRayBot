@@ -42,6 +42,9 @@ function edit(can: Partial<UserEdit["can"]> = {}, services: EditService[] = [SER
     can: { manage: false, demo: false, private_marks: false, view_services: true, pg_create: true, pg_update: true, pg_delete: true, delete_user: false, ...can },
     shop_wallet: null,
     shop_block: null,
+    points: { balance: 0 },
+    shop_points: null,
+    platform_points: null,
   };
 }
 

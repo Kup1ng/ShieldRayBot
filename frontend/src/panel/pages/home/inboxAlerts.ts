@@ -9,6 +9,8 @@ export type InboxAlert = {
   title: string;
   detail: string;
   action: { label: string; href: string; primary?: boolean };
+  /** A decision to take, not a notice: it stays until the work is done and has no «حذف». */
+  undismissable?: boolean;
 };
 
 function names(rows: { label: string }[], max: number): string {
@@ -58,7 +60,7 @@ export function inboxAlerts(data: InboxData): InboxAlert[] {
       action: { label: "نمای کلی", href: "/pg" },
     });
   }
-  const { suspended, low, threshold, max_names: max } = data.payg;
+  const { suspended, low, threshold, review, max_names: max } = data.payg;
   if (suspended.length) {
     rows.push({
       key: "payg_suspended",
@@ -67,6 +69,17 @@ export function inboxAlerts(data: InboxData): InboxAlert[] {
       title: `${fa(suspended.length)} نماینده PAYG مسدود`,
       detail: names(suspended, max),
       action: { label: "نمایندگان", href: "/resellers" },
+    });
+  }
+  if (review > 0) {
+    rows.push({
+      key: "payg_review",
+      entity: "",
+      status: "warning",
+      title: `${fa(review)} هزینهٔ PAYG در انتظار بازبینی`,
+      detail: "پنل پاسخ روشن نداد؛ اعمال شدن یا نشدن تغییر را مشخص کنید",
+      action: { label: "بازبینی", href: "/payg/charges/review" },
+      undismissable: true,
     });
   }
   if (low.length) {

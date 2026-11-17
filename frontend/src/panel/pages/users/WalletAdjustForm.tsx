@@ -43,6 +43,8 @@ type WalletAdjustFormProps = {
   noteMax?: number;
   minAmount?: number;
   hint?: string;
+  /** Accessible name of the «کاهش» / «افزایش» pair. */
+  modeLabel?: string;
   /** Hidden fields the handler also needs (e.g. the customer id). */
   extraFields?: Record<string, string>;
   successText?: string;
@@ -66,6 +68,7 @@ export function WalletAdjustForm({
   noteMax = 120,
   minAmount = 1000,
   hint,
+  modeLabel = "نوع تنظیم کیف پول",
   extraFields,
   successText = "کیف پول به‌روز شد",
   onDone,
@@ -115,7 +118,7 @@ export function WalletAdjustForm({
           {error}
         </p>
       ) : null}
-      <div role="group" aria-label="نوع تنظیم کیف پول" className="grid grid-cols-2 gap-3">
+      <div role="group" aria-label={modeLabel} className="grid grid-cols-2 gap-3">
         <Button variant="outline" className="!h-12 !rounded-lg" isPending={pending === "debit"} isDisabled={pending !== null} onPress={() => void submit("debit")}>
           <span aria-hidden className="size-2.5 rounded-full bg-[var(--tile-red)]" />
           کاهش

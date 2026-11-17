@@ -10,6 +10,7 @@ import { Notice } from "../../ui/States";
 import { ButtonStyleField, CategorySelect, FormActions, NamingFields, PgSourceFields, durationHelp, groupFields, volumeHelp, type SourceMode } from "./PlanParts";
 import type { CustomPlan, Naming, PlanEdit, PlansOverview, TrialPlan, WholesalePlan } from "./types";
 import { useFormSubmit } from "./useFormSubmit";
+import { UserExtraSalesSection, useUserExtraSales } from "./UserExtraSales";
 
 type Done = (result: ActionResult) => void;
 type Common = { data: PlansOverview; onDone: Done; onCancel: () => void };
@@ -19,6 +20,7 @@ const submitOn = (handler: () => void) => (event: FormEvent) => {
   event.preventDefault();
   handler();
 };
+const CARRY_QUOTA_HELP = "مانده سرویس به تمدید، ارتقا یا تنزل اضافه می‌شود؛ خاموش: فقط حجم و مدت همین پلن";
 const usersCategories = (data: PlansOverview) => data.categories.filter((c) => c.is_active && c.audience === "users");
 
 /* ───────── fixed plan (create) ───────── */
@@ -36,6 +38,8 @@ export function FixedPlanForm({ data, onDone, onCancel }: Common) {
   const [template, setTemplate] = useState("");
   const [naming, setNaming] = useState<Naming>({ prefix: "", suffix: "", pattern: "" });
   const [style, setStyle] = useState("inherit");
+  const [carry, setCarry] = useState(true);
+  const sales = useUserExtraSales(data.pack_config.user);
   const { pending, send } = useFormSubmit(onDone);
 
   const submit = () =>
@@ -48,11 +52,13 @@ export function FixedPlanForm({ data, onDone, onCancel }: Common) {
         duration_days: days,
         data_limit_gb: gb,
         description,
+        carry_remaining_quota: carry,
         mode,
         ...(mode === "template" ? { pg_template_id: template } : { ...groupFields(groups), also_create_template: alsoTemplate }),
         pg_username_prefix: naming.prefix,
         pg_username_suffix: naming.suffix,
         pg_username_pattern: naming.pattern,
+        ...sales.fields(),
         button_style: style,
       },
       "پلن ذخیره شد",
@@ -68,6 +74,7 @@ export function FixedPlanForm({ data, onDone, onCancel }: Common) {
         <TextInput label="حجم (گیگ)" type="number" min={0} step={0.1} value={gb} onChange={setGb} placeholder="خالی = نامحدود" help={volumeHelp(data.limits)} />
       </FormGrid>
       <TextInput label="توضیح کوتاه" value={description} onChange={setDescription} placeholder="نمایش در بات" />
+      <SwitchInput label="انتقال مانده حجم و زمان در تمدید" help={CARRY_QUOTA_HELP} checked={carry} onChange={setCarry} />
       <PgSourceFields
         mode={mode}
         onMode={setMode}
@@ -81,6 +88,7 @@ export function FixedPlanForm({ data, onDone, onCancel }: Common) {
         extra={data.can_create_template ? <SwitchInput label="همزمان تمپلیت مشابه در پاسارگارد هم ساخته شود" checked={alsoTemplate} onChange={setAlsoTemplate} /> : null}
       />
       <NamingFields naming={naming} onChange={setNaming} defaults={data.naming_defaults} volumeGb={gb} />
+      <UserExtraSalesSection sales={sales} styleOptions={data.pack_style_options} maxPerKind={data.pack_config.user.max_per_kind} />
       <ButtonStyleField value={style} onChange={setStyle} options={data.plan_style_options} />
       <FormActions submitLabel="ذخیره پلن" pending={pending} onCancel={onCancel} />
     </form>
@@ -300,22 +308,19 @@ export function WholesaleForm({ data, onDone, onCancel }: Common) {
   );
 }
 
-/* ───────── service add-on pack (create and edit) ───────── */
+/* ───────── service add-on pack (edit; creating goes through AddonPackCreateForm) ───────── */
 
-export type PackDraft = { id: number | null; name: string; kind: "volume" | "duration"; category: string; amount: string; price: string; sort: string; description: string };
+export type PackDraft = { id: number; name: string; kind: "volume" | "duration"; category: string; amount: string; price: string; sort: string; description: string };
 
-export const EMPTY_PACK: PackDraft = { id: null, name: "", kind: "volume", category: "", amount: "", price: "", sort: "0", description: "" };
-
-export function AddonPackForm({ data, initial, fixedKind, onDone, onCancel }: Common & { initial: PackDraft; fixedKind?: "volume" | "duration" }) {
-  const [draft, setDraft] = useState<PackDraft>(fixedKind ? { ...initial, kind: fixedKind } : initial);
+export function AddonPackForm({ data, initial, onDone, onCancel }: Common & { initial: PackDraft }) {
+  const [draft, setDraft] = useState<PackDraft>(initial);
   const { pending, send } = useFormSubmit(onDone);
   const days = draft.kind === "duration";
   const set = (change: Partial<PackDraft>) => setDraft((d) => ({ ...d, ...change }));
-  const editing = draft.id !== null;
 
   const submit = () =>
     send(
-      editing ? `/plans/addons/${draft.id}/edit` : "/plans/addons",
+      `/plans/addons/${draft.id}/edit`,
       {
         name: draft.name,
         kind: draft.kind,
@@ -335,17 +340,15 @@ export function AddonPackForm({ data, initial, fixedKind, onDone, onCancel }: Co
       </p>
       <FormGrid>
         <TextInput label="نام بسته" value={draft.name} onChange={(name) => set({ name })} required maxLength={128} placeholder={days ? "مثلاً ۷ روز اضافه" : "مثلاً ۱۰ گیگ اضافه"} />
-        {fixedKind ? null : (
-          <SelectInput
-            label="نوع"
-            value={draft.kind}
-            onChange={(kind) => set({ kind: kind === "duration" ? "duration" : "volume" })}
-            options={[
-              { id: "volume", label: "حجم (گیگ)" },
-              { id: "duration", label: "زمان (روز)" },
-            ]}
-          />
-        )}
+        <SelectInput
+          label="نوع"
+          value={draft.kind}
+          onChange={(kind) => set({ kind: kind === "duration" ? "duration" : "volume" })}
+          options={[
+            { id: "volume", label: "حجم (گیگ)" },
+            { id: "duration", label: "زمان (روز)" },
+          ]}
+        />
         <SelectInput
           label="دسته‌ی بسته"
           value={draft.category}
@@ -368,7 +371,7 @@ export function AddonPackForm({ data, initial, fixedKind, onDone, onCancel }: Co
         <TextInput label="ترتیب" type="number" value={draft.sort} onChange={(sort) => set({ sort })} />
       </FormGrid>
       <TextInput label="توضیح (اختیاری)" value={draft.description} onChange={(description) => set({ description })} maxLength={255} placeholder="نمایش در بات" />
-      <FormActions submitLabel={editing ? "ذخیره تغییرات" : "ذخیره بسته"} pending={pending} onCancel={onCancel} />
+      <FormActions submitLabel="ذخیره تغییرات" pending={pending} onCancel={onCancel} />
     </form>
   );
 }
@@ -389,6 +392,8 @@ export function PlanEditForm({ data, onDone, onCancel }: { data: PlanEdit; onDon
   const [template, setTemplate] = useState(plan.pg_template_id ? String(plan.pg_template_id) : "");
   const [naming, setNaming] = useState<Naming>(plan.naming);
   const [style, setStyle] = useState(plan.button_style);
+  const [carry, setCarry] = useState(plan.carry_remaining_quota);
+  const sales = useUserExtraSales(data.pack_config.user, { allow: plan.allow_buy_extra, gbPrice: plan.extra_gb_price, monthPrice: plan.extra_month_price, packs: data.packs });
   const { pending, send } = useFormSubmit(onDone);
 
   const submit = () =>
@@ -402,11 +407,13 @@ export function PlanEditForm({ data, onDone, onCancel }: { data: PlanEdit; onDon
         description,
         category_id: category,
         sort_order: sort,
+        carry_remaining_quota: carry,
         mode,
         ...(mode === "template" ? { pg_template_id: template } : groupFields(groups)),
         pg_username_prefix: naming.prefix,
         pg_username_suffix: naming.suffix,
         pg_username_pattern: naming.pattern,
+        ...sales.fields(),
         button_style: style,
       },
       "پلن به‌روزرسانی شد",
@@ -421,6 +428,7 @@ export function PlanEditForm({ data, onDone, onCancel }: { data: PlanEdit; onDon
         <TextInput label="حجم (گیگ)" type="number" min={0} step={0.1} value={gb} onChange={setGb} placeholder="خالی = نامحدود" help={volumeHelp(data.limits)} />
       </FormGrid>
       <TextInput label="توضیح کوتاه" value={description} onChange={setDescription} placeholder="نمایش در بات" />
+      <SwitchInput label="انتقال مانده حجم و زمان در تمدید" help={CARRY_QUOTA_HELP} checked={carry} onChange={setCarry} />
       <FormGrid>
         <CategorySelect value={category} onChange={setCategory} categories={data.categories} help="نوع پلن (ثابت/تست/…) عوض نمی‌شود؛ برچسب خاموش فعلی قابل نگه‌داشتن است" />
         <TextInput label="ترتیب نمایش" type="number" value={sort} onChange={setSort} />
@@ -437,6 +445,7 @@ export function PlanEditForm({ data, onDone, onCancel }: { data: PlanEdit; onDon
         groupLabel="گروه‌های پاسارگارد (حداقل یکی)"
       />
       <NamingFields naming={naming} onChange={setNaming} defaults={data.naming_defaults} volumeGb={gb} />
+      <UserExtraSalesSection sales={sales} styleOptions={data.pack_style_options} maxPerKind={data.pack_config.user.max_per_kind} />
       <ButtonStyleField value={style} onChange={setStyle} options={data.plan_style_options} />
       <FormActions submitLabel="ذخیره تغییرات" pending={pending} onCancel={onCancel} />
     </form>

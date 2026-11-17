@@ -77,7 +77,7 @@ function WidgetsPlaceholder() {
   );
 }
 
-function Widgets({ data, onDismiss }: { data: HomeWidgets; onDismiss: (entry: QueueEntry) => void }) {
+function Widgets({ data, onDismiss, onReload }: { data: HomeWidgets; onDismiss: (entry: QueueEntry) => void; onReload: () => void }) {
   return (
     <div className="flex flex-col gap-6">
       {data.billing ? <BillingCard billing={data.billing} /> : null}
@@ -88,7 +88,7 @@ function Widgets({ data, onDismiss }: { data: HomeWidgets; onDismiss: (entry: Qu
         <SalesChart initial={data.trend} />
         <WorkQueue queue={data.queue} onDismiss={onDismiss} />
       </div>
-      {data.link_health ? <LinkHealthCard health={data.link_health} /> : null}
+      {data.link_health ? <LinkHealthCard health={data.link_health} onReconnected={onReload} /> : null}
       {data.pg_limits ? <PgLimitsCard limits={data.pg_limits} /> : null}
       <div className={data.account ? "grid gap-6 lg:grid-cols-[2fr_3fr]" : ""}>
         {data.account ? <AccountCard account={data.account} /> : null}
@@ -130,7 +130,7 @@ function HomeContent() {
         <div className="flex flex-col gap-6">
           <Alerts shell={shell.data} widgets={widgets.data} onRetry={widgets.reload} />
           {widgets.data ? (
-            <Widgets data={widgets.data} onDismiss={(entry) => setDismiss({ key: `ac:${entry.key}`, entity: "" })} />
+            <Widgets data={widgets.data} onDismiss={(entry) => setDismiss({ key: `ac:${entry.key}`, entity: "" })} onReload={reloadAll} />
           ) : widgets.status === "error" ? (
             <>
               {shell.data ? <Portals portals={shell.data.portals} /> : null}

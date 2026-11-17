@@ -22,12 +22,15 @@ from app.services.list_query import (
     normalize_search_q,
     parse_list_page,
 )
+from app.services.db_safe import rollback_quiet
 from app.services.pasarguard import PasarGuardError, as_list, user_group_ids
 from app.services.pg_access import staff_user_actions
 from app.services.pg_read import PgReadDenied, staff_pg_read_client
+from app.services.payg_gate import shop_rate_summary
 from app.services.pg_user_scope import filter_pg_users_for_staff
 from app.services.plans_catalog import filter_groups_for_staff, filter_templates_for_staff
 from app.services.pg_panel_errors import safe_pg_error
+from app.services.provision_gate import reseller_id_from_staff
 
 logger = logging.getLogger(__name__)
 
@@ -277,6 +280,20 @@ async def _load_users_page(session: Any, staff: dict, *, q: str, page: int) -> d
     }
 
 
+async def _payg_rates(session: Any, staff: dict) -> dict[str, Any] | None:
+    """The shop's own PAYG prices, shown before staff create, edit or reset a user; ``None`` when nothing is charged."""
+    try:
+        summary = await shop_rate_summary(session, reseller_id_from_staff(staff))
+    except Exception:
+        # Display only: the list must still render when the prices cannot be read.
+        logger.warning("pg users payg rates failed", exc_info=True)
+        await rollback_quiet(session)
+        return None
+    if summary is None:
+        return None
+    return {"lines": list(summary.lines), "reset_note": summary.reset_note}
+
+
 async def users_page(session: Any, staff: dict, *, q: str | None, page: str | None) -> dict[str, Any]:
     """The users list payload; a panel that is down or slow yields empty rows and an ``error`` notice."""
     search_q = normalize_search_q(q)[:SEARCH_MAX_LENGTH]
@@ -310,5 +327,6 @@ async def users_page(session: Any, staff: dict, *, q: str | None, page: str | No
         "templates": templates,
         "groups": groups,
         "can": capabilities(staff, has_groups=bool(groups), has_templates=bool(templates)),
+        "payg_rates": await _payg_rates(session, staff),
         "error": error,
     }

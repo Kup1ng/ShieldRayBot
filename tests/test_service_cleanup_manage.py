@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from datetime import timedelta
 from urllib.parse import unquote
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 
+from app.api.service_cleanup_pages import API_PATH
 from app.db.models import ShopStaffAction, UserService
 from app.services import service_cleanup as cleanup
 from app.services import service_cleanup_manage as manage
 from app.services.service_cleanup import CleanupPolicy, CleanupPolicyError
+from tests.pgtest import pg_sync_engine
 from tests.test_service_cleanup import (
     NOW,
     OTHER_SHOP,
@@ -133,17 +133,21 @@ class ManageAtomicityTests(CleanupCase):
     async def test_two_extensions_at_once_never_shorten_the_larger_hold(self) -> None:
         await self.add_service(1, 20, SHOP, quota_expire_at=NOW - timedelta(days=5))
         real = manage.deadline_for
+        async with self.engine.connect() as connection:
+            schema = await connection.scalar(text("SELECT current_schema()"))
+        other_click = pg_sync_engine(schema=schema)
+        self.addCleanup(other_click.dispose)
 
         def deadline_then_a_bigger_hold(service, policy, kind):
             result = real(service, policy, kind)
             if kind == "time" and not getattr(self, "raced", False):
                 self.raced = True
-                import sqlite3  # the other click lands between this read and the write below
-
-                con = sqlite3.connect(self.db_path)
-                con.execute("UPDATE user_services SET cleanup_hold_until = ? WHERE id = 1", ((NOW + timedelta(days=90)).strftime("%Y-%m-%d %H:%M:%S.%f"),))
-                con.commit()
-                con.close()
+                # the other click lands between this read and the write below
+                with other_click.begin() as connection:
+                    connection.execute(
+                        text("UPDATE user_services SET cleanup_hold_until = :hold WHERE id = 1"),
+                        {"hold": NOW + timedelta(days=90)},
+                    )
             return result
 
         from unittest.mock import patch
@@ -220,16 +224,16 @@ class ManageRoutesTests(CleanupCase):
             self.assertFalse((await session.get(UserService, 2)).cleanup_exempt)
         self.assertEqual(await self.logged(), [])
 
-    async def test_without_the_permission_every_action_goes_home_and_changes_nothing(self) -> None:
+    async def test_without_the_permission_every_action_is_refused_and_changes_nothing(self) -> None:
         await self.set_shop_permissions("dashboard")
         await self.add_service(1, 20, SHOP, quota_expire_at=NOW - timedelta(days=20))
         for path, data in ((f"{ROUTE}/1/exempt", {"value": "1"}), (f"{ROUTE}/1/hold", {"days": "7"})):
             response = await self.call("POST", path, {**data, "reason": "درخواست مشتری"})
-            self.assertEqual(response.headers["location"], "/home")
+            self.assertEqual(response.status_code, 403)
         async with await self.session() as session:
             self.assertFalse((await session.get(UserService, 1)).cleanup_exempt)
 
-    async def test_each_row_links_its_own_customer_by_name_and_from_the_actions_menu(self) -> None:
+    async def test_each_row_carries_its_own_customer_and_never_another_shops(self) -> None:
         await self.set_shop_permissions("dashboard,service_cleanup")
         async with await self.session() as session:
             await cleanup.save_policy(session, shop_id=SHOP, policy=cleanup.parse_policy_form(
@@ -237,19 +241,32 @@ class ManageRoutesTests(CleanupCase):
         await self.add_service(1, 20, SHOP, quota_expire_at=NOW - timedelta(days=20))
         await self.add_service(2, 21, OTHER_SHOP, quota_expire_at=NOW - timedelta(days=20))
         await self.add_service(3, 20, SHOP, cleanup_exempt=True)
-        response = await self.call("GET", ROUTE)
+        response = await self.call("GET", API_PATH)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("/users?uid=20&amp;edit=20", response.text)
-        self.assertNotIn("uid=21", response.text)  # another shop's customer is never linked
-        self.assertGreaterEqual(response.text.count("مشاهده کاربر"), 2)  # a menu item in each table
+        data = response.json()
+        self.assertEqual([(row["service_id"], row["user_id"]) for row in data["preview"]["rows"]], [(1, 20)])
+        self.assertEqual([(row["service_id"], row["user_id"]) for row in data["exempt"]], [(3, 20)])
 
-    async def test_the_page_lists_exempt_services_and_escapes_their_names(self) -> None:
+    async def test_the_data_lists_exempt_services_as_plain_text(self) -> None:
         await self.set_shop_permissions("dashboard,service_cleanup")
         await self.add_service(1, 20, SHOP, pg_username="keep<b>", cleanup_exempt=True)
-        response = await self.call("GET", ROUTE)
+        await self.add_service(2, 21, OTHER_SHOP, pg_username="foreign", cleanup_exempt=True)
+        response = await self.call("GET", API_PATH)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("keep&lt;b&gt;", response.text)
-        self.assertNotIn("keep<b>", response.text)
+        self.assertEqual([row["username"] for row in response.json()["exempt"]], ["keep<b>"])
+        self.assertNotIn("foreign", response.text)
+
+    async def test_another_shops_service_cannot_be_held_or_returned_to_the_cleanup(self) -> None:
+        await self.setUp_service()
+        await self.add_service(2, 21, OTHER_SHOP, quota_expire_at=NOW - timedelta(days=20), cleanup_exempt=True)
+        hold = await self.call("POST", f"{ROUTE}/2/hold", {"days": "7", "reason": "درخواست مشتری"})
+        back = await self.call("POST", f"{ROUTE}/2/exempt", {"value": "0", "reason": "درخواست مشتری"})
+        self.assertIn("err=", hold.headers["location"])
+        self.assertIn("err=", back.headers["location"])
+        async with await self.session() as session:
+            row = await session.get(UserService, 2)
+            self.assertEqual((row.cleanup_exempt, row.cleanup_hold_until), (True, None))
+        self.assertEqual(await self.logged(), [])
 
 
 del CleanupCase

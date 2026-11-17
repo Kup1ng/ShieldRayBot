@@ -11,6 +11,8 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
+from app.services.service_cleanup import cleanup_scope
+
 # Paths the panel settings tabs live under (the "web panel" settings, not the bot settings).
 PANEL_SETTINGS_TABS = ("general", "backup", "pwa", "ssl", "update")
 
@@ -48,6 +50,15 @@ class NavSection:
 def _perm_list(staff: Mapping[str, Any], key: str) -> list[str]:
     raw = staff.get(key) or []
     return [str(p) for p in raw] if isinstance(raw, (list, tuple, set)) else []
+
+
+def _can_open_service_cleanup(staff: Mapping[str, Any]) -> bool:
+    """Same rule as the cleanup page and its posts (``cleanup_scope``)."""
+    try:
+        cleanup_scope(dict(staff))
+    except PermissionError:
+        return False
+    return True
 
 
 def _system_section(*, is_owner: bool, is_pg_staff: bool) -> NavSection:
@@ -105,6 +116,8 @@ def _shop_section(
         first = getattr(marketing[0], "href", None) or marketing[0]["href"]
         prefixes = [str(getattr(s, "href", None) or s["href"]).split("?")[0] for s in marketing]
         items.append(NavItem("marketing", str(first), "بازاریابی و وفاداری", "solar:gift-linear", prefixes))
+    if _can_open_service_cleanup(staff):
+        items.append(NavItem("service-cleanup", "/service-cleanup", "پاکسازی سرویس‌ها", "solar:trash-bin-trash-linear", ["/service-cleanup"]))
     if is_owner or role in ("reseller", "principal"):
         items.append(NavItem("staff-actions", "/staff-actions", "گزارش کارکنان", "solar:document-text-linear", ["/staff-actions"]))
     if is_owner or "shop_settings" in perms:

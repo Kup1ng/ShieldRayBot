@@ -8,6 +8,7 @@ import { usePanelSession } from "../../core/session";
 import { Notice } from "../../ui/States";
 import { SectionTabs } from "../../ui/SectionTabs";
 import { SubmitButton } from "../../ui/Fields";
+import type { PaygRates } from "./types";
 
 const PG_PAGE_ID = /^pg_/;
 
@@ -62,4 +63,23 @@ export function FormFooter({ submitLabel, pending, disabled, onCancel }: { submi
       </SubmitButton>
     </div>
   );
+}
+
+/** What a create or edit costs the shop, before it is sent; nothing is drawn for a shop that is not charged. */
+export function PaygRatesNote({ rates }: { rates: PaygRates | null }) {
+  if (!rates || rates.lines.length === 0) return null;
+  return (
+    <Notice tone="accent" title="هزینهٔ این کار از کیف پول شما کم می‌شود">
+      <ul className="list-disc ps-4">
+        {rates.lines.map((line) => (
+          <li key={line}>{line}</li>
+        ))}
+      </ul>
+    </Notice>
+  );
+}
+
+/** The confirmation text of a traffic reset, with the charge explained when resets cost money. */
+export function resetConfirmText(base: string, rates: PaygRates | null): string {
+  return rates?.reset_note ? `${base} ${rates.reset_note}.` : base;
 }

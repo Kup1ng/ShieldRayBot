@@ -8,6 +8,7 @@ import { SectionBadge } from "@/components/ui/SectionBadge";
 import { useMini } from "../../state/store";
 import { ActionButton } from "../../ui/ActionButton";
 import { EmptyState, ErrorState, LoadingRows } from "../../ui/ScreenState";
+import { SubscriptionLink } from "../subscription/SubscriptionLink";
 import { ServiceListRow } from "./ServiceListRow";
 import { useServiceList } from "./useServiceList";
 
@@ -73,6 +74,7 @@ export function ServicesScreen() {
   return (
     <>
       <SectionBadge icon="solar:crown-bold" tone="yellow" title="سرویس‌ها" />
+      <SubscriptionLink />
       <section className="inset-tile flex flex-col gap-3 rounded-xl p-4" aria-label="سرویس‌های من">
         <SearchField aria-label="جست‌وجوی نام سرویس" value={text} onChange={setText} fullWidth>
           <SearchField.Group>

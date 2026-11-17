@@ -7,6 +7,7 @@ import { SectionBadge } from "@/components/ui/SectionBadge";
 import { Icon } from "@/icons/Icon";
 
 import { money } from "../../core/format";
+import { ActionButton } from "../../ui/ActionButton";
 import { InvoiceCard, type InvoiceLine } from "../../ui/flow/InvoiceCard";
 import { StepFooter } from "../../ui/flow/StepFooter";
 import { priceView } from "./catalogPrice";
@@ -14,6 +15,7 @@ import type { OrderChoice } from "./orderPay";
 import { PayPicker, usePayMethods, usePayPicker } from "./PayPicker";
 import { InsetBlock } from "./parts";
 import { durationLabel, volumeLabel } from "./planGroups";
+import { ServiceNameField } from "./ServiceNameField";
 import type { Checkout, Plan } from "./types";
 
 const CODE_MAX = 64;
@@ -39,6 +41,10 @@ type CheckoutStepProps = {
   /** The chosen way to pay, kept by the flow so going back from the payment page keeps it. */
   picked: string | null;
   onPicked: (id: string) => void;
+  /** Where the shop makes the buyer name the service: the field's state. */
+  name: { required: boolean; value: string; onChange: (value: string) => void; locked: boolean; showProblem: boolean };
+  /** Shop staff with free checkout may take the order free (a plain order, not a discounted one). */
+  onPayFree: (() => void) | null;
 };
 
 /** The lines of «فاکتور نهایی»: what is bought, and the code when one was applied. */
@@ -100,6 +106,10 @@ export function CheckoutStep(props: CheckoutStepProps) {
         <DiscountForm applying={applying} onApply={props.onApplyCode} />
       )}
 
+      {props.name.required ? (
+        <ServiceNameField value={props.name.value} onChange={props.name.onChange} locked={props.name.locked} showProblem={props.name.showProblem} />
+      ) : null}
+
       <PayPicker picker={picker} allowTopup={allowTopup} onTopup={props.onTopup} onRetry={() => reloadMethods()} />
 
       <StepFooter
@@ -111,6 +121,11 @@ export function CheckoutStep(props: CheckoutStepProps) {
         primaryDisabled={!pick || (pick.kind === "wallet" && !enough)}
         primaryPending={paying}
       />
+      {props.onPayFree && !plan.is_trial && !checkout ? (
+        <ActionButton tone="neutral" icon="solar:gift-linear" fullWidth isDisabled={paying} onPress={props.onPayFree}>
+          دریافت رایگان (مدیر)
+        </ActionButton>
+      ) : null}
     </>
   );
 }

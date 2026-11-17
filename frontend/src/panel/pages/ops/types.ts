@@ -45,7 +45,8 @@ export type MenuExtra = { items: MenuEntry[]; pool: MenuEntry[]; layout: string;
 export type ColorsExtra = { label: string; caption: string; groups: { name: string; items: { key: string; label: string; value: string }[] }[] };
 export type LinksExtra = { bot_username: string; links: Record<string, string> };
 export type AppearanceExtra = { name: string; short_description: string; description: string; photo_url: string; bot_username: string; sync_ok: boolean; sync_error: string };
-export type NotificationsExtra = { items: { key: string; title: string; help: string; on: boolean }[] };
+/** `system` marks alerts about the panel itself rather than a sale. */
+export type NotificationsExtra = { items: { key: string; title: string; help: string; on: boolean; system: boolean }[] };
 export type DailyReportExtra = {
   metric_groups: { id: string; label: string; metrics: { key: string; title_fa: string; description_fa: string; token: string }[] }[];
   enabled_metrics: string[];

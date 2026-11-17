@@ -60,7 +60,8 @@ describe("reseller plan form", () => {
           id: 9, name: "نقره‌ای", description: "", price: 100, plan_kind: "subscription", billing_mode: "fixed", price_per_gb: 0, sort_order: 0,
           category_id: null, duration_days: 30, included_gb: 10, included_users: 5, addon_gb: 0, addon_users: 0, renew_price: 0, renew_pricing_mode: "fixed",
           allow_buy_extra: false, extra_gb_price: 0, extra_user_price: 0, create_pg_admin: true, share_pg_panel_url: false, pg_role_id: 4, pg_group_ids: ["2"],
-          button_style: "inherit", is_active: true, is_system: false,
+          button_style: "inherit", is_active: true, is_system: false, carry_remaining_period: true, keep_extras_on_renew: true, allow_pg_panel_access: true,
+          payg_basis: "traffic", payg_charge_upfront: false, payg_user_price: 0, payg_user_price_per_30d: false, payg_unlimited_price: null,
         }}
         groups={[{ id: 2, name: "گروه" }]}
         pgRoles={[{ id: 4, name: "نقش" }]}
@@ -79,6 +80,8 @@ describe("reseller plan form", () => {
     expect(path).toBe("/resellers/plans/9/edit");
     expect(fields).toMatchObject({ plan_kind: "subscription", billing_mode: "fixed", group_2: "2", perm_plans: true, pg_role_id: "4", included_gb: "10", included_users: "5", create_pg_admin: true });
     expect(fields).not.toHaveProperty("perm_orders");
+    // The renewal and panel-access switches keep their stored value; the handler reads absence as off.
+    expect(fields).toMatchObject({ carry_remaining_period: true, keep_extras_on_renew: true, allow_pg_panel_access: true });
   });
 });
 

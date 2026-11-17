@@ -161,6 +161,7 @@ def user_edit_payload(view: UserEditView) -> dict[str, Any]:
     user = view.user
     shop_wallet = view.shop_wallet
     shop_block = view.shop_block
+    shop_points = view.shop_points
     return {
         "user": {
             "id": int(user.id),
@@ -208,6 +209,17 @@ def user_edit_payload(view: UserEditView) -> dict[str, Any]:
             if shop_block.get("can_block_in_shop")
             else None
         ),
+        "points": {"balance": view.points_balance},
+        "shop_points": (
+            {
+                "nonce": shop_points["shop_points_nonce"],
+                "max": shop_points["shop_points_max"],
+                "daily": shop_points["shop_points_daily"],
+            }
+            if shop_points.get("can_adjust_shop_points")
+            else None
+        ),
+        "platform_points": {"nonce": view.platform_points_nonce} if view.platform_points_nonce else None,
     }
 
 

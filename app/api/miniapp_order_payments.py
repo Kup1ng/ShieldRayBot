@@ -14,6 +14,7 @@ import logging
 from fastapi import Depends, FastAPI, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.miniapp_buy_extras import check_buy_extras, service_name_field
 from app.api.miniapp_pages import _no_store, _require_commerce_ready, _scope_ui
 from app.api.miniapp_topup import _json_object, _read_capped, _valid_id
 from app.services.db_safe import rollback_quiet
@@ -60,10 +61,14 @@ def register_miniapp_order_payments(app: FastAPI, *, get_db) -> None:
         await _require_commerce_ready(session, user)
         user_id = int(user.id)
         body = await _json_object(request)
+        service_name = service_name_field(body)
+        # A shop that requires a name refuses a missing or invalid one before any order exists.
+        await check_buy_extras(session, user, mini_scope(request), staff_free=False, service_name=service_name)
         ui = await _scope_ui(session, request)
         try:
             result = await pay_plan_order(
-                session, user_id=user_id, shop_id=mini_scope(request).shop_id, ui=ui, req=parse_plan_payment(body)
+                session, user_id=user_id, shop_id=mini_scope(request).shop_id, ui=ui, req=parse_plan_payment(body),
+                service_name=service_name,
             )
         except ValueError as exc:
             await rollback_quiet(session)

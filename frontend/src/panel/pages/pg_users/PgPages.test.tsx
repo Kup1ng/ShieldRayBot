@@ -61,7 +61,7 @@ function userRow(id: number, patch: Partial<PgUserRow> = {}): PgUserRow {
 }
 
 function users(rows: PgUserRow[], patch: Partial<PgUsersPayload> = {}): PgUsersPayload {
-  return { rows, q: "", pager: PAGER, show_owner: false, templates: [{ id: 7, name: "ماهانه" }], groups: [{ id: 1, name: "اصلی" }, { id: 2, name: "ویژه" }], can: CAN, error: null, ...patch };
+  return { rows, q: "", pager: PAGER, show_owner: false, templates: [{ id: 7, name: "ماهانه" }], groups: [{ id: 1, name: "اصلی" }, { id: 2, name: "ویژه" }], can: CAN, payg_rates: null, error: null, ...patch };
 }
 
 describe("PasarGuard users", () => {
@@ -159,6 +159,48 @@ describe("PasarGuard users", () => {
       expect(action).toHaveBeenCalledWith("/pg/users", { username: "new_user", mode: "custom", data_limit_gb: "", duration_days: "", hwid_limit: "", group_1: "1" }),
     );
     await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("این نام کاربری وجود دارد"));
+  });
+
+  it("shows the shop's PAYG rates in the create and edit dialogs and the reset confirmation", async () => {
+    const rates = { lines: ["هر گیگ حجمی که روی کاربر زده می‌شود: ۱۰٬۰۰۰ تومان", "کاربر نامحدود: مجاز نیست"], reset_note: "ریست مصرف هزینهٔ کل حجم را دوباره کسر می‌کند" };
+    get.mockResolvedValue(users([userRow(5)], { payg_rates: rates }));
+    const ui = userEvent.setup();
+    mount(<PgUsersContent />);
+    await screen.findByText("user_5");
+    await ui.click(screen.getByRole("button", { name: "ساخت کاربر" }));
+    expect(await screen.findByText("هزینهٔ این کار از کیف پول شما کم می‌شود")).toBeTruthy();
+    expect(screen.getByText(rates.lines[0])).toBeTruthy();
+    await ui.click(screen.getByRole("button", { name: "انصراف" }));
+    await waitFor(() => expect(screen.queryByText("هزینهٔ این کار از کیف پول شما کم می‌شود")).toBeNull());
+    await ui.click(screen.getByRole("button", { name: "عملیات user_5" }));
+    await ui.click(await screen.findByRole("menuitem", { name: "ویرایش" }));
+    expect(await screen.findByText(rates.lines[1])).toBeTruthy();
+    await ui.click(screen.getByRole("button", { name: "انصراف" }));
+    await waitFor(() => expect(screen.queryByText(rates.lines[1])).toBeNull());
+    await ui.click(screen.getByRole("button", { name: "عملیات user_5" }));
+    await ui.click(await screen.findByRole("menuitem", { name: "ریست مصرف" }));
+    expect(await screen.findByText(new RegExp(rates.reset_note))).toBeTruthy();
+  });
+
+  it("draws no cost note when the shop is not charged", async () => {
+    get.mockResolvedValue(users([userRow(5)]));
+    const ui = userEvent.setup();
+    mount(<PgUsersContent />);
+    await screen.findByText("user_5");
+    await ui.click(screen.getByRole("button", { name: "ساخت کاربر" }));
+    await screen.findByRole("textbox", { name: /نام کاربری/ });
+    expect(screen.queryByText("هزینهٔ این کار از کیف پول شما کم می‌شود")).toBeNull();
+  });
+
+  it("shows hostile rate text as plain text", async () => {
+    const hostile = '<img src=x onerror="alert(1)">';
+    get.mockResolvedValue(users([userRow(5)], { payg_rates: { lines: [hostile], reset_note: "" } }));
+    const ui = userEvent.setup();
+    mount(<PgUsersContent />);
+    await screen.findByText("user_5");
+    await ui.click(screen.getByRole("button", { name: "ساخت کاربر" }));
+    expect(await screen.findByText(hostile)).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
   });
 
   it("edits with the user's current values and posts edit_group_<id>", async () => {

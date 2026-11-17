@@ -30,7 +30,7 @@ from app.services.miniapp_shop import (
     shop_miniapp_blocker,
     shop_miniapp_url,
 )
-from app.services.notifications import get_shop_notify_prefs, shop_notify_catalog
+from app.services.notifications import SYSTEM_NOTIFY_KEYS, get_shop_notify_prefs, shop_notify_catalog
 from app.services.panel_brand import load_brand, load_own_values
 from app.services.redact import redact
 from app.services.resellers import (
@@ -212,7 +212,12 @@ async def _appearance_extra(session: AsyncSession, shop_id: int, profile: Resell
 async def _notifications_extra(session: AsyncSession, staff: dict, shop_id: int, profile: ResellerProfile | None) -> dict[str, Any]:
     perms = list(staff.get("permissions") or []) or list(resolve_shop_permissions_from_profile(profile) or [])
     prefs = await get_shop_notify_prefs(session, shop_id)
-    return {"items": [{"key": key, "title": title, "help": help_text, "on": bool(prefs.get(key))} for key, title, help_text, _ in shop_notify_catalog(perms)]}
+    return {
+        "items": [
+            {"key": key, "title": title, "help": help_text, "on": bool(prefs.get(key)), "system": key in SYSTEM_NOTIFY_KEYS}
+            for key, title, help_text, _ in shop_notify_catalog(perms)
+        ]
+    }
 
 
 def _daily_report_extra(values: dict[str, str]) -> dict[str, Any]:

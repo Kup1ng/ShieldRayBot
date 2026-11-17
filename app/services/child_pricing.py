@@ -53,6 +53,15 @@ def parent_scope(staff: Mapping[str, Any]) -> int:
     return int(shop_id)
 
 
+def staff_can_price_children(staff: Mapping[str, Any]) -> bool:
+    """Whether ``parent_scope`` accepts this staff member (the rule of the pricing page)."""
+    try:
+        parent_scope(staff)
+    except PermissionError:
+        return False
+    return True
+
+
 async def parent_shop_profile(session: AsyncSession, profile: ResellerProfile) -> ResellerProfile | None:
     """The level-1 shop above this level-2 shop, or ``None`` for any other shop."""
     child = await session.scalar(select(OrgPrincipal).where(

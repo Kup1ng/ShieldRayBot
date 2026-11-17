@@ -93,6 +93,11 @@ export type UserEdit = {
   can: { manage: boolean; demo: boolean; private_marks: boolean; view_services: boolean; pg_create: boolean; pg_update: boolean; pg_delete: boolean; delete_user: boolean };
   shop_wallet: { nonce: string; max: number; daily: number } | null;
   shop_block: { blocked: boolean; reason: string } | null;
+  points: { balance: number };
+  /** Present only when this staff member may change THIS customer's points in their own shop. */
+  shop_points: { nonce: string; max: number; daily: number } | null;
+  /** Present only for the platform Owner. */
+  platform_points: { nonce: string } | null;
 };
 
 export type TrialFilter = "all" | "non_buyers" | "buyers";

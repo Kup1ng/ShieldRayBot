@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services import finance_panel
 from app.services.finance_panel import FinanceAccess, FinanceScopeError
 from app.services.finance_settings_panel import settings_payload
+from app.services.platform_identity import is_explicit_owner_staff
 
 NO_ACCESS = "دسترسی ندارید"
 NO_STORE = {"Cache-Control": "private, no-store"}
@@ -72,6 +73,8 @@ def register_panel_finance_api(
                 "can_payments": access.can_payments,
                 "can_settings": access.can_settings,
                 "can_void_payment": access.can_void_payment,
+                # Only the web Owner may open the PAYG shops report (same rule as its endpoint).
+                "can_payg_report": access.can_orders and staff.get("role") == "admin" and is_explicit_owner_staff(staff),
             }
         )
 

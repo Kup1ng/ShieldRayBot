@@ -2,18 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from datetime import datetime, timedelta, timezone
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from fastapi import FastAPI, HTTPException
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.api.app import templates
 from app.api.billing_report_pages import register_billing_report_pages
 from app.db.models import (
     Base,
@@ -25,6 +21,7 @@ from app.db.models import (
     ShopCreditAccount,
 )
 from app.services.billing_reports import rows_csv, shop_finance_rows
+from tests.pgtest import pg_engine
 
 MONTH = datetime(2026, 11, 1, tzinfo=timezone.utc)
 
@@ -38,7 +35,7 @@ class ReportCase(unittest.IsolatedAsyncioTestCase):
     owner = True
 
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -93,23 +90,29 @@ class AccessTests(ReportCase):
                 raise HTTPException(403)
             return {"role": "admin", "web_owner": True}
 
-        def render(request: Request, name: str, ctx: dict) -> HTMLResponse:
-            return HTMLResponse(templates.env.get_template(name).render(request=request, csrf_token="t", **ctx))
-
-        register_billing_report_pages(app, render=render, require_admin=require_admin, get_db=get_db)
+        register_billing_report_pages(app, require_admin=require_admin, get_db=get_db)
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
-    async def test_owner_sees_the_page_and_csv_and_others_do_not(self) -> None:
+    async def test_owner_gets_the_report_data_and_the_csv_and_others_do_not(self) -> None:
         async with await self.client(owner=True) as client:
-            page = await client.get("/finance/payg")
+            report = await client.get("/api/panel/finance/payg")
             csv_response = await client.get("/finance/payg.csv")
-        self.assertEqual(page.status_code, 200)
-        self.assertIn("shop_b", page.text)
-        self.assertNotIn("<script", page.text.split("shop_b")[0][-50:])
+        self.assertEqual(report.status_code, 200)
+        self.assertEqual(report.headers["cache-control"], "no-store")
+        body = report.json()
+        self.assertEqual({row["shop_id"] for row in body["rows"]}, {5, 6})
+        self.assertEqual(next(row for row in body["rows"] if row["shop_id"] == 6)["label"], "shop_b")
+        self.assertEqual(body["totals"], {"debt": 7_000, "month_charges": 8_000, "month_cashback": 500})
         self.assertEqual(csv_response.headers["cache-control"], "no-store")
         async with await self.client(owner=False) as client:
-            self.assertEqual((await client.get("/finance/payg")).status_code, 403)
-            self.assertEqual((await client.get("/finance/payg.csv")).status_code, 403)
+            for path in ("/api/panel/finance/payg", "/finance/payg", "/finance/payg.csv"):
+                with self.subTest(path=path):
+                    self.assertEqual((await client.get(path)).status_code, 403)
+
+    async def test_the_report_page_is_the_react_shell_for_the_owner(self) -> None:
+        async with await self.client(owner=True) as client:
+            page = await client.get("/finance/payg")
+        self.assertEqual(page.status_code, 200)  # 503 until the frontend export of this route is built
 
 
 if __name__ == "__main__":

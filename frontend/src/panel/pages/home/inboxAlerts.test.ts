@@ -12,7 +12,7 @@ function inbox(overrides: Partial<InboxData> = {}): InboxData {
     ticket_alert: null,
     shop_maintenance: false,
     capacity_warn: false,
-    payg: { suspended: [], low: [], threshold: 0, max_names: 3 },
+    payg: { suspended: [], low: [], threshold: 0, review: 0, max_names: 3 },
     action_center: { has_items: false, entries: [], pending: 0, tickets: 0 },
     ...overrides,
   };
@@ -40,13 +40,18 @@ describe("inboxAlerts", () => {
 
   it("lists at most three reseller names and marks the rest", () => {
     const suspended = ["الف", "ب", "ج", "د"].map((label) => ({ label, balance: -1 }));
-    const [row] = inboxAlerts(inbox({ payg: { suspended, low: [], threshold: 0, max_names: 3 } }));
+    const [row] = inboxAlerts(inbox({ payg: { suspended, low: [], threshold: 0, review: 0, max_names: 3 } }));
     expect(row).toMatchObject({ key: "payg_suspended", status: "danger", title: `${fa(4)} نماینده PAYG مسدود`, detail: "الف، ب، ج…" });
   });
 
   it("shows the threshold and balances of low-balance resellers", () => {
-    const [row] = inboxAlerts(inbox({ payg: { suspended: [], low: [{ label: "ع", balance: 500 }], threshold: 1000, max_names: 3 } }));
+    const [row] = inboxAlerts(inbox({ payg: { suspended: [], low: [{ label: "ع", balance: 500 }], threshold: 1000, review: 0, max_names: 3 } }));
     expect(row.detail).toBe(`آستانه ${fa(1000)} — ع (${fa(500)})`);
+  });
+
+  it("links charges waiting for a decision to their review page and keeps them from being hidden", () => {
+    const [row] = inboxAlerts(inbox({ payg: { suspended: [], low: [], threshold: 0, review: 2, max_names: 3 } }));
+    expect(row).toMatchObject({ key: "payg_review", title: `${fa(2)} هزینهٔ PAYG در انتظار بازبینی`, action: { label: "بازبینی", href: "/payg/charges/review" }, undismissable: true });
   });
 
   it("explains the hidden-alerts card by what the inbox holds", () => {

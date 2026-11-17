@@ -14,14 +14,19 @@ from app.config import get_settings
 from app.db.models import BotUser, ResellerProfile
 from app.services.formatting import format_bytes
 from app.services.redact import user_safe_error
+from app.services.pg_admin_subscription import plan_keeps_extras_on_renew
 from app.services.reseller_capacity import (
-    ALLOWED_EXTRA_GB,
-    ALLOWED_EXTRA_USERS,
     plan_allows_buy_extra,
     plan_extra_gb_price,
     plan_extra_user_price,
 )
-from app.services.reseller_package import PackageChoice, PackageOverview, package_overview
+from app.services.reseller_package import (
+    PackageChoice,
+    PackageOverview,
+    package_overview,
+    renew_confirm_warnings_from_invoice,
+)
+from app.services.reseller_plan_extra_packs import KIND_GB, KIND_USERS, active_amounts_for_plan
 
 OWNER_ONLY = "این بخش فقط برای مالک فروشگاه است"
 UNAVAILABLE_FALLBACK = "اشتراک این فروشگاه در دسترس نیست"
@@ -51,6 +56,8 @@ def _choice(choice: PackageChoice) -> dict[str, Any]:
         "relation": choice.relation,
         "label": choice.label,
         "blocked": choice.blocked,
+        # What renewing into this package drops or restarts, to say before the owner pays.
+        "warnings": renew_confirm_warnings_from_invoice(plan, choice.invoice),
     }
 
 
@@ -68,14 +75,27 @@ def _overview(overview: PackageOverview) -> dict[str, Any]:
     }
 
 
-def _extras(overview: PackageOverview) -> dict[str, Any] | None:
-    if not plan_allows_buy_extra(overview.current):
+async def _extras(session: AsyncSession, overview: PackageOverview) -> dict[str, Any] | None:
+    """Quick-buy amounts of the current package: its own packs, priced per unit.
+
+    A kind is offered only with both a price and at least one active amount; with neither kind the
+    screen has nothing to sell.
+    """
+    current = overview.current
+    if current is None or not plan_allows_buy_extra(current):
+        return None
+    gb_price = plan_extra_gb_price(current)
+    user_price = plan_extra_user_price(current)
+    gb_options = sorted(await active_amounts_for_plan(session, int(current.id), KIND_GB)) if gb_price else []
+    user_options = sorted(await active_amounts_for_plan(session, int(current.id), KIND_USERS)) if user_price else []
+    if not gb_options and not user_options:
         return None
     return {
-        "gb_price": plan_extra_gb_price(overview.current),
-        "user_price": plan_extra_user_price(overview.current),
-        "gb_options": sorted(ALLOWED_EXTRA_GB),
-        "user_options": sorted(ALLOWED_EXTRA_USERS),
+        "gb_price": gb_price if gb_options else 0,
+        "user_price": user_price if user_options else 0,
+        "gb_options": gb_options,
+        "user_options": user_options,
+        "keep_on_renew": plan_keeps_extras_on_renew(current),
     }
 
 
@@ -95,5 +115,5 @@ async def subscription_payload(session: AsyncSession, staff: dict) -> dict[str, 
         payload["unavailable"] = user_safe_error(exc, fallback=UNAVAILABLE_FALLBACK)
         return payload
     payload["overview"] = _overview(overview)
-    payload["extras"] = _extras(overview)
+    payload["extras"] = await _extras(session, overview)
     return payload

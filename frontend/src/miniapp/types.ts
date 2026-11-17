@@ -12,7 +12,8 @@ export type ViewId =
   | "ticket"
   | "club"
   | "review"
-  | "ops";
+  | "ops"
+  | "subscription";
 
 export type NavItem = { id: ViewId; label: string; icon?: string };
 
@@ -52,6 +53,11 @@ export type CustomerSummary = {
   home: HomeSummary;
   badges?: { support?: number; club?: number; [key: string]: number | undefined };
   invite_code?: string;
+  /** Present (true) only where the shop or platform runs a loyalty club; `points` is the customer's balance there. */
+  loyalty_enabled?: boolean;
+  points?: number;
+  /** Extras of the purchase flow: a required service name, and free checkout for shop staff. */
+  checkout?: { service_name_required?: boolean; staff_free?: boolean };
   [key: string]: unknown;
 };
 

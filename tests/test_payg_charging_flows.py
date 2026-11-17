@@ -7,9 +7,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
+from fastapi import FastAPI, HTTPException
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.api.payg_charge_pages import register_payg_charge_pages
 from app.api.payg_plan_form import payg_rate_and_settings
 from app.db.models import (
     Base,
@@ -33,6 +35,7 @@ from app.services.payg_gate import (
 )
 from app.services.payg_pricing import GB, ChargeEvent
 from app.services.provision_gate import ProvisionError
+from tests.pgtest import pg_engine
 
 SHOP = 5
 DAY = 86400
@@ -64,7 +67,7 @@ class DeliveryCase(unittest.IsolatedAsyncioTestCase):
     wallet = 50_000
 
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -296,6 +299,77 @@ class ReviewDecisionTests(DeliveryCase):
         self.assertEqual([c.status for c in await self.charges()], ["refunded"])
 
 
+class ReviewEndpointTests(DeliveryCase):
+    """The Owner's review page reads one JSON endpoint and decides each held charge through the form handlers."""
+
+    HOSTILE_NAME = "<b>shop</b>"
+
+    async def review_client(self, *, owner: bool = True) -> httpx.AsyncClient:
+        app = FastAPI()
+
+        async def get_db():
+            async with self.Session() as session:
+                yield session
+
+        async def require_admin() -> dict:
+            if not owner:
+                raise HTTPException(403)
+            return {"role": "admin", "web_owner": True, "username": "owner"}
+
+        register_payg_charge_pages(app, require_admin=require_admin, get_db=get_db)
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+    async def hold_a_charge(self) -> ResellerCharge:
+        async with self.Session() as session:
+            (await session.get(BotUser, SHOP)).full_name = self.HOSTILE_NAME
+            await session.commit()
+        with self.assertRaises(Exception):
+            await self.deliver(FakeShopPanel(create_error=httpx.ReadTimeout("slow")))
+        [charge] = await self.charges()
+        return charge
+
+    async def test_the_endpoint_lists_held_charges_with_their_panel_names_unescaped(self) -> None:
+        charge = await self.hold_a_charge()
+        async with await self.review_client() as client:
+            response = await client.get("/api/panel/payg/charges/review")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        [row] = response.json()["charges"]
+        self.assertEqual((row["id"], row["shop_id"], row["amount"], row["event"]), (charge.id, SHOP, 10_000, "create"))
+        # Text travels raw; the React page renders it as text (see PaygChargesReviewPage.test.tsx).
+        self.assertEqual(row["shop_name"], self.HOSTILE_NAME)
+
+    async def test_refund_returns_the_amount_once_and_the_list_empties(self) -> None:
+        charge = await self.hold_a_charge()
+        async with await self.review_client() as client:
+            first = await client.post(f"/payg/charges/{charge.id}/refund")
+            second = await client.post(f"/payg/charges/{charge.id}/refund")
+            after = await client.get("/api/panel/payg/charges/review")
+        self.assertEqual(first.status_code, 303)
+        self.assertIn("ok=", first.headers["location"])
+        self.assertIn("err=", second.headers["location"])
+        self.assertEqual(await self.wallet_now(), 50_000)
+        self.assertEqual(after.json()["charges"], [])
+
+    async def test_staff_who_is_not_the_owner_is_refused_everywhere(self) -> None:
+        charge = await self.hold_a_charge()
+        async with await self.review_client(owner=False) as client:
+            for method, path in (
+                ("GET", "/api/panel/payg/charges/review"),
+                ("GET", "/payg/charges/review"),
+                ("POST", f"/payg/charges/{charge.id}/settle"),
+                ("POST", f"/payg/charges/{charge.id}/refund"),
+            ):
+                with self.subTest(path=path):
+                    self.assertEqual((await client.request(method, path)).status_code, 403)
+        self.assertEqual([c.status for c in await self.charges()], ["review"])
+
+    async def test_the_review_page_is_the_react_shell_for_the_owner(self) -> None:
+        async with await self.review_client() as client:
+            page = await client.get("/payg/charges/review")
+        self.assertEqual(page.status_code, 200)  # 503 until the frontend export of this route is built
+
+
 class TemplateTests(unittest.TestCase):
     def render(self, name: str, **ctx: object) -> str:
         from jinja2 import ChainableUndefined
@@ -307,15 +381,6 @@ class TemplateTests(unittest.TestCase):
         base = {"request": request, "staff": {"role": "admin"}, "path": "/x"}
         base.update(ctx)
         return env.get_template(name).render(**base)
-
-    def test_review_page_escapes_panel_names(self) -> None:
-        charge = SimpleNamespace(id=4, shop_id=5, created_at=None, event="reset", quantity=1,
-                                 pg_username="<script>x</script>", amount=10_000)
-        html = self.render("payg_charges_review.html", charges=[charge], shop_names={5: "<b>shop</b>"})
-        self.assertNotIn("<script>x</script>", html)
-        self.assertNotIn("<b>shop</b>", html)
-        self.assertIn('action="/payg/charges/4/refund"', html)
-        self.assertIn("data-confirm", html)
 
     def test_payg_fields_post_with_the_saved_values(self) -> None:
         from app.api.app import templates

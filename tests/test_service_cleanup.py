@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
@@ -16,11 +14,13 @@ from alembic.operations import Operations
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.service_cleanup_pages import API_PATH
 from app.db.models import BotUser, ResellerProfile, UserService
 from app.services import service_cleanup as cleanup
 from app.services.service_cleanup import CleanupPolicy, CleanupPolicyError
 from app.services.users import clear_settings_cache
-from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
+from tests.test_update_owner_only import OWNER_SESSION, PG_STAFF_SESSION, SHOP_SESSION, RoutesHarness
+from tests.pgtest import pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 10, 12, 0, tzinfo=timezone.utc)
@@ -62,7 +62,6 @@ class CleanupCase(RoutesHarness):
         await super().asyncSetUp()
         clear_settings_cache()
         self.addCleanup(clear_settings_cache)
-        self.db_path = Path(self._tmp.name) / "u.db"
         async with AsyncSession(bind=self.engine, expire_on_commit=False) as session:
             session.add_all([
                 BotUser(id=6, telegram_id=106, referral_code="shop6", role="reseller"),
@@ -202,13 +201,26 @@ class CleanupRoutesTests(CleanupCase):
         headers = {"cookie": cookie, "x-csrf-token": "token", "origin": "http://panel.test"}
         return await self.client.request(method, path, headers=headers, data=data)
 
-    async def test_a_shop_without_the_permission_is_sent_home_and_nothing_is_saved(self) -> None:
+    async def test_a_shop_without_the_permission_is_sent_home_and_its_save_is_refused(self) -> None:
         await self.set_shop_permissions("dashboard")
-        for method in ("GET", "POST"):
-            response = await self.call_as(SHOP_SESSION, method, "/service-cleanup", form() if method == "POST" else None)
-            self.assertEqual((response.status_code, response.headers["location"]), (303, "/home"))
+        response = await self.call_as(SHOP_SESSION, "GET", "/service-cleanup")
+        self.assertEqual((response.status_code, response.headers["location"]), (303, "/home"))
+        # A refused save is a 403, never a redirect the React panel would read as success.
+        response = await self.call_as(SHOP_SESSION, "POST", "/service-cleanup", form())
+        self.assertEqual(response.status_code, 403)
         async with await self.session() as session:
             self.assertFalse((await cleanup.load_policy(session, shop_id=SHOP)).time_on)
+
+    async def test_the_data_is_refused_without_the_permission_or_a_shop(self) -> None:
+        await self.add_service(1, 20, SHOP, quota_expire_at=NOW - timedelta(days=20))
+        await self.set_shop_permissions("dashboard")
+        response = await self.call_as(SHOP_SESSION, "GET", API_PATH)
+        self.assertEqual(response.status_code, 403)
+        self.assertNotIn("svc1", response.text)
+        # A panel-user session has no shop at all: it is turned away before any data is read.
+        response = await self.call_as(PG_STAFF_SESSION, "GET", API_PATH)
+        self.assertIn(response.status_code, {303, 403})
+        self.assertNotIn("policy", response.text)
 
     async def test_a_shop_with_the_permission_saves_only_its_own_rule(self) -> None:
         await self.set_shop_permissions("dashboard,service_cleanup")
@@ -226,22 +238,46 @@ class CleanupRoutesTests(CleanupCase):
         async with await self.session() as session:
             self.assertFalse((await cleanup.load_policy(session, shop_id=SHOP)).time_on)
 
-    async def test_the_page_shows_only_this_shops_services_and_escapes_customer_text(self) -> None:
+    async def test_the_data_holds_the_rule_the_limits_and_only_this_shops_services(self) -> None:
         await self.set_shop_permissions("dashboard,service_cleanup")
         async with await self.session() as session:
             await cleanup.save_policy(session, shop_id=SHOP, policy=cleanup.parse_policy_form(form()), now=NOW - timedelta(days=30))
+            await cleanup.save_policy(session, shop_id=OTHER_SHOP, policy=cleanup.parse_policy_form(form(time_days="99")), now=NOW - timedelta(days=30))
         await self.add_service(1, 20, SHOP, quota_expire_at=NOW - timedelta(days=20), pg_username="mine<script>")
         await self.add_service(2, 21, OTHER_SHOP, quota_expire_at=NOW - timedelta(days=20), pg_username="foreign")
-        response = await self.call_as(SHOP_SESSION, "GET", "/service-cleanup")
+        await self.add_service(3, 22, None, quota_expire_at=NOW - timedelta(days=20), pg_username="platform")
+        await self.add_service(4, 21, OTHER_SHOP, pg_username="foreign-exempt", cleanup_exempt=True)
+        response = await self.call_as(SHOP_SESSION, "GET", API_PATH)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("mine&lt;script&gt;", response.text)
-        self.assertNotIn("mine<script>", response.text)
-        self.assertIn("&lt;b&gt;Eve&lt;/b&gt;", response.text)
-        self.assertNotIn("foreign", response.text)
+        self.assertEqual(response.headers["cache-control"], "no-store")
+        data = response.json()
+        self.assertEqual(data["policy"], {"time_on": True, "time_days": 7, "warn_first": 3, "warn_last": 1, "volume_on": False, "volume_days": 30})
+        self.assertEqual((data["min_days"], data["max_days"]), (cleanup.MIN_DAYS, cleanup.MAX_DAYS))
+        preview = data["preview"]
+        self.assertEqual((preview["expired_total"], preview["time_due_now"]), (1, 1))
+        self.assertEqual([(row["service_id"], row["username"], row["customer"], row["user_id"]) for row in preview["rows"]],
+                         [(1, "mine<script>", "<b>Eve</b>", 20)])
+        self.assertEqual(data["exempt"], [])
+        for other in ("foreign", "platform"):
+            self.assertNotIn(other, response.text)
 
-    async def test_the_owner_reaches_the_platform_page(self) -> None:
+    async def test_the_platform_data_never_shows_a_shops_rule_or_services(self) -> None:
+        async with await self.session() as session:
+            await cleanup.save_policy(session, shop_id=SHOP, policy=cleanup.parse_policy_form(form(time_days="99")), now=NOW - timedelta(days=30))
+        await self.add_service(1, 20, SHOP, quota_expire_at=NOW - timedelta(days=20), pg_username="shop-svc")
+        await self.add_service(2, 22, None, quota_expire_at=NOW - timedelta(days=20), pg_username="platform-svc", cleanup_exempt=True)
+        response = await self.call_as(OWNER_SESSION, "GET", API_PATH)
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertEqual((data["policy"]["time_on"], data["policy"]["time_days"]), (False, 7))
+        self.assertEqual(data["preview"]["rows"], [])
+        self.assertEqual([row["username"] for row in data["exempt"]], ["platform-svc"])
+        self.assertNotIn("shop-svc", response.text)
+
+    async def test_the_page_is_the_react_shell_for_the_owner(self) -> None:
         response = await self.call_as(OWNER_SESSION, "GET", "/service-cleanup")
         self.assertEqual(response.status_code, 200)
+        self.assertIn("no-store", response.headers["cache-control"])
 
 
 class CleanupMigrationTests(unittest.TestCase):
@@ -250,11 +286,11 @@ class CleanupMigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         self.addCleanup(engine.dispose)
         new = set(migration.COLUMNS)
         with engine.begin() as conn:
-            conn.execute(sa.text("CREATE TABLE user_services (id INTEGER PRIMARY KEY, shop_id INTEGER, quota_expire_at DATETIME)"))
+            conn.execute(sa.text("CREATE TABLE user_services (id INTEGER PRIMARY KEY, shop_id INTEGER, quota_expire_at TIMESTAMP WITH TIME ZONE)"))
             conn.execute(sa.text("INSERT INTO user_services (id, shop_id) VALUES (1, NULL)"))
             for down in (False, False, True):
                 with Operations.context(MigrationContext.configure(conn)):

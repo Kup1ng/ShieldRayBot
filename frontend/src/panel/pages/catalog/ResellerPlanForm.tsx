@@ -5,8 +5,9 @@ import { useState, type FormEvent } from "react";
 import type { ActionResult } from "../../core/api";
 import { CheckGroup, FormGrid, FormSection, MoneyInput, SelectInput, SwitchInput, TextAreaInput, TextInput } from "../../ui/Fields";
 import { Notice } from "../../ui/States";
+import { PackEditor, packFields, usePackLines, type PackKindSpec } from "./PackEditor";
 import { ButtonStyleField, CategorySelect, FormActions, asOptions, groupFields } from "./PlanParts";
-import type { Limits, PgOption, ResellerPlanEdit, StyleOption } from "./types";
+import type { Limits, PgOption, ResellerPackConfig, ResellerPackLines, ResellerPlanEdit, StyleOption } from "./types";
 import { useFormSubmit } from "./useFormSubmit";
 
 export type ResellerKind = "fixed" | "payg" | "addon_volume" | "addon_users" | "current_capacity";
@@ -21,6 +22,10 @@ type Props = {
   limits: Limits;
   categories: Array<{ id: number; name: string; is_active?: boolean }>;
   styleOptions: StyleOption[];
+  /** Colours a pack button can take, the stairs' limits and the current stairs; without the limits no pack editor is offered. */
+  packStyleOptions?: StyleOption[];
+  packConfig?: ResellerPackConfig;
+  packs?: ResellerPackLines;
   plan?: Plan;
   selectedPerms?: string[];
   initialKind?: ResellerKind;
@@ -51,8 +56,47 @@ export function kindOfPlan(plan: Pick<Plan, "is_system" | "plan_kind" | "billing
 
 const text = (n: number | null | undefined, empty = "0") => (n === null || n === undefined ? empty : String(n));
 
+const PAYG_BASES = [
+  { id: "traffic", label: "حجم" },
+  { id: "user", label: "کاربر" },
+  { id: "user_traffic", label: "کاربر + حجم" },
+];
+
+function packSpecs(config: ResellerPackConfig, gbRate: string, userRate: string): PackKindSpec[] {
+  return [
+    {
+      id: "gb",
+      tab: "حجم",
+      unit: "گیگ",
+      rate: Number(gbRate),
+      max: config.gb.max,
+      defaults: config.gb.defaults,
+      amountName: "extra_gb_amount",
+      styleName: "extra_gb_style",
+      amountLabel: "مقدار حجم بسته",
+      styleLabel: "رنگ دکمه بسته حجم",
+      removeLabel: "حذف بسته حجم",
+      addLabel: "افزودن بستهٔ حجم",
+    },
+    {
+      id: "users",
+      tab: "کاربر",
+      unit: "نفر",
+      rate: Number(userRate),
+      max: config.users.max,
+      defaults: config.users.defaults,
+      amountName: "extra_user_amount",
+      styleName: "extra_user_style",
+      amountLabel: "تعداد کاربر بسته",
+      styleLabel: "رنگ دکمه بسته کاربر",
+      removeLabel: "حذف بسته کاربر",
+      addLabel: "افزودن بستهٔ کاربر",
+    },
+  ];
+}
+
 /** One form for creating and editing a reseller package; the kind decides which fields count. */
-export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, categories, styleOptions, plan, selectedPerms, initialKind = "fixed", onDone, onCancel }: Props) {
+export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, categories, styleOptions, packStyleOptions, packConfig, packs, plan, selectedPerms, initialKind = "fixed", onDone, onCancel }: Props) {
   const editing = mode === "edit";
   const [kind, setKind] = useState<ResellerKind>(plan ? kindOfPlan(plan) : initialKind);
   const [category, setCategory] = useState(plan?.category_id ? String(plan.category_id) : "");
@@ -72,12 +116,22 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
   const [perms, setPerms] = useState<string[]>(selectedPerms ?? featurePerms.map(([key]) => key));
   const [createAdmin, setCreateAdmin] = useState(plan ? plan.create_pg_admin : true);
   const [shareUrl, setShareUrl] = useState(plan?.share_pg_panel_url ?? false);
+  const [panelAccess, setPanelAccess] = useState(plan?.allow_pg_panel_access ?? true);
+  const [carryPeriod, setCarryPeriod] = useState(plan?.carry_remaining_period ?? true);
+  const [keepExtras, setKeepExtras] = useState(plan?.keep_extras_on_renew ?? true);
+  const [paygBasis, setPaygBasis] = useState(plan?.payg_basis ?? "traffic");
+  const [paygUpfront, setPaygUpfront] = useState(plan ? plan.payg_charge_upfront : true);
+  const [paygUserPrice, setPaygUserPrice] = useState(text(plan?.payg_user_price));
+  const [paygPer30, setPaygPer30] = useState(plan?.payg_user_price_per_30d ?? false);
+  const [paygUnlimited, setPaygUnlimited] = useState(text(plan?.payg_unlimited_price, ""));
   const [allowExtra, setAllowExtra] = useState(plan?.allow_buy_extra ?? false);
   const [extraGb, setExtraGb] = useState(text(plan?.extra_gb_price));
   const [extraUser, setExtraUser] = useState(text(plan?.extra_user_price));
   const [role, setRole] = useState(plan?.pg_role_id ? String(plan.pg_role_id) : "");
   const [active, setActive] = useState(plan ? plan.is_active : true);
   const [style, setStyle] = useState(plan?.button_style ?? "inherit");
+  const specs = packConfig ? packSpecs(packConfig, extraGb, extraUser) : [];
+  const packLines = usePackLines(specs, packs, Boolean(plan?.allow_buy_extra));
   const { pending, send } = useFormSubmit(onDone);
 
   const system = kind === "current_capacity";
@@ -89,7 +143,7 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
   const extraOn = buyExtraAllowed && allowExtra;
 
   const submit = () => {
-    const base: Record<string, string | boolean> = {
+    const base: Record<string, string | boolean | string[]> = {
       category_id: category,
       name,
       price,
@@ -98,7 +152,7 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
       button_style: style,
       is_active: system ? true : active,
     };
-    let fields: Record<string, string | boolean>;
+    let fields: Record<string, string | boolean | string[]>;
     if (isAddon) {
       fields = { ...base, plan_kind: kind, billing_mode: "fixed", addon_gb: addonGb, addon_users: addonUsers };
     } else {
@@ -110,12 +164,26 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
         renew_price: renewPrice,
         renew_pricing_mode: extraOn ? "from_capacity" : renewMode,
         share_pg_panel_url: shareUrl,
+        allow_pg_panel_access: panelAccess,
+        carry_remaining_period: carryPeriod,
+        keep_extras_on_renew: keepExtras,
         ...Object.fromEntries(perms.map((key) => [`perm_${key}`, true])),
         ...(buyExtraAllowed ? { allow_buy_extra: allowExtra, extra_gb_price: extraOn ? extraGb : "0", extra_user_price: extraOn ? extraUser : "0" } : {}),
+        ...(extraOn && packConfig ? packFields(specs, packLines.lines) : {}),
         ...(system
           ? {}
           : {
               price_per_gb: isPayg ? pricePerGb : "0",
+              ...(isPayg
+                ? {
+                    payg_fields_shown: true,
+                    payg_basis: paygBasis,
+                    payg_charge_upfront: paygUpfront,
+                    payg_user_price: paygUserPrice,
+                    payg_user_price_per_30d: paygPer30,
+                    payg_unlimited_price: paygUnlimited,
+                  }
+                : {}),
               included_gb: includedGb,
               included_users: includedUsers,
               create_pg_admin: createAdmin,
@@ -162,6 +230,21 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
         <TextInput label="ترتیب" type="number" value={sort} onChange={setSort} />
       </FormGrid>
       <TextAreaInput label="توضیح" value={description} onChange={setDescription} />
+      {isPayg && !system ? (
+        <FormSection title="هزینهٔ PAYG" description="مبنای محاسبه و قیمت کاربر — هر فیلد فقط برای مبنایی که آن را حساب می‌کند نمایش داده می‌شود">
+          <SelectInput label="مبنای هزینه" value={paygBasis} onChange={setPaygBasis} options={PAYG_BASES} help="حجم: نرخ هر گیگ · کاربر: قیمت هر کاربر · هر دو: جمع آن دو" />
+          {paygBasis !== "user" ? (
+            <SwitchInput label="کسر هزینهٔ حجم هنگام ساخت کاربر" help="روشن: حجمی که روی کاربر زده می‌شود همان لحظه از کیف پول نماینده کم می‌شود · خاموش: بر اساس مصرف" checked={paygUpfront} onChange={setPaygUpfront} />
+          ) : null}
+          {paygBasis !== "traffic" ? (
+            <SwitchInput label="قیمت کاربر به ازای هر ۳۰ روز" help="روشن: کاربر ۹۰ روزه سه برابر · خاموش: یک قیمت برای هر کاربر" checked={paygPer30} onChange={setPaygPer30} />
+          ) : null}
+          <FormGrid>
+            {paygBasis !== "traffic" ? <MoneyInput label="قیمت هر کاربر (تومان)" value={paygUserPrice} onChange={setPaygUserPrice} /> : null}
+            <MoneyInput label="قیمت کاربر نامحدود (تومان)" value={paygUnlimited} onChange={setPaygUnlimited} placeholder="ممنوع" help="خالی بماند تا ساخت کاربر نامحدود ممنوع باشد" />
+          </FormGrid>
+        </FormSection>
+      ) : null}
 
       {isAddon ? (
         <FormGrid>
@@ -207,6 +290,12 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
               help="اگر خرید حجم/کاربر اضافه روشن باشد، همیشه بر اساس ظرفیت محاسبه می‌شود."
             />
           </FormGrid>
+          {isPayg ? null : (
+            <div className="flex flex-col gap-3">
+              <SwitchInput label="انتقال زمان باقی‌مانده در تمدید" help="روشن: مدت جدید از تاریخ انقضای فعلی اضافه می‌شود. خاموش: دوره از همین الان شروع می‌شود." checked={carryPeriod} onChange={setCarryPeriod} />
+              <SwitchInput label="حفظ حجم و کاربر اضافه در تمدید" help="روشن: ظرفیت اضافه‌خریداری‌شده به دوره بعد می‌ماند و در قیمت بر اساس ظرفیت حساب می‌شود. خاموش: با تمدید پاک می‌شود." checked={keepExtras} onChange={setKeepExtras} />
+            </div>
+          )}
           {system ? null : (
             <CheckGroup
               label="گروه‌های پاسارگارد (الزامی)"
@@ -222,14 +311,30 @@ export function ResellerPlanForm({ mode, groups, pgRoles, featurePerms, limits, 
           </FormSection>
           <div className="flex flex-col gap-3">
             {system ? null : <SwitchInput label="ساخت ادمین پاسارگارد هنگام تأیید" help="با نقش پاسارگارد پلن؛ برای مالکیت کاربران لازم است" checked={createAdmin} onChange={setCreateAdmin} />}
-            <SwitchInput label="ارسال لینک و یوزر/رمز پنل پاسارگارد" help="اگر خاموش باشد، نماینده فقط از وب‌پنل ربات مدیریت می‌کند" checked={shareUrl} onChange={setShareUrl} />
-            {buyExtraAllowed ? <SwitchInput label="امکان خرید حجم و کاربر اضافه" help="فقط اشتراک ثابت — در ربات پله‌های ۱/۵/۱۰… نمایش داده می‌شود؛ برای PAYG لازم نیست" checked={allowExtra} onChange={setAllowExtra} /> : null}
+            <SwitchInput label="دسترسی به پاسارگارد" help="خاموش: منو و صفحه‌های پاسارگارد پنهان می‌شود و رمز پنل جدا از رمز وب‌پنل و ارسال‌نشدنی است" checked={panelAccess} onChange={setPanelAccess} />
+            <SwitchInput label="ارسال لینک و یوزر/رمز پنل پاسارگارد" help="فقط وقتی دسترسی به پاسارگارد روشن است ارسال می‌شود" checked={shareUrl} onChange={setShareUrl} />
+            {buyExtraAllowed ? (
+              <SwitchInput
+                label="امکان خرید حجم و کاربر اضافه"
+                help="فقط اشتراک ثابت — بسته‌های همین پلن در ربات و «اشتراک من» دیده می‌شوند؛ برای PAYG لازم نیست"
+                checked={allowExtra}
+                onChange={(on) => {
+                  setAllowExtra(on);
+                  if (on) packLines.seedEmpty();
+                }}
+              />
+            ) : null}
           </div>
           {extraOn ? (
             <FormGrid>
               <MoneyInput label="قیمت هر گیگ اضافه (تومان)" value={extraGb} onChange={setExtraGb} />
               <MoneyInput label="قیمت هر کاربر اضافه (تومان)" value={extraUser} onChange={setExtraUser} />
             </FormGrid>
+          ) : null}
+          {extraOn && packConfig ? (
+            <FormSection title="بسته‌های خرید سریع" description="هر ردیف یک پله در ربات است؛ قیمت هر پله = نرخ واحد × مقدار">
+              <PackEditor specs={specs} lines={packLines.lines} onChange={packLines.setLines} styleOptions={packStyleOptions ?? styleOptions} maxPerKind={packConfig.max_per_kind} />
+            </FormSection>
           ) : null}
           {system ? (
             <p className="text-sm text-muted">نقش پاسارگارد از خود ادمین موجود می‌آید — این پلن نقش جدید نمی‌سازد.</p>

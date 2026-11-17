@@ -2,7 +2,8 @@
 
 import type { ActionResult } from "../../core/api";
 import { FormModal, SelectInput } from "../../ui/Fields";
-import { AddonPackForm, CustomForm, EMPTY_PACK, FixedPlanForm, TrialForm, WholesaleForm, type PackDraft } from "./PlanForms";
+import { AddonPackCreateForm } from "./AddonPackCreateForm";
+import { AddonPackForm, CustomForm, FixedPlanForm, TrialForm, WholesaleForm, type PackDraft } from "./PlanForms";
 import { ResellerPlanForm, type ResellerKind } from "./ResellerPlanForm";
 import type { PlansOverview } from "./types";
 
@@ -44,6 +45,8 @@ export function PlanDialog({ data, state, onChange, onClose, onDone }: { data: P
         limits={data.limits}
         categories={resellerCategories}
         styleOptions={data.plan_style_options}
+        packStyleOptions={data.pack_style_options}
+        packConfig={data.pack_config.reseller}
         initialKind={kind as ResellerKind}
         onDone={onDone}
         onCancel={onClose}
@@ -52,10 +55,8 @@ export function PlanDialog({ data, state, onChange, onClose, onDone }: { data: P
   } else if (kind === "trial") form = <TrialForm {...common} />;
   else if (kind === "custom") form = <CustomForm {...common} />;
   else if (kind === "wholesale") form = <WholesaleForm {...common} />;
-  else if (kind === "addon_volume" || kind === "addon_duration") {
-    const initial: PackDraft = { ...EMPTY_PACK, kind: kind === "addon_duration" ? "duration" : "volume" };
-    form = <AddonPackForm key={kind} {...common} initial={initial} fixedKind={initial.kind} />;
-  } else form = <FixedPlanForm {...common} />;
+  else if (kind === "addon_volume" || kind === "addon_duration") form = <AddonPackCreateForm key={kind} {...common} kind={kind === "addon_duration" ? "duration" : "volume"} />;
+  else form = <FixedPlanForm {...common} />;
 
   return (
     <FormModal isOpen onOpenChange={(open) => !open && onClose()} title="افزودن پلن" description="پلن فروشگاه یا نمایندگی را اینجا بسازید" size="lg">
@@ -77,7 +78,7 @@ export function PlanDialog({ data, state, onChange, onClose, onDone }: { data: P
 export function PackDialog({ data, draft, onClose, onDone }: { data: PlansOverview; draft: PackDraft | null; onClose: () => void; onDone: (result: ActionResult) => void }) {
   return (
     <FormModal isOpen={Boolean(draft)} onOpenChange={(open) => !open && onClose()} title="بسته حجم / زمان" description="کاربر می‌تواند حجم یا زمان بخرد و به سرویس فعلی‌اش اضافه کند" size="md">
-      {draft ? <AddonPackForm key={draft.id ?? "new"} data={data} initial={draft} onDone={onDone} onCancel={onClose} /> : null}
+      {draft ? <AddonPackForm key={draft.id} data={data} initial={draft} onDone={onDone} onCancel={onClose} /> : null}
     </FormModal>
   );
 }

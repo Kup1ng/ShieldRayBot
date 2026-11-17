@@ -104,6 +104,19 @@ export type ResellerPlanRow = {
   category_name: string | null;
 };
 
+/** One line of a pack editor; the colour is the form value («inherit» = the default). */
+export type PackLineData = { amount: number; button_style: string };
+export type PackKindConfig = { defaults: number[]; max: number };
+export type UserPackConfig = {
+  max_per_kind: number;
+  batch: { max_rows: number; max_volume_gb: number; max_days: number };
+  volume: PackKindConfig;
+  duration: PackKindConfig;
+};
+export type ResellerPackConfig = { max_per_kind: number; gb: PackKindConfig; users: PackKindConfig };
+export type UserPackLines = { volume: PackLineData[]; duration: PackLineData[] };
+export type ResellerPackLines = { gb: PackLineData[]; users: PackLineData[] };
+
 export type PlansOverview = {
   is_platform_admin: boolean;
   pg_error: string | null;
@@ -124,6 +137,9 @@ export type PlansOverview = {
   pg_roles: PgOption[];
   plan_style_options: StyleOption[];
   category_style_options: StyleOption[];
+  pack_style_options: StyleOption[];
+  /** The reseller limits are Owner-only and missing for a shop. */
+  pack_config: { user: UserPackConfig; reseller?: ResellerPackConfig };
 };
 
 export type PlanEdit = {
@@ -141,7 +157,14 @@ export type PlanEdit = {
     naming: Naming;
     button_style: string;
     is_trial: boolean;
+    carry_remaining_quota: boolean;
+    allow_buy_extra: boolean;
+    extra_gb_price: number;
+    extra_month_price: number;
   };
+  packs: UserPackLines;
+  pack_style_options: StyleOption[];
+  pack_config: { user: UserPackConfig };
   pg_error: string | null;
   limits: Limits;
   templates: PgOption[];
@@ -179,7 +202,19 @@ export type ResellerPlanEdit = {
     button_style: string;
     is_active: boolean;
     is_system: boolean;
+    carry_remaining_period: boolean;
+    keep_extras_on_renew: boolean;
+    allow_pg_panel_access: boolean;
+    payg_basis: string;
+    payg_charge_upfront: boolean;
+    payg_user_price: number;
+    payg_user_price_per_30d: boolean;
+    /** null forbids unlimited users on the package. */
+    payg_unlimited_price: number | null;
   };
+  packs: ResellerPackLines;
+  pack_style_options: StyleOption[];
+  pack_config: { reseller: ResellerPackConfig };
   limits: Limits;
   groups: PgOption[];
   pg_roles: PgOption[];

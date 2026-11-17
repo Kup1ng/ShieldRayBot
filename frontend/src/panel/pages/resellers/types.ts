@@ -132,6 +132,25 @@ export type PaygBlock = {
   wallet_txs: LedgerRow[];
 };
 
+export type CreditStatement = { id: number; period: string; amount_due: number; due_at: string; status: string };
+
+export type CreditEvent = { id: number; kind: string; old_value: string; new_value: string; note: string; actor: string; created_at: string };
+
+/** A PAYG shop's credit line: the limit it may spend below zero, its statements and recent changes. */
+export type CreditBlock = {
+  status: string;
+  frozen: boolean;
+  limit: number;
+  used: number;
+  available: number;
+  percent: number;
+  credit_limit: number;
+  temp_limit: number | null;
+  temp_limit_until: string;
+  statements: CreditStatement[];
+  events: CreditEvent[];
+};
+
 export type EditProfile = {
   billing_mode: string;
   pg_admin_username: string | null;
@@ -143,6 +162,8 @@ export type EditProfile = {
   share_pg_panel_url: boolean;
   allow_volume_oversell: boolean;
   billing_suspended: boolean;
+  /** A new panel-admin password was saved but the panel has not confirmed it yet. */
+  pg_password_rotation_pending: boolean;
   watermark_text: string;
 };
 
@@ -156,6 +177,7 @@ export type ResellerEdit = {
   color_tags: RiskTag[];
   is_payg: boolean;
   payg: PaygBlock | null;
+  credit: CreditBlock | null;
   pg_limits: PgLimits | null;
   pg_subscription: CapacityView | null;
   pg_api_key_stored: boolean;
@@ -173,6 +195,8 @@ export type PackageChoice = {
   relation: "current" | "upgrade" | "downgrade" | "other";
   label: string;
   blocked: string | null;
+  /** What renewing into this package drops or restarts; said before the owner pays. */
+  warnings: string[];
 };
 
 export type SubscriptionOverview = {
@@ -191,8 +215,11 @@ export type SubscriptionData = {
   bot_username: string;
   unavailable: string;
   overview: SubscriptionOverview | null;
-  extras: { gb_price: number; user_price: number; gb_options: number[]; user_options: number[] } | null;
+  extras: ExtrasOffer | null;
 };
+
+/** The current package's quick-buy: a kind is sold only with a unit price and at least one amount. */
+export type ExtrasOffer = { gb_price: number; user_price: number; gb_options: number[]; user_options: number[]; keep_on_renew: boolean };
 
 export type ShopReview = {
   rows: { service_id: number; customer_id: number; pg_username: string; attributed_shop: number | null; order_shops: (number | null)[] }[];

@@ -21,8 +21,8 @@ import {
 } from "./forms";
 import { optionList } from "./format";
 import { useDialogPost } from "./submit";
-import type { PgOption, PgUserRow, PgUsersCan } from "./types";
-import { FormError, FormFooter } from "./ui";
+import type { PaygRates, PgOption, PgUserRow, PgUsersCan } from "./types";
+import { FormError, FormFooter, PaygRatesNote } from "./ui";
 
 const GB_HELP = "۰ یا خالی = نامحدود";
 const DAYS_HELP = "از الان محاسبه می‌شود — خالی = بدون انقضا";
@@ -30,7 +30,7 @@ const MODE_LABELS: Record<CreateMode, string> = { custom: "سفارشی (گرو�
 
 type DialogProps = { onClose: () => void; refresh: () => void };
 
-function CreateForm({ can, templates, groups, onClose, refresh }: DialogProps & { can: PgUsersCan; templates: PgOption[]; groups: PgOption[] }) {
+function CreateForm({ can, templates, groups, rates, onClose, refresh }: DialogProps & { can: PgUsersCan; templates: PgOption[]; groups: PgOption[]; rates: PaygRates | null }) {
   const [form, setForm] = useState<CreateUserForm>({
     username: "",
     mode: defaultCreateMode({ requireTemplate: can.require_template, canCustom: can.custom_create, canTemplate: can.template_create }),
@@ -53,6 +53,7 @@ function CreateForm({ can, templates, groups, onClose, refresh }: DialogProps & 
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+      <PaygRatesNote rates={rates} />
       <FormError message={error} />
       <TextInput label="نام کاربری" value={form.username} onChange={(username) => patch({ username })} ltr required maxLength={32} placeholder="user_01" help="۳ تا ۳۲ کاراکتر انگلیسی، عدد یا _ — بدون فاصله و فارسی" />
       <SelectInput
@@ -84,15 +85,15 @@ function CreateForm({ can, templates, groups, onClose, refresh }: DialogProps & 
 }
 
 /** «ساخت کاربر»: custom (groups, volume, days, devices) or from a ready template. */
-export function CreateUserDialog({ open, can, templates, groups, onClose, refresh }: DialogProps & { open: boolean; can: PgUsersCan; templates: PgOption[]; groups: PgOption[] }) {
+export function CreateUserDialog({ open, can, templates, groups, rates, onClose, refresh }: DialogProps & { open: boolean; can: PgUsersCan; templates: PgOption[]; groups: PgOption[]; rates: PaygRates | null }) {
   return (
     <FormModal isOpen={open} onOpenChange={(next) => !next && onClose()} title="ساخت کاربر پاسارگارد" description="کاربر مستقیم در پاسارگارد">
-      {open ? <CreateForm can={can} templates={templates} groups={groups} onClose={onClose} refresh={refresh} /> : null}
+      {open ? <CreateForm can={can} templates={templates} groups={groups} rates={rates} onClose={onClose} refresh={refresh} /> : null}
     </FormModal>
   );
 }
 
-function EditForm({ row, groups, onClose, refresh }: DialogProps & { row: PgUserRow; groups: PgOption[] }) {
+function EditForm({ row, groups, rates, onClose, refresh }: DialogProps & { row: PgUserRow; groups: PgOption[]; rates: PaygRates | null }) {
   const [form, setForm] = useState<EditUserForm>(() => editUserForm(row));
   const { pending, error, setError, post } = useDialogPost({ onClose, refresh });
   const patch = (next: Partial<EditUserForm>) => setForm((current) => ({ ...current, ...next }));
@@ -106,6 +107,7 @@ function EditForm({ row, groups, onClose, refresh }: DialogProps & { row: PgUser
 
   return (
     <form onSubmit={submit} className="flex flex-col gap-4" noValidate>
+      <PaygRatesNote rates={rates} />
       <FormError message={error} />
       <TextInput label="نام کاربری" value={row.username} onChange={() => undefined} ltr readOnly disabled help="در پاسارگارد امکان تغییر نام کاربری وجود ندارد" />
       <FormGrid>
@@ -120,10 +122,10 @@ function EditForm({ row, groups, onClose, refresh }: DialogProps & { row: PgUser
 }
 
 /** «ویرایش کاربر»: volume, days from now, device limit and groups (the name cannot change). */
-export function EditUserDialog({ row, groups, onClose, refresh }: DialogProps & { row: PgUserRow | null; groups: PgOption[] }) {
+export function EditUserDialog({ row, groups, rates, onClose, refresh }: DialogProps & { row: PgUserRow | null; groups: PgOption[]; rates: PaygRates | null }) {
   return (
     <FormModal isOpen={row !== null} onOpenChange={(next) => !next && onClose()} title="ویرایش کاربر" description="حجم، مدت و گروه‌های کاربر">
-      {row ? <EditForm key={row.id} row={row} groups={groups} onClose={onClose} refresh={refresh} /> : null}
+      {row ? <EditForm key={row.id} row={row} groups={groups} rates={rates} onClose={onClose} refresh={refresh} /> : null}
     </FormModal>
   );
 }

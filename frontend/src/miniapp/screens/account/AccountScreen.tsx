@@ -6,7 +6,7 @@ import { IconTile } from "@/components/ui/IconTile";
 import { SectionBadge } from "@/components/ui/SectionBadge";
 import { Icon } from "@/icons/Icon";
 
-import { formatDateTime, money } from "../../core/format";
+import { formatDateTime, money, num } from "../../core/format";
 import { ACTIVITY_MAX, currentActivityLimit, growActivity, invalidateResource, useResource } from "../../state/resources";
 import { useMini } from "../../state/store";
 import { ActionButton } from "../../ui/ActionButton";
@@ -21,7 +21,9 @@ import type { ActivityItem, ActivityPayload, RecentTopup, TopupOptions } from ".
 /** The purple hero card: balance, whether wallet payment is on, top-up and gift code. */
 function WalletCard() {
   const mini = useMini();
-  const { customer, features } = mini;
+  const { customer, features, can, go } = mini;
+  // Points show only where the shop (or the platform) runs a club; the row opens it when its section is open.
+  const showPoints = Boolean(customer?.loyalty_enabled);
   return (
     <section
       aria-label="کیف پول"
@@ -38,6 +40,7 @@ function WalletCard() {
       <p className="num relative text-3xl font-bold">
         <bdi>{money(customer?.wallet)}</bdi>
       </p>
+      {showPoints ? <PointsRow points={customer?.points} onOpen={can("club") ? () => go("club") : null} /> : null}
       {features.topup || features.gift ? (
         <div className="relative flex gap-3">
           {features.topup ? (
@@ -55,6 +58,26 @@ function WalletCard() {
         </div>
       ) : null}
     </section>
+  );
+}
+
+/** «۱۵۰۰ امتیاز» under the balance; a link to the club when the club is open. */
+function PointsRow({ points, onOpen }: { points: unknown; onOpen: (() => void) | null }) {
+  const content = (
+    <>
+      <Icon name="solar:gift-bold" size={18} />
+      <span className="num">
+        <bdi>{num(points)}</bdi> امتیاز
+      </span>
+      {onOpen ? <Icon name="solar:alt-arrow-left-linear" size={16} className="text-white/70" /> : null}
+    </>
+  );
+  const box = "relative flex w-fit items-center gap-2 rounded-full bg-white/15 px-3 py-1 text-sm text-white";
+  if (!onOpen) return <p className={box}>{content}</p>;
+  return (
+    <Button variant="ghost" onPress={onOpen} aria-label={`${num(points)} امتیاز، باشگاه`} className={`${box} !h-auto !min-w-0 !border-transparent`}>
+      {content}
+    </Button>
   );
 }
 

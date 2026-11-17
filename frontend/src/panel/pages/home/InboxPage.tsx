@@ -28,9 +28,11 @@ function AlertRow({ alert, onDismiss }: { alert: InboxAlert; onDismiss: (alert: 
         <LinkButton href={alert.action.href} tone={alert.action.primary ? "ink" : "outline"}>
           {alert.action.label}
         </LinkButton>
-        <Button size="sm" variant="ghost" aria-label={`حذف اعلان: ${alert.title}`} onPress={() => onDismiss(alert)}>
-          حذف
-        </Button>
+        {alert.undismissable ? null : (
+          <Button size="sm" variant="ghost" aria-label={`حذف اعلان: ${alert.title}`} onPress={() => onDismiss(alert)}>
+            حذف
+          </Button>
+        )}
       </div>
     </Alert>
   );

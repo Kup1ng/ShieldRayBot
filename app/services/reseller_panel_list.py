@@ -19,6 +19,7 @@ from app.config import get_settings, normalize_pg_base_url
 from app.db.models import BotUser, ResellerApplication, ResellerProfile
 from app.services.billing import ensure_payg_shop_wallet, is_payg
 from app.services.billing_suspend import restore_payg_reseller
+from app.services.child_pricing import staff_can_price_children
 from app.services.color_tags import (
     color_tag_meta,
     color_tags_for_ui,
@@ -241,6 +242,7 @@ async def list_payload(session: AsyncSession, staff: dict, query: ListQuery) -> 
     return {
         "owner_view": owner_view,
         "can_create": MODE_OWNER if owner_view else MODE_CHILD,
+        "can_price_children": staff_can_price_children(staff),
         "q": query.q,
         "color": query.color or "",
         "color_tags": _picker_tags(),

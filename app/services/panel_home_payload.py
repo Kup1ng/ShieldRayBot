@@ -11,6 +11,8 @@ from collections.abc import Mapping
 from dataclasses import asdict
 from typing import Any
 
+from app.services.pg_link_reconnect import owner_may_reconnect
+
 UNCHECKED_DETAIL = "بررسی نشده"
 OWNER_BOT_HREF = "/settings?tab=bot"
 SHOP_BOT_HREF = "/shop-settings?tab=bot"
@@ -115,8 +117,11 @@ def pg_limits_payload(limits: Any) -> dict[str, Any] | None:
     }
 
 
-def link_health_payload(health: Any) -> dict[str, Any] | None:
-    """How the link to PasarGuard behaved this hour (owner only)."""
+def link_health_payload(health: Any, *, can_reconnect: bool = False) -> dict[str, Any] | None:
+    """How the link to PasarGuard behaved this hour (owner only).
+
+    ``can_reconnect`` is decided by the caller from the signed-in staff; the button shows only while the link is unhealthy.
+    """
     source = _mapping(health)
     if not source:
         return None
@@ -132,6 +137,7 @@ def link_health_payload(health: Any) -> dict[str, Any] | None:
     return {
         "tone": tone,
         "label": label,
+        "can_reconnect": bool(can_reconnect) and tone != "success",
         "latency_p50_ms": source.get("latency_p50_ms"),
         "latency_p95_ms": source.get("latency_p95_ms"),
         "last_ok_time": source.get("last_ok_time"),
@@ -143,6 +149,13 @@ def link_health_payload(health: Any) -> dict[str, Any] | None:
             for row in source.get("recent_failures") or []
             if isinstance(row, Mapping) and row.get("count")
         ],
+        "budget_exhaustion": {
+            "label": _text(source.get("budget_exhaustion_label")),
+            "count": _int(source.get("budget_exhaustion_count")),
+        }
+        if source.get("budget_exhaustion_count")
+        else None,
+        "prior_boot_note": _text(source.get("prior_boot_note")) if source.get("from_prior_boot") else None,
     }
 
 
@@ -293,7 +306,7 @@ def home_widgets_payload(
         "billing": {"balance": _int(billing.get("balance")), "suspended": bool(billing.get("suspended"))} if billing else None,
         "kpi": _kpi_payload(periods, action_center, ctx.get("trend"), links),
         "tiles": tiles,
-        "link_health": link_health_payload(ctx.get("pg_link_health")) if owner else None,
+        "link_health": link_health_payload(ctx.get("pg_link_health"), can_reconnect=owner_may_reconnect(staff)) if owner else None,
         "pg_limits": pg_limits_payload(ctx.get("pg_limits")),
         "portals": home_portals(staff, owner=owner),
         "trend": _trend_payload(ctx.get("trend")),
@@ -332,6 +345,7 @@ def inbox_payload(ctx: Mapping[str, Any]) -> dict[str, Any]:
             "suspended": _payg_rows(payg.get("suspended")),
             "low": _payg_rows(payg.get("low")),
             "threshold": _int(payg.get("threshold")),
+            "review": _int(payg.get("review")),
             "max_names": MAX_PAYG_NAMES,
         },
         "action_center": action_center_payload(ctx.get("action_center")),

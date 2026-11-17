@@ -92,7 +92,7 @@ describe("applications", () => {
 });
 
 describe("my subscription", () => {
-  const choice = (relation: PackageChoice["relation"]): PackageChoice => ({ plan_id: 2, name: "طلایی", users: 10, gb: 100, duration_days: 30, price: 200000, relation, label: "ارتقا", blocked: null });
+  const choice = (relation: PackageChoice["relation"]): PackageChoice => ({ plan_id: 2, name: "طلایی", users: 10, gb: 100, duration_days: 30, price: 200000, relation, label: "ارتقا", blocked: null, warnings: [] });
 
   it("asks with the price before renewing the current package", () => {
     const ask = renewAsk(choice("current"));

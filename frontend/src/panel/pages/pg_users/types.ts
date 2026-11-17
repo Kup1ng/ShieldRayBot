@@ -40,6 +40,9 @@ export type PgUsersCan = {
   bulk: boolean;
 };
 
+/** The shop's PAYG prices (only for a shop charged when users are created or changed). */
+export type PaygRates = { lines: string[]; reset_note: string };
+
 export type PgUsersPayload = {
   rows: PgUserRow[];
   q: string;
@@ -48,6 +51,7 @@ export type PgUsersPayload = {
   templates: PgOption[];
   groups: PgOption[];
   can: PgUsersCan;
+  payg_rates: PaygRates | null;
   error: string | null;
 };
 

@@ -17,8 +17,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import Plan, PlanCategory, ResellerPlan, ServiceAddonPack
 from app.services.button_styles import (
     CATEGORY_BUTTON_STYLE_OPTIONS,
+    ITEM_BUTTON_STYLE_OPTIONS,
     PLAN_BUTTON_STYLE_OPTIONS,
     plan_button_style_form_value,
+)
+from app.services.panel_plan_packs import (
+    reseller_pack_config,
+    reseller_plan_packs,
+    user_pack_config,
+    user_plan_packs,
 )
 from app.services.pg_quota import limit_snapshot_cards, load_staff_limit_snapshot
 from app.services.plans_catalog import (
@@ -341,6 +348,14 @@ async def _label_data(session: AsyncSession, staff: dict, sale_plans: list[Plan]
     return out
 
 
+def _pack_config(*, include_reseller: bool) -> dict[str, Any]:
+    """Pack editor limits; the reseller stairs are an Owner-only feature."""
+    config: dict[str, Any] = {"user": user_pack_config()}
+    if include_reseller:
+        config["reseller"] = reseller_pack_config()
+    return config
+
+
 async def plans_overview(session: AsyncSession, staff: dict) -> dict[str, Any]:
     """Everything the Plans page shows for this staff member's catalog."""
     plans = await list_catalog_plans(session, staff, include_trial=True)
@@ -394,6 +409,8 @@ async def plans_overview(session: AsyncSession, staff: dict) -> dict[str, Any]:
         "pg_roles": pg_roles,
         "plan_style_options": style_options(PLAN_BUTTON_STYLE_OPTIONS),
         "category_style_options": style_options(CATEGORY_BUTTON_STYLE_OPTIONS),
+        "pack_style_options": style_options(ITEM_BUTTON_STYLE_OPTIONS),
+        "pack_config": _pack_config(include_reseller=is_admin),
     }
 
 
@@ -422,7 +439,14 @@ async def plan_edit_data(session: AsyncSession, staff: dict, plan: Plan) -> dict
             "naming": _naming(plan.pg_username_prefix, plan.pg_username_suffix, plan.pg_username_pattern),
             "button_style": plan_button_style_form_value(plan.button_style),
             "is_trial": bool(plan.is_trial),
+            "carry_remaining_quota": bool(plan.carry_remaining_quota),
+            "allow_buy_extra": bool(plan.allow_buy_extra),
+            "extra_gb_price": plan.extra_gb_price or 0,
+            "extra_month_price": plan.extra_month_price or 0,
         },
+        "packs": await user_plan_packs(session, plan),
+        "pack_style_options": style_options(ITEM_BUTTON_STYLE_OPTIONS),
+        "pack_config": _pack_config(include_reseller=False),
         "pg_error": pg_error,
         "limits": limit_payload(snapshot),
         "templates": pg_option_rows(templates),
@@ -484,7 +508,18 @@ async def reseller_plan_edit_data(session: AsyncSession, staff: dict, plan: Rese
             "button_style": plan_button_style_form_value(plan.button_style),
             "is_active": bool(plan.is_active),
             "is_system": bool(plan.is_system) or is_current_capacity_plan(plan),
+            "carry_remaining_period": bool(plan.carry_remaining_period),
+            "keep_extras_on_renew": bool(plan.keep_extras_on_renew),
+            "allow_pg_panel_access": bool(plan.allow_pg_panel_access),
+            "payg_basis": plan.payg_basis or "traffic",
+            "payg_charge_upfront": bool(plan.payg_charge_upfront),
+            "payg_user_price": plan.payg_user_price or 0,
+            "payg_user_price_per_30d": bool(plan.payg_user_price_per_30d),
+            "payg_unlimited_price": plan.payg_unlimited_price,
         },
+        "packs": await reseller_plan_packs(session, int(plan.id)),
+        "pack_style_options": style_options(ITEM_BUTTON_STYLE_OPTIONS),
+        "pack_config": {"reseller": reseller_pack_config()},
         "limits": limit_payload(snapshot),
         "groups": groups,
         "pg_roles": await _pg_roles(),

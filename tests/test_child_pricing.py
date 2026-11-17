@@ -5,13 +5,19 @@ from __future__ import annotations
 import importlib.util
 import tempfile
 import unittest
+from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
+from urllib.parse import parse_qs, urlsplit
 
+import httpx
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from fastapi import FastAPI
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.api.child_pricing_pages import API_PATH, register_child_pricing_pages
 
 from app.db.models import (
     Base,
@@ -25,6 +31,7 @@ from app.db.models import (
 )
 from app.services.billing import shop_bills_usage
 from app.services.child_pricing import (
+    PLAN_LIMIT,
     ChildPlanInput,
     ChildPricingError,
     assign_child_plan,
@@ -32,6 +39,7 @@ from app.services.child_pricing import (
     delete_child_plan,
     parent_scope,
     set_child_credit,
+    staff_can_price_children,
     update_child_plan,
 )
 from app.services.payg_charges import PARENT_SHORTFALL_MESSAGE, ChargeRequest, list_review_charges, refund_charge, reserve_charge, send_to_review, settle_charge
@@ -39,7 +47,9 @@ from app.services.credit_statements import LadderStep
 from app.services.payg_gate import PARENT_OVERDUE_MESSAGE, assert_shop_can_afford, charge_shop_change
 from app.services.payg_pricing import GB, ChargeEvent, ServiceChange
 from app.services.provision_gate import ProvisionError
+from app.services.reseller_panel_list import ListQuery, list_payload
 from app.services.shop_credit import CreditLimitChange, child_shop_ids, set_credit_limit, shop_credit_limit
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGE = "/resellers/children-pricing"
@@ -60,7 +70,7 @@ def request(gb: int, key: str) -> ChargeRequest:
 class CascadeCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'c.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -74,6 +84,9 @@ class CascadeCase(unittest.IsolatedAsyncioTestCase):
                 ResellerProfile(id=2, user_id=L2, billing_mode="fixed", payg_wallet_linked=True),
                 ResellerProfile(id=3, user_id=OTHER_L1, plan_id=1, billing_mode="payg", payg_wallet_linked=True),
                 ResellerProfile(id=4, user_id=OTHER_L2, billing_mode="fixed", payg_wallet_linked=True),
+            ])
+            await session.flush()
+            session.add_all([
                 OrgPrincipal(id=11, depth=1, status="active", reseller_profile_id=1),
                 OrgPrincipal(id=12, depth=2, parent_id=11, status="active", reseller_profile_id=2),
                 OrgPrincipal(id=13, depth=1, status="active", reseller_profile_id=3),
@@ -231,25 +244,183 @@ class CreditTests(CascadeCase):
             self.assertEqual(await shop_credit_limit(session, L1), 0)
 
 
-class TemplateTests(unittest.TestCase):
-    def test_plan_edit_and_delete_forms_are_escaped(self) -> None:
-        from types import SimpleNamespace
+L1_STAFF = {"role": "reseller", "bot_user_id": L1, "org_depth": 1, "org_status": "active", "org_principal_id": 11,
+            "pg_can_create_admin": True, "username": "l1"}
+OTHER_L1_STAFF = {**L1_STAFF, "bot_user_id": OTHER_L1, "org_principal_id": 13, "username": "other"}
 
-        from jinja2 import ChainableUndefined
 
-        from app.api.app import templates
+def form(**changes: str) -> dict[str, str]:
+    return {"name": "فروش ویژه", "payg_basis": "traffic", "price_per_gb": "1700", **changes}
 
-        env = templates.env.overlay(undefined=ChainableUndefined)
-        plan = SimpleNamespace(id=4, name="<b>x</b>", payg_basis="user", price_per_gb=0, payg_user_price=900,
-                               payg_user_price_per_30d=True, payg_unlimited_price=None)
-        html = env.get_template("children_pricing.html").render(
-            request=SimpleNamespace(query_params={}, url=SimpleNamespace(path=PAGE), cookies={}),
-            staff={"role": "reseller"}, plans=[plan], children=[], free_credit=0, csrf_token="t",
-        )
-        self.assertNotIn("<b>x</b>", html)
-        self.assertIn(f'action="{PAGE}/plans/4"', html)
-        self.assertIn(f'action="{PAGE}/plans/4/delete"', html)
-        self.assertIn('value="user" selected', html)
+
+def error_of(response: httpx.Response) -> list[str]:
+    return parse_qs(urlsplit(response.headers["location"]).query).get("err", [])
+
+
+class PageDataTests(CascadeCase):
+    """The React page's JSON and the form handlers it posts keep the parent shop's scope."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.staff: dict = L1_STAFF
+
+        async def staff() -> dict:
+            return self.staff
+
+        async def get_db() -> AsyncIterator[AsyncSession]:
+            async with self.Session() as session:
+                yield session
+
+        self.app = FastAPI()
+        register_child_pricing_pages(self.app, require_staff=staff, get_db=get_db)
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="https://example.test")
+
+    async def asyncTearDown(self) -> None:
+        await self.client.aclose()
+        await super().asyncTearDown()
+
+    async def profile_state(self, shop_id: int) -> tuple[int | None, int]:
+        async with self.Session() as session:
+            profile = await session.scalar(sa.select(ResellerProfile).where(ResellerProfile.user_id == shop_id))
+            return profile.child_plan_id, await shop_credit_limit(session, shop_id)
+
+    async def test_page_opens_for_a_level_one_shop_and_the_data_is_not_cached(self) -> None:
+        page = await self.client.get(PAGE)
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.headers["cache-control"], "no-store")
+        data = await self.client.get(API_PATH)
+        self.assertEqual(data.status_code, 200)
+        self.assertEqual(data.headers["cache-control"], "no-store")
+
+    async def test_data_lists_only_the_signed_in_shops_plans_children_and_free_credit(self) -> None:
+        async with self.Session() as session:
+            await set_credit_limit(session, L1, CreditLimitChange(limit=30_000), actor="owner")
+            await set_child_credit(session, L1, L2, 12_000, actor="l1")
+            other_plan = await create_child_plan(session, OTHER_L1, plan_input(name="بیگانه"))
+        body = (await self.client.get(API_PATH)).json()
+        self.assertEqual(body["plan_limit"], PLAN_LIMIT)
+        self.assertEqual(body["free_credit"], 18_000)
+        self.assertEqual([c["shop_id"] for c in body["children"]], [L2])
+        self.assertEqual(body["children"][0]["plan_id"], self.plan.id)
+        self.assertEqual(body["children"][0]["credit_limit"], 12_000)
+        self.assertEqual([p["id"] for p in body["plans"]], [self.plan.id])
+        self.assertEqual(body["plans"][0], {
+            "id": self.plan.id, "name": "فروش", "payg_basis": "traffic", "price_per_gb": 1500, "payg_user_price": 0,
+            "payg_user_price_per_30d": False, "payg_unlimited_price": None,
+        })
+        self.staff = OTHER_L1_STAFF
+        other = (await self.client.get(API_PATH)).json()
+        self.assertEqual([p["id"] for p in other["plans"]], [other_plan.id])
+        self.assertEqual([c["shop_id"] for c in other["children"]], [OTHER_L2])
+
+    async def test_a_user_priced_plan_keeps_its_basis_and_unlimited_price(self) -> None:
+        async with self.Session() as session:
+            await create_child_plan(session, L1, plan_input(
+                name="کاربری", basis="user", price_per_gb=0, user_price=900, user_price_per_30d=True, unlimited_price=0))
+        plans = (await self.client.get(API_PATH)).json()["plans"]
+        user_plan = next(p for p in plans if p["name"] == "کاربری")
+        self.assertEqual((user_plan["payg_basis"], user_plan["payg_user_price"], user_plan["payg_user_price_per_30d"],
+                          user_plan["payg_unlimited_price"]), ("user", 900, True, 0))
+
+    async def test_staff_without_the_right_are_refused_everywhere(self) -> None:
+        profiles = [
+            {}, {"role": "admin"}, {"role": "admin", "web_owner": True},
+            {"role": "reseller", "bot_user_id": L2, "org_depth": 2, "org_status": "active", "org_principal_id": 12,
+             "pg_can_create_admin": True},
+            {**L1_STAFF, "pg_can_create_admin": False},
+            {**L1_STAFF, "org_status": "disabled"},
+            {**L1_STAFF, "bot_user_id": None},
+            {"role": "pg_staff", "permissions": ["dashboard"]},
+        ]
+        for profile in profiles:
+            self.staff = profile
+            with self.subTest(profile=profile):
+                self.assertEqual((await self.client.get(PAGE)).status_code, 403)
+                self.assertEqual((await self.client.get(API_PATH)).status_code, 403)
+                self.assertEqual((await self.client.post(f"{PAGE}/plans", data=form())).status_code, 403)
+                self.assertEqual((await self.client.post(f"{PAGE}/plans/{self.plan.id}", data=form())).status_code, 403)
+                self.assertEqual((await self.client.post(f"{PAGE}/plans/{self.plan.id}/delete")).status_code, 403)
+                self.assertEqual((await self.client.post(f"{PAGE}/{L2}", data={"credit_limit": "0"})).status_code, 403)
+        async with self.Session() as session:
+            self.assertIsNotNone(await session.get(ChildPricePlan, self.plan.id))
+        self.assertEqual(await self.profile_state(L2), (self.plan.id, 0))
+
+    async def test_a_shop_cannot_price_or_back_a_shop_that_is_not_its_child(self) -> None:
+        for staff, target in ((OTHER_L1_STAFF, L2), (L1_STAFF, OTHER_L2), (L1_STAFF, L1), (L1_STAFF, 777)):
+            self.staff = staff
+            with self.subTest(parent=staff["bot_user_id"], target=target):
+                response = await self.client.post(f"{PAGE}/{target}", data={"plan_id": str(self.plan.id), "credit_limit": "5000"})
+                self.assertEqual(response.status_code, 303)
+                self.assertTrue(error_of(response))
+        self.assertEqual(await self.profile_state(L2), (self.plan.id, 0))
+        self.assertEqual(await self.profile_state(OTHER_L2), (None, 0))
+
+    async def test_a_child_cannot_be_given_another_parents_plan(self) -> None:
+        async with self.Session() as session:
+            other_plan = await create_child_plan(session, OTHER_L1, plan_input(name="بیگانه"))
+        response = await self.client.post(f"{PAGE}/{L2}", data={"plan_id": str(other_plan.id), "credit_limit": "0"})
+        self.assertTrue(error_of(response))
+        self.assertEqual(await self.profile_state(L2), (self.plan.id, 0))
+
+    async def test_a_shop_cannot_edit_or_delete_another_shops_plan(self) -> None:
+        self.staff = OTHER_L1_STAFF
+        edited = await self.client.post(f"{PAGE}/plans/{self.plan.id}", data=form(name="گرفته شد", price_per_gb="1"))
+        deleted = await self.client.post(f"{PAGE}/plans/{self.plan.id}/delete")
+        self.assertTrue(error_of(edited))
+        self.assertTrue(error_of(deleted))
+        async with self.Session() as session:
+            plan = await session.get(ChildPricePlan, self.plan.id)
+        self.assertEqual((plan.name, plan.price_per_gb, plan.owner_shop_id), ("فروش", 1500, L1))
+
+    async def test_a_new_plan_belongs_to_the_signed_in_shop_and_a_free_one_is_refused(self) -> None:
+        created = await self.client.post(f"{PAGE}/plans", data=form(name="<b>x</b>"))
+        self.assertEqual(created.status_code, 303)
+        self.assertFalse(error_of(created))
+        free = await self.client.post(f"{PAGE}/plans", data=form(name="رایگان", price_per_gb="0"))
+        self.assertTrue(error_of(free))
+        async with self.Session() as session:
+            rows = list((await session.scalars(sa.select(ChildPricePlan).where(ChildPricePlan.name != "فروش"))).all())
+        self.assertEqual([(r.name, r.owner_shop_id, r.price_per_gb) for r in rows], [("<b>x</b>", L1, 1700)])
+
+    async def test_a_plan_edit_and_delete_go_through_the_form_handlers(self) -> None:
+        saved = await self.client.post(f"{PAGE}/plans/{self.plan.id}", data=form(
+            payg_basis="user_traffic", price_per_gb="2000", payg_user_price="300", payg_user_price_per_30d="1",
+            payg_unlimited_price="5000"))
+        self.assertFalse(error_of(saved))
+        plan = next(p for p in (await self.client.get(API_PATH)).json()["plans"] if p["id"] == self.plan.id)
+        self.assertEqual((plan["payg_basis"], plan["price_per_gb"], plan["payg_user_price"],
+                          plan["payg_user_price_per_30d"], plan["payg_unlimited_price"]), ("user_traffic", 2000, 300, True, 5000))
+        in_use = await self.client.post(f"{PAGE}/plans/{self.plan.id}/delete")
+        self.assertTrue(error_of(in_use))
+        await self.client.post(f"{PAGE}/{L2}", data={"plan_id": "", "credit_limit": "0"})
+        self.assertFalse(error_of(await self.client.post(f"{PAGE}/plans/{self.plan.id}/delete")))
+        self.assertEqual((await self.client.get(API_PATH)).json()["plans"], [])
+
+    async def test_credit_is_limited_to_the_free_line_and_must_be_a_whole_amount(self) -> None:
+        async with self.Session() as session:
+            await set_credit_limit(session, L1, CreditLimitChange(limit=10_000), actor="owner")
+        for value in ("10001", "-1", "1.5e999", "abc"):
+            with self.subTest(value=value):
+                response = await self.client.post(f"{PAGE}/{L2}", data={"plan_id": str(self.plan.id), "credit_limit": value})
+                self.assertTrue(error_of(response))
+        self.assertEqual((await self.profile_state(L2))[1], 0)
+        ok = await self.client.post(f"{PAGE}/{L2}", data={"plan_id": str(self.plan.id), "credit_limit": "10000"})
+        self.assertFalse(error_of(ok))
+        self.assertEqual(await self.profile_state(L2), (self.plan.id, 10_000))
+        self.assertEqual((await self.client.get(API_PATH)).json()["free_credit"], 0)
+
+
+class ResellerListLinkTests(CascadeCase):
+    def test_only_a_level_one_shop_is_offered_the_pricing_page(self) -> None:
+        self.assertTrue(staff_can_price_children(L1_STAFF))
+        for staff in ({}, {"role": "admin", "web_owner": True}, {**L1_STAFF, "org_depth": 2}, {**L1_STAFF, "bot_user_id": None}):
+            with self.subTest(staff=staff):
+                self.assertFalse(staff_can_price_children(staff))
+
+    async def test_the_reseller_list_says_whether_the_viewer_can_open_it(self) -> None:
+        async with self.Session() as session:
+            payload = await list_payload(session, dict(L1_STAFF), ListQuery.parse(None, None, None))
+        self.assertTrue(payload["can_price_children"])
 
 
 class MigrationTests(unittest.TestCase):
@@ -259,7 +430,7 @@ class MigrationTests(unittest.TestCase):
         module = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(module)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         self.addCleanup(engine.dispose)
         with engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))

@@ -15,10 +15,14 @@ from unittest.mock import MagicMock, patch
 import httpx
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from fastapi import FastAPI, HTTPException
-from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.api.shop_broadcast_pages import register_shop_broadcast_pages, shop_broadcast_scope
+from app.api.shop_broadcast_pages import (
+    SHOP_BROADCAST_API_PATH,
+    register_shop_broadcast_pages,
+    shop_broadcast_scope,
+)
 from app.db.models import (
     Base,
     BotUser,
@@ -39,6 +43,7 @@ from app.services.broadcast_queue import (
     run_broadcast_worker,
 )
 from app.services.campaigns import set_marketing_preference
+from app.services.marketing_nav import SHOP_BROADCAST
 from app.services.shop_broadcast import (
     SHOP_NO_BOT_MESSAGE,
     clean_shop_broadcast_text,
@@ -48,10 +53,13 @@ from app.services.shop_broadcast import (
     shop_audience_clause,
     shop_broadcast_html_snippet,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SHOP_A = 20
 SHOP_B = 30
+SHOP_A_STAFF = {"role": "reseller", "permissions": ["broadcast"], "bot_user_id": SHOP_A}
+SHOP_B_STAFF = {"role": "reseller", "permissions": ["broadcast"], "bot_user_id": SHOP_B}
 
 
 class FakeBot:
@@ -71,7 +79,7 @@ class FakeBot:
 class ShopBroadcastCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'shop_bc.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -398,28 +406,127 @@ class AuthzWebTests(ShopBroadcastCase):
             SHOP_A,
         )
 
-    async def test_web_routes_refuse_cross_shop_cancel_and_delete(self):
-        log = await queue_shop_broadcast(
-            self.session, shop_id=SHOP_A, text="x", created_by="a", request_key=new_shop_request_key()
-        )
+    def _client(self, staff: dict) -> httpx.AsyncClient:
         app = FastAPI()
 
         async def db():
             yield self.session
 
         async def require_staff():
-            return {"role": "reseller", "permissions": ["broadcast"], "bot_user_id": SHOP_B}
+            return staff
 
-        register_shop_broadcast_pages(app, render=lambda *a, **k: None, require_staff=require_staff, get_db=db)
-        async with httpx.AsyncClient(
-            transport=httpx.ASGITransport(app=app), base_url="http://test"
-        ) as client:
+        register_shop_broadcast_pages(app, require_staff=require_staff, get_db=db)
+        return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+    async def test_web_routes_refuse_cross_shop_cancel_and_delete(self):
+        log = await queue_shop_broadcast(
+            self.session, shop_id=SHOP_A, text="x", created_by="a", request_key=new_shop_request_key()
+        )
+        async with self._client(SHOP_B_STAFF) as client:
             cancel = await client.post(f"/shop-broadcast/history/{log.id}/cancel", follow_redirects=False)
             delete = await client.post(f"/shop-broadcast/history/{log.id}/delete", follow_redirects=False)
         self.assertIn("err=", cancel.headers["location"])
         self.assertIn("err=", delete.headers["location"])
         await self.session.refresh(await self.session.get(BroadcastLog, log.id))
         self.assertEqual((await self.session.get(BroadcastLog, log.id)).status, STATUS_QUEUED)
+
+    async def test_other_shop_cannot_clear_history_through_the_route(self):
+        log = await queue_shop_broadcast(
+            self.session, shop_id=SHOP_A, text="keep", created_by="a", request_key=new_shop_request_key()
+        )
+        await cancel_broadcast(self.session, log.id, shop_id=SHOP_A)
+        async with self._client(SHOP_B_STAFF) as client:
+            response = await client.post("/shop-broadcast/history/clear", follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNotNone(await self.session.scalar(select(BroadcastLog.id).where(BroadcastLog.id == log.id)))
+
+    async def test_page_data_lists_only_the_shops_own_history(self):
+        own = await queue_shop_broadcast(
+            self.session, shop_id=SHOP_A, text="<b>mine</b>", created_by="a", request_key=new_shop_request_key()
+        )
+        await queue_shop_broadcast(
+            self.session, shop_id=SHOP_B, text="theirs", created_by="b", request_key=new_shop_request_key()
+        )
+        await queue_broadcast(self.session, text="platform", audience="users", created_by="owner")
+        async with self._client(SHOP_A_STAFF) as client:
+            body = (await client.get(SHOP_BROADCAST_API_PATH)).json()
+        self.assertEqual([row["id"] for row in body["history"]], [own.id])
+        row = body["history"][0]
+        # Customer text comes back as plain data for the page to show as text.
+        self.assertEqual(row["text_snippet"], "<b>mine</b>")
+        self.assertEqual(row["audience_label"], "همهٔ مشتریان")
+        self.assertEqual(row["status"], STATUS_QUEUED)
+        self.assertTrue(row["is_active"])
+        self.assertEqual((row["ok_count"], row["fail_count"], row["review_count"]), (0, 0, 0))
+        self.assertEqual(row["total"], 3)
+        self.assertEqual(row["created_by"], "a")
+        self.assertEqual(body["audiences"], [{"value": "all", "label": "همهٔ مشتریان"}])
+        self.assertEqual(body["max_text"], 4000)
+        self.assertIn(SHOP_BROADCAST, [section["key"] for section in body["sections"]])
+
+        async with self._client(SHOP_B_STAFF) as client:
+            other = (await client.get(SHOP_BROADCAST_API_PATH)).json()
+        self.assertEqual([entry["text_snippet"] for entry in other["history"]], ["theirs"])
+
+    async def test_page_data_cuts_long_text_and_has_a_fresh_request_key(self):
+        self.session.add(BroadcastLog(audience="all", text="y" * 150, total=1, status=STATUS_DONE, shop_id=SHOP_A))
+        await self.session.commit()
+        async with self._client(SHOP_A_STAFF) as client:
+            first = (await client.get(SHOP_BROADCAST_API_PATH)).json()
+            second = (await client.get(SHOP_BROADCAST_API_PATH)).json()
+        row = first["history"][0]
+        self.assertEqual(len(row["text_snippet"]), 120)
+        self.assertTrue(row["text_truncated"])
+        self.assertFalse(row["is_active"])
+        self.assertEqual(len(first["request_key"]), 32)
+        self.assertNotEqual(first["request_key"], second["request_key"])
+
+    async def test_page_and_data_are_served_without_caching(self):
+        async with self._client(SHOP_A_STAFF) as client:
+            data = await client.get(SHOP_BROADCAST_API_PATH)
+            page = await client.get("/shop-broadcast")
+        self.assertEqual(data.headers["cache-control"], "no-store")
+        # The page is the exported React shell; it needs `npm run export` to exist.
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.headers["cache-control"], "no-store")
+
+    async def test_staff_without_permission_or_shop_are_refused_everywhere(self):
+        log = await queue_shop_broadcast(
+            self.session, shop_id=SHOP_A, text="x", created_by="a", request_key=new_shop_request_key()
+        )
+        profiles = [
+            {},
+            {"role": "reseller", "permissions": ["campaigns"], "bot_user_id": SHOP_A},
+            {"role": "reseller", "permissions": ["broadcast"], "bot_user_id": None},
+            {"role": "pg_staff", "permissions": ["broadcast"]},
+            {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"},
+        ]
+        for staff in profiles:
+            with self.subTest(staff=staff):
+                async with self._client(staff) as client:
+                    self.assertEqual((await client.get("/shop-broadcast")).status_code, 403)
+                    self.assertEqual((await client.get(SHOP_BROADCAST_API_PATH)).status_code, 403)
+                    self.assertEqual((await client.post("/shop-broadcast", data={"text": "hi"})).status_code, 403)
+                    self.assertEqual((await client.post("/shop-broadcast/history/clear")).status_code, 403)
+                    self.assertEqual((await client.post(f"/shop-broadcast/history/{log.id}/delete")).status_code, 403)
+                    self.assertEqual((await client.post(f"/shop-broadcast/history/{log.id}/cancel")).status_code, 403)
+        self.assertEqual((await self.session.get(BroadcastLog, log.id)).status, STATUS_QUEUED)
+
+    async def test_posting_the_form_twice_queues_one_send(self):
+        key = new_shop_request_key()
+        async with self._client(SHOP_A_STAFF) as client:
+            first = await client.post("/shop-broadcast", data={"text": "once", "request_key": key}, follow_redirects=False)
+            second = await client.post("/shop-broadcast", data={"text": "once", "request_key": key}, follow_redirects=False)
+        self.assertIn("ok=", first.headers["location"])
+        self.assertIn("ok=", second.headers["location"])
+        rows = list((await self.session.scalars(select(BroadcastLog).where(BroadcastLog.shop_id == SHOP_A))).all())
+        self.assertEqual(len(rows), 1)
+
+    async def test_refused_send_comes_back_as_an_error_message(self):
+        async with self._client(SHOP_A_STAFF) as client:
+            response = await client.post("/shop-broadcast", data={"text": "   "}, follow_redirects=False)
+        self.assertIn("err=", response.headers["location"])
+        self.assertEqual(await self.session.scalar(select(func.count()).select_from(BroadcastLog)), 0)
 
 
 class MigrationTests(unittest.TestCase):
@@ -433,8 +540,9 @@ class MigrationTests(unittest.TestCase):
         )
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
+            conn.execute(text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
             conn.execute(
                 text(
                     "CREATE TABLE broadcast_logs (id INTEGER PRIMARY KEY, audience TEXT, text TEXT, "

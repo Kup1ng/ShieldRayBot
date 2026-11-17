@@ -33,6 +33,7 @@ from app.services.pasarguard import get_pg
 from app.services.pg_admin_subscription import get_subscription, is_current_capacity_plan
 from app.services.pg_overview import build_reseller_pg_overview
 from app.services.reseller_capacity_view import allocation_view_for_shop, build_capacity_view, live_capacity_from_overview
+from app.services.reseller_credit_panel import credit_payload
 from app.services.resellers import FEATURE_PERMS
 
 logger = logging.getLogger(__name__)
@@ -194,6 +195,8 @@ def _profile_block(profile: ResellerProfile) -> dict[str, Any]:
         "share_pg_panel_url": bool(profile.share_pg_panel_url),
         "allow_volume_oversell": bool(profile.allow_volume_oversell),
         "billing_suspended": profile.billing_suspended_at is not None,
+        # A flag only: the stored rotation password is never returned.
+        "pg_password_rotation_pending": bool((profile.pg_password_rotation_enc or "").strip()),
         "watermark_text": format_bytes(int(profile.billing_watermark_bytes or 0)),
     }
 
@@ -237,6 +240,7 @@ async def edit_payload(
         "color_tags": [{"key": tag["key"], "title": tag["title_fa"]} for tag in color_tags_for_ui()],
         "is_payg": payg,
         "payg": wallet,
+        "credit": await credit_payload(session, int(user.id), balance=int(user.wallet_balance or 0)) if payg else None,
         "pg_limits": _limits(overview),
         "pg_subscription": await _capacity(session, profile, overview),
         "pg_api_key_stored": await _api_key_stored(session, profile),

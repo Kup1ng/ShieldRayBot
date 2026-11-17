@@ -1,52 +1,29 @@
-"""Authorization, validation and rendered controls for random discount management."""
+"""Authorization, validation and the panel data for random discount management."""
 from __future__ import annotations
 
 import secrets
 import unittest
 from collections.abc import AsyncIterator
-from html.parser import HTMLParser
-from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
+from fastapi import FastAPI
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.random_discounts import register_random_discounts
+from app.api.random_discounts import API_PATH, register_random_discounts
 from app.db.models import Base, BotUser, RandomDiscount
-from app.services.formatting import format_money, format_number
 from app.services.marketing_nav import RANDOM_DISCOUNTS, marketing_sections
 from app.services.resellers import DEFAULT_FEATURE_PERMS, feature_perm_groups
+from tests.pgtest import pg_engine
 
-TEMPLATES = Path(__file__).resolve().parents[1] / "app/web/templates"
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
 SHOP = {"role": "reseller", "bot_user_id": 2, "permissions": ["random_discounts"]}
 
 
-class Controls(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.fields: dict[str, dict[str, str | None]] = {}
-        self.forms: list[dict[str, str | None]] = []
-        self.modals: list[dict[str, str | None]] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        values = dict(attrs)
-        name = values.get("name")
-        if tag in {"input", "select"} and name:
-            self.fields[name] = values
-        if tag == "form":
-            self.forms.append(values)
-        if tag == "div" and "ui-modal" in (values.get("class") or "").split():
-            self.modals.append(values)
-
-
 class RandomDiscountAdminTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -57,16 +34,6 @@ class RandomDiscountAdminTests(unittest.IsolatedAsyncioTestCase):
             ])
             await session.commit()
         self.staff = OWNER
-        env = Environment(loader=ChoiceLoader([
-            DictLoader({"base.html": "{% block content %}{% endblock %}"}),
-            FileSystemLoader(str(TEMPLATES)),
-        ]), autoescape=select_autoescape(["html"]))
-        env.filters.update(num=format_number, money=format_money)
-
-        def render(request: Request, template: str, context: dict) -> HTMLResponse:
-            return HTMLResponse(env.get_template(template).render(
-                request=request, csrf_token="test-csrf", marketing_sections=marketing_sections(self.staff), **context,
-            ))
 
         async def staff() -> dict:
             return self.staff
@@ -76,7 +43,7 @@ class RandomDiscountAdminTests(unittest.IsolatedAsyncioTestCase):
                 yield session
 
         self.app = FastAPI()
-        register_random_discounts(self.app, render=render, require_staff=staff, get_db=get_db)
+        register_random_discounts(self.app, require_staff=staff, get_db=get_db)
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="https://example.test")
 
     async def asyncTearDown(self) -> None:
@@ -97,37 +64,33 @@ class RandomDiscountAdminTests(unittest.IsolatedAsyncioTestCase):
             self.staff = profile
             with self.subTest(profile=profile):
                 self.assertEqual((await self.client.get("/random-discounts")).status_code, 403)
+                self.assertEqual((await self.client.get(API_PATH)).status_code, 403)
                 self.assertEqual((await self.client.post("/random-discounts", data=self.form())).status_code, 403)
                 self.assertEqual((await self.client.post("/random-discounts/1/stop")).status_code, 403)
 
-    async def test_rendered_form_has_labels_numeric_limits_and_csrf(self) -> None:
-        response = await self.client.get("/random-discounts")
-        self.assertEqual(response.status_code, 200)
-        controls = Controls()
-        controls.feed(response.text)
-        for name in ("title", "mode", "reduction_kind", "minimum", "maximum", "step", "window_minutes", "code"):
-            self.assertIn(name, controls.fields)
-        self.assertEqual(controls.fields["csrf_token"]["value"], "test-csrf")
-        self.assertEqual(controls.fields["window_minutes"]["max"], "10080")
-        self.assertEqual(controls.fields["minimum"]["dir"], "ltr")
-        self.assertEqual(len(controls.fields["request_key"]["value"]), 32)
-        self.assertTrue(all("ds" in row["class"].split() for row in controls.modals))
-        self.assertIn("هنوز تخفیف تصادفی تعریف نشده", response.text)
+    async def test_page_data_has_a_fresh_request_key_and_the_marketing_strip(self) -> None:
+        self.staff = SHOP
+        page = await self.client.get("/random-discounts")
+        self.assertEqual(page.status_code, 200)
+        self.assertEqual(page.headers["cache-control"], "no-store")
+        first = (await self.client.get(API_PATH)).json()
+        second = (await self.client.get(API_PATH)).json()
+        self.assertEqual(first["discounts"], [])
+        self.assertIsNone(first["next_before"])
+        self.assertEqual(len(first["request_key"]), 32)
+        self.assertNotEqual(first["request_key"], second["request_key"])
+        self.assertEqual([row["key"] for row in first["sections"]], [RANDOM_DISCOUNTS])
 
-    async def test_title_and_flash_are_escaped_and_stopping_requires_confirmation(self) -> None:
+    async def test_titles_are_returned_as_text_and_errors_come_back_in_the_redirect(self) -> None:
         title = '<img src=x onerror="alert(1)">'
         response = await self.client.post("/random-discounts", data=self.form(title=title))
         self.assertEqual(response.status_code, 303)
-        response = await self.client.get("/random-discounts", params={"error": "<script>unsafe</script>"})
-        self.assertNotIn("<img src=x", response.text)
-        self.assertNotIn("<script>", response.text)
-        self.assertIn("&lt;img", response.text)
-        self.assertIn("&lt;script&gt;", response.text)
-        controls = Controls()
-        controls.feed(response.text)
-        stop_forms = [row for row in controls.forms if row.get("action", "").endswith("/stop")]
-        self.assertEqual(len(stop_forms), 1)
-        self.assertIn("سفارش‌های قبلی تغییر نمی‌کند", stop_forms[0]["data-confirm"])
+        rows = (await self.client.get(API_PATH)).json()["discounts"]
+        self.assertEqual([row["title"] for row in rows], [title])
+        self.assertTrue(rows[0]["is_active"])
+        self.assertEqual(rows[0]["code"], "")
+        response = await self.client.post("/random-discounts", data=self.form(minimum="NaN"))
+        self.assertIn("error", parse_qs(urlsplit(response.headers["location"]).query))
 
     async def test_invalid_form_values_are_safe_errors_and_create_no_policy(self) -> None:
         for changes in [{"minimum": "NaN"}, {"maximum": "0"}, {"step": "-1"}, {"window_minutes": "10081"},
@@ -139,7 +102,7 @@ class RandomDiscountAdminTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("error", parse_qs(urlsplit(response.headers["location"]).query))
         async with self.Session() as session:
             self.assertEqual(await session.scalar(select(func.count()).select_from(RandomDiscount)), 0)
-        self.assertEqual((await self.client.get("/random-discounts?before=NaN")).status_code, 400)
+        self.assertEqual((await self.client.get(f"{API_PATH}?before=NaN")).status_code, 400)
 
     async def test_duplicate_submission_creates_one_policy_and_other_shop_cannot_stop_it(self) -> None:
         self.staff = SHOP
@@ -151,7 +114,7 @@ class RandomDiscountAdminTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(rows), 1)
             policy_id = rows[0].id
         self.staff = {**SHOP, "bot_user_id": 3}
-        self.assertNotIn("تخفیف ویژهٔ آزمون</span>", (await self.client.get("/random-discounts")).text)
+        self.assertEqual((await self.client.get(API_PATH)).json()["discounts"], [])
         response = await self.client.post(f"/random-discounts/{policy_id}/stop")
         self.assertIn("error", parse_qs(urlsplit(response.headers["location"]).query))
         async with self.Session() as session:

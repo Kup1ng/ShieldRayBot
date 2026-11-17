@@ -1,6 +1,6 @@
 "use client";
 
-/** «هویت ربات», «نوتیفیکیشن» and «گزارش روزانه»: settings forms with more than plain fields. */
+/** «هویت ربات», «هشدارها» and «گزارش روزانه»: settings forms with more than plain fields. */
 
 import { Button } from "@heroui/react";
 import { useMemo, useRef, useState } from "react";
@@ -9,7 +9,7 @@ import { Icon } from "@/icons/Icon";
 
 import { run, usePending } from "../../../core/actions";
 import { confirm } from "../../../core/confirm";
-import { Ltr } from "../../../ui/Data";
+import { Ltr, StatusChip } from "../../../ui/Data";
 import { SubmitButton, SwitchInput, TextAreaInput, TextInput } from "../../../ui/Fields";
 import { GlassSection } from "../../../ui/Page";
 import { Notice } from "../../../ui/States";
@@ -134,7 +134,7 @@ export function NotificationsTab({ data, reload }: TabProps) {
   const { pending, track } = usePending();
   const save = () =>
     track(async () => {
-      const result = await run("/shop-notifications", Object.fromEntries(extra.items.map((item) => [`s_${item.key}`, prefs[item.key]])), { success: "نوتیفیکیشن‌های فروشگاه ذخیره شد." });
+      const result = await run("/shop-notifications", Object.fromEntries(extra.items.map((item) => [`s_${item.key}`, prefs[item.key]])), { success: "هشدارهای فروشگاه ذخیره شد." });
       if (!result || result.ok) reload();
     });
   return (
@@ -147,19 +147,19 @@ export function NotificationsTab({ data, reload }: TabProps) {
             void save();
           }}
         >
-          <GlassSection title="نوتیفیکیشن تلگرام فروشگاه" description="اعلان‌های مربوط به فروشگاه شما — مستقل از ادمین اصلی. فقط رویدادهایی که با دسترسی‌های شما هم‌خوان است نمایش داده می‌شود.">
+          <GlassSection title="هشدارهای تلگرام فروشگاه" description="هشدارهای مربوط به فروشگاه شما — مستقل از ادمین اصلی. فقط رویدادهایی که با دسترسی‌های شما هم‌خوان است نمایش داده می‌شود.">
             <div className="flex flex-col gap-4">
               {extra.items.map((item) => (
-                <SwitchInput key={item.key} label={item.title} help={item.help} checked={prefs[item.key] === true} onChange={(on) => setPrefs((current) => ({ ...current, [item.key]: on }))} />
+                <SwitchInput key={item.key} label={item.system ? <>{item.title} <StatusChip color="default">سیستم</StatusChip></> : item.title} help={item.help} checked={prefs[item.key] === true} onChange={(on) => setPrefs((current) => ({ ...current, [item.key]: on }))} />
               ))}
             </div>
           </GlassSection>
           <div className="flex justify-end">
-            <SubmitButton pending={pending}>ذخیره نوتیفیکیشن‌های فروشگاه</SubmitButton>
+            <SubmitButton pending={pending}>ذخیره هشدارهای فروشگاه</SubmitButton>
           </div>
         </form>
       ) : (
-        <GlassSection title="نوتیفیکیشن تلگرام فروشگاه">
+        <GlassSection title="هشدارهای تلگرام فروشگاه">
           <p className="text-sm text-muted">با دسترسی‌های فعلی، اعلان قابل شخصی‌سازی ندارید (سفارش/پرداخت/تیکت).</p>
         </GlassSection>
       )}

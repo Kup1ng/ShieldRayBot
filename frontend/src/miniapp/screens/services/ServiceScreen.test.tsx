@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { MiniShell } from "../../layout/MiniShell";
 import { answerConfirm, customerMe, fakeApi, renderMini, type FakeHandler, type FakeReply } from "../../test/harness";
-import { ensureResource } from "../../state/resources";
 import { installTelegram } from "../../test/telegram";
 import { ScreenRouter } from "../ScreenRouter";
 import { pollTiming } from "../shop/usePaymentPoll";
@@ -32,12 +31,15 @@ function service(extra: Record<string, unknown> = {}) {
   };
 }
 
-const PLANS = {
-  wallet_pay_enabled: true,
-  plans: [
-    { id: 1, name: "trial", price: 0, is_trial: true },
-    { id: 2, name: HOSTILE, price: 1250000, days: 30, gb: 50, is_trial: false },
-  ],
+const PLAN = { id: 2, name: HOSTILE, price: 1250000, days: 30, gb: 50, is_trial: false };
+/** The shop has no categories: one list (the server leaves trials out). */
+const OPTIONS = { wallet_pay_enabled: true, grouped: false, current: PLAN, categories: [], other: [], plans: [{ ...PLAN, relation: "current" }] };
+const OPTIONS_PATH = "GET /api/mini/service/7/renewal-options";
+
+const pickPlan = async (user: ReturnType<typeof userEvent.setup>) => {
+  const row = (await screen.findAllByText(HOSTILE))[0].closest("button");
+  expect(row).toBeTruthy();
+  await user.click(row as HTMLElement);
 };
 const PREVIEW = { terms: { version: 1 }, price: 200, request_key: "a".repeat(32), plan_name: HOSTILE, lines: ["حجم پس از تمدید: ۱۷ گیگ"], warnings: [], notice: "مصرف تا اجرا کم می‌شود" };
 
@@ -263,8 +265,7 @@ describe("renewal", () => {
   async function toInvoice(user: User) {
     await screen.findByRole("heading", { name: "سرویس فعلی" });
     await user.click(screen.getByRole("button", { name: "تمدید سرویس" }));
-    await screen.findByRole("radio");
-    await user.click(screen.getByRole("button", { name: /بعدی/ }));
+    await pickPlan(user);
     return screen.findByText("حجم پس از تمدید: ۱۷ گیگ");
   }
 
@@ -273,7 +274,7 @@ describe("renewal", () => {
     const release = gate();
     let lose = true;
     const api = mount({
-      "GET /api/mini/plans": { json: PLANS },
+      [OPTIONS_PATH]: { json: OPTIONS },
       "GET /api/mini/service/7/renewal-preview?plan_id=2": { json: PREVIEW },
       "POST /api/mini/renew": async (req: { body: unknown }) => {
         posts.push({ body: req.body });
@@ -309,31 +310,111 @@ describe("renewal", () => {
     expect(await screen.findByRole("heading", { name: "سرویس فعلی" })).toBeTruthy();
   });
 
-  it("offers real plans only and shares a plans request that is already loading", async () => {
-    const pending = gate();
+  it("offers the service's own plan first and then the shop's categories, and opens a category without a new request", async () => {
+    const current = { ...PLAN, id: 2, relation: "current" };
+    const upgrade = { id: 3, name: "<b>بزرگ</b>", price: 2000, days: 30, gb: 100, is_trial: false, relation: "upgrade" };
+    const loose = { id: 4, name: "بدون دسته", price: 900, days: 30, gb: 10, is_trial: false, relation: null };
     const api = mount({
-      "GET /api/mini/plans": async () => {
-        await pending.opened;
-        return { json: PLANS };
+      [OPTIONS_PATH]: {
+        json: {
+          wallet_pay_enabled: true,
+          grouped: true,
+          current,
+          categories: [{ id: 10, name: HOSTILE, plans: [current, upgrade] }],
+          other: [loose],
+          plans: [],
+        },
       },
+      "GET /api/mini/service/7/renewal-preview?plan_id=3": { json: PREVIEW },
     });
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "سرویس فعلی" });
-    void ensureResource("plans"); // another screen is already loading the plans
     await user.click(screen.getByRole("button", { name: "تمدید سرویس" }));
-    await act(async () => pending.open());
-    await screen.findByRole("radio");
-    expect(api.callsTo("GET", "/api/mini/plans").length).toBe(1);
-    expect(screen.getAllByRole("radio").length).toBe(1);
-    expect(screen.queryByText("trial")).toBeNull();
-    expect(screen.getByRole("heading", { name: "تمدید سرویس" })).toBeTruthy();
+    await screen.findByRole("region", { name: "تمدید پلن فعلی" });
+    const currentRegion = screen.getByRole("region", { name: "تمدید پلن فعلی" });
+    expect(within(currentRegion).getByText("پلن فعلی")).toBeTruthy();
+    expect(within(currentRegion).getAllByRole("button")).toHaveLength(1);
+    // The current plan comes before the categories, and category names are text.
+    const categories = screen.getByRole("region", { name: "یا پلن دیگری انتخاب کنید" });
+    expect(currentRegion.compareDocumentPosition(categories) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(categories).getByText("۲ پلن")).toBeTruthy();
+    expect(within(categories).getByText("سایر")).toBeTruthy();
+    expect(document.querySelector("img[onerror]")).toBeNull();
+    expect(api.callsTo("GET", "/api/mini/service/7/renewal-options")).toHaveLength(1);
+
+    await user.click(within(categories).getByRole("button", { name: /۲ پلن/ }));
+    const list = await screen.findByRole("region", { name: HOSTILE });
+    expect(within(list).getByText("ارتقا")).toBeTruthy();
+    expect(within(list).getByText("<b>بزرگ</b>")).toBeTruthy();
+    expect(list.innerHTML).not.toContain("<b>بزرگ");
+    await user.click(screen.getByRole("button", { name: "بازگشت به دسته‌ها" }));
+    expect(await screen.findByRole("region", { name: "تمدید پلن فعلی" })).toBeTruthy();
+    expect(api.callsTo("GET", "/api/mini/service/7/renewal-options")).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: /سایر/ }));
+    expect(await screen.findByText("بدون دسته")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "بازگشت به دسته‌ها" }));
+    await user.click(screen.getByRole("button", { name: /۲ پلن/ }));
+    await user.click((await screen.findByText("<b>بزرگ</b>")).closest("button") as HTMLElement);
+    expect(await screen.findByText("حجم پس از تمدید: ۱۷ گیگ")).toBeTruthy();
+    expect(api.callsTo("GET", "/api/mini/service/7/renewal-preview?plan_id=3")).toHaveLength(1);
+    expect(api.callsTo("POST", "/api/mini/renew")).toEqual([]);
+  });
+
+  it("goes back from the invoice to the category it came from", async () => {
+    const current = { ...PLAN, relation: "current" };
+    mount({
+      [OPTIONS_PATH]: {
+        json: { wallet_pay_enabled: true, grouped: true, current: null, categories: [{ id: 10, name: "اقتصادی", plans: [current] }], other: [], plans: [] },
+      },
+      "GET /api/mini/service/7/renewal-preview?plan_id=2": { json: PREVIEW },
+    });
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "سرویس فعلی" });
+    await user.click(screen.getByRole("button", { name: "تمدید سرویس" }));
+    await user.click(await screen.findByRole("button", { name: /اقتصادی/ }));
+    await pickPlan(user);
+    await screen.findByText("حجم پس از تمدید: ۱۷ گیگ");
+    await user.click(screen.getByRole("button", { name: "قبلی" }));
+    expect(await screen.findByRole("region", { name: "اقتصادی" })).toBeTruthy();
+  });
+
+  it("lists one flat list, the service's own plan first, when the shop has no categories", async () => {
+    const other = { id: 5, name: "کوچک", price: 500, days: 30, gb: 10, is_trial: false, relation: "downgrade" };
+    mount({ [OPTIONS_PATH]: { json: { ...OPTIONS, plans: [{ ...PLAN, relation: "current" }, other] } } });
+    await screen.findByRole("heading", { name: "سرویس فعلی" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "تمدید سرویس" }));
+    const region = await screen.findByRole("region", { name: "انتخاب پلن تمدید" });
+    const rows = within(region).getAllByRole("button");
+    expect(rows).toHaveLength(2);
+    expect(within(rows[0]).getByText("پلن فعلی")).toBeTruthy();
+    expect(within(rows[1]).getByText("تنزل")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "بازگشت به دسته‌ها" })).toBeNull();
+  });
+
+  it("says there is nothing to renew onto when the shop offers no plan", async () => {
+    mount({ [OPTIONS_PATH]: { json: { ...OPTIONS, current: null, plans: [] } } });
+    await screen.findByRole("heading", { name: "سرویس فعلی" });
+    await userEvent.setup().click(screen.getByRole("button", { name: "تمدید سرویس" }));
+    expect(await screen.findByText("پلنی برای تمدید فعال نیست.")).toBeTruthy();
+  });
+
+  it("a payment is never sent before «پرداخت»: choosing a plan only reads the preview", async () => {
+    const api = mount({
+      [OPTIONS_PATH]: { json: OPTIONS },
+      "GET /api/mini/service/7/renewal-preview?plan_id=2": { json: PREVIEW },
+    });
+    const user = userEvent.setup();
+    await toInvoice(user);
+    expect(api.callsTo("POST", "/api/mini/renew")).toEqual([]);
+    expect(api.callsTo("POST", "/api/mini/renew/pay")).toEqual([]);
   });
 
   it("drops a preview that arrives after the customer left the renewal", async () => {
     const tg = installTelegram();
     const pending = gate();
     const api = mount({
-      "GET /api/mini/plans": { json: PLANS },
+      [OPTIONS_PATH]: { json: OPTIONS },
       "GET /api/mini/service/7/renewal-preview?plan_id=2": async () => {
         await pending.opened;
         return { json: PREVIEW };
@@ -343,8 +424,7 @@ describe("renewal", () => {
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "سرویس فعلی" });
     await user.click(screen.getByRole("button", { name: "تمدید سرویس" }));
-    await screen.findByRole("radio");
-    await user.click(screen.getByRole("button", { name: /بعدی/ }));
+    await pickPlan(user);
     // Telegram's back button leaves the service.
     await waitFor(() => expect(tg.back.handler).toBeTruthy());
     await act(async () => tg.back.handler?.());
@@ -356,7 +436,7 @@ describe("renewal", () => {
   });
 
   it("shows a Persian retry message, never English server internals, when plans cannot load", async () => {
-    mount({ "GET /api/mini/plans": { status: 500, json: { detail: "Traceback: sqlalchemy error at 10.0.0.5" } } });
+    mount({ [OPTIONS_PATH]: { status: 500, json: { detail: "Traceback: sqlalchemy error at 10.0.0.5" } } });
     await screen.findByRole("heading", { name: "سرویس فعلی" });
     await userEvent.setup().click(screen.getByRole("button", { name: "تمدید سرویس" }));
     expect(await screen.findByText(/دوباره تلاش کنید/)).toBeTruthy();
@@ -367,7 +447,7 @@ describe("renewal", () => {
     fakeApi({
       "GET /api/mini/me": () => ({ json: customerMe() }),
       "GET /api/mini/service/7": () => ({ json: { service: service() } }),
-      "GET /api/mini/plans": () => ({ json: PLANS }),
+      [OPTIONS_PATH]: () => ({ json: OPTIONS }),
     });
     renderMini(
       <MiniShell>
@@ -375,7 +455,7 @@ describe("renewal", () => {
       </MiniShell>,
       { route: { view: "service", serviceId: 7, then: "renew" } },
     );
-    expect(await screen.findByRole("radio")).toBeTruthy();
+    expect((await screen.findAllByText(HOSTILE)).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: "تمدید سرویس" })).toBeTruthy();
   });
 });
@@ -383,7 +463,7 @@ describe("renewal", () => {
 describe("renewal paid by card", () => {
   function cardRoutes(extra: Record<string, FakeReply | FakeHandler> = {}) {
     return {
-      "GET /api/mini/plans": { json: PLANS },
+      [OPTIONS_PATH]: { json: OPTIONS },
       "GET /api/mini/pay/methods": { json: METHODS },
       "GET /api/mini/service/7/renewal-preview?plan_id=2": { json: PREVIEW },
       "POST /api/mini/renew/pay": { json: { order_id: 90, payment: PAYMENT } },
@@ -395,8 +475,7 @@ describe("renewal paid by card", () => {
   async function toCard(user: User) {
     await screen.findByRole("heading", { name: "سرویس فعلی" });
     await user.click(screen.getByRole("button", { name: "تمدید سرویس" }));
-    await screen.findByRole("radio");
-    await user.click(screen.getByRole("button", { name: /بعدی/ }));
+    await pickPlan(user);
     await user.click(await screen.findByRole("radio", { name: /کارت به کارت/ }));
   }
 

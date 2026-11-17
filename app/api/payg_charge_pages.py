@@ -1,22 +1,30 @@
-"""Owner review of PAYG charges whose panel outcome was unknown."""
+"""Owner review of PAYG charges whose panel outcome was unknown.
+
+The page is the React panel's (``frontend/src/panel/pages/billing/PaygChargesReviewPage.tsx``); it reads
+``/api/panel/payg/charges/review`` and posts the settle and refund handlers below.
+"""
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import Any
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import BotUser
+from app.api.spa_pages import spa_response
+from app.db.models import BotUser, ResellerCharge
 from app.services.payg_charges import list_review_charges, resolve_review_charge
 
 REVIEW_PATH = "/payg/charges/review"
+API_PATH = "/api/panel/payg/charges/review"
 SETTLED_MESSAGE = "هزینه تأیید شد"
 REFUNDED_MESSAGE = "مبلغ به کیف پول نماینده برگشت"
 ALREADY_DECIDED_MESSAGE = "این هزینه دیگر در انتظار بازبینی نیست"
+TIME_FORMAT = "%Y-%m-%d %H:%M"
 
 
 def _back(*, ok: str = "", err: str = "") -> RedirectResponse:
@@ -24,25 +32,42 @@ def _back(*, ok: str = "", err: str = "") -> RedirectResponse:
     return RedirectResponse(f"{REVIEW_PATH}?{query}", status_code=303)
 
 
-def register_payg_charge_pages(
-    app: FastAPI, *, render: Callable, require_admin: Callable, get_db: Callable
-) -> None:
-    @app.get(REVIEW_PATH, response_class=HTMLResponse)
+def charge_row(charge: ResellerCharge, shop_names: dict[int, str]) -> dict[str, Any]:
+    shop_id = int(charge.shop_id)
+    return {
+        "id": int(charge.id),
+        "shop_id": shop_id,
+        "shop_name": shop_names.get(shop_id) or f"#{shop_id}",
+        "event": str(charge.event or ""),
+        "quantity": int(charge.quantity or 1),
+        "pg_username": charge.pg_username or "",
+        "amount": int(charge.amount or 0),
+        "created_at": charge.created_at.strftime(TIME_FORMAT) if charge.created_at else "",
+    }
+
+
+async def _shop_names(session: AsyncSession, shop_ids: set[int]) -> dict[int, str]:
+    if not shop_ids:
+        return {}
+    users = (await session.scalars(select(BotUser).where(BotUser.id.in_(shop_ids)))).all()
+    return {int(user.id): (user.full_name or user.username or "") for user in users}
+
+
+def register_payg_charge_pages(app: FastAPI, *, require_admin: Callable, get_db: Callable) -> None:
+    @app.get(REVIEW_PATH)
+    async def payg_charges_review_page(staff: dict = Depends(require_admin)) -> Response:
+        return spa_response("payg/charges/review")
+
+    @app.get(API_PATH)
     async def payg_charges_review(
-        request: Request,
-        staff: dict = Depends(require_admin),
-        session: AsyncSession = Depends(get_db),
-    ) -> HTMLResponse:
+        staff: dict = Depends(require_admin), session: AsyncSession = Depends(get_db),
+    ) -> JSONResponse:
         charges = await list_review_charges(session, shop_id=None)
-        shop_ids = {int(c.shop_id) for c in charges}
-        users = (
-            (await session.scalars(select(BotUser).where(BotUser.id.in_(shop_ids)))).all() if shop_ids else []
+        names = await _shop_names(session, {int(charge.shop_id) for charge in charges})
+        return JSONResponse(
+            {"charges": [charge_row(charge, names) for charge in charges]},
+            headers={"Cache-Control": "no-store"},
         )
-        names = {int(u.id): (u.full_name or u.username or f"#{int(u.id)}") for u in users}
-        return render(request, "payg_charges_review.html", {
-            "staff": staff, "charges": charges, "shop_names": names,
-            "flash_ok": request.query_params.get("ok"), "flash_err": request.query_params.get("err"),
-        })
 
     async def _decide(charge_id: int, staff: dict, session: AsyncSession, *, applied: bool) -> RedirectResponse:
         actor = str(staff.get("username") or "owner")

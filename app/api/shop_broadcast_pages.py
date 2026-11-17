@@ -1,4 +1,8 @@
-"""Shop staff pages for group messages to that shop's customers only."""
+"""Shop staff pages for group messages to that shop's customers only.
+
+The page is the React panel's (``frontend/src/panel/pages/marketing/ShopBroadcastPage.tsx``); it reads
+``/api/panel/shop-broadcast`` and posts the form handlers below, which keep the scope checks.
+"""
 
 from __future__ import annotations
 
@@ -6,13 +10,17 @@ from collections.abc import Callable
 from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import RedirectResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.spa_pages import spa_response
+from app.db.models import BroadcastLog
 from app.services.authz import authz_from_staff, can_shop
 from app.services.broadcast import clear_broadcast_history, delete_broadcast_log, list_broadcast_history
-from app.services.broadcast_queue import STATUS_LABELS, cancel_broadcast
+from app.services.broadcast_queue import ACTIVE_STATUSES, STATUS_LABELS, cancel_broadcast
+from app.services.marketing_panel import BROADCAST_HISTORY_LIMIT, BROADCAST_SNIPPET_LENGTH, marketing_tabs
 from app.services.shop_broadcast import (
+    MAX_SHOP_TEXT_UTF16,
     SHOP_AUDIENCE_LABELS,
     new_shop_request_key,
     queue_shop_broadcast,
@@ -20,6 +28,7 @@ from app.services.shop_broadcast import (
 from app.services.shop_scope import ShopScopeError, resolve_shop_scope_id
 
 SHOP_BROADCAST_PATH = "/shop-broadcast"
+SHOP_BROADCAST_API_PATH = "/api/panel/shop-broadcast"
 
 
 def shop_broadcast_scope(staff: dict) -> int:
@@ -51,33 +60,53 @@ def _actor(staff: dict) -> str:
     )[:128]
 
 
+def history_row(row: BroadcastLog) -> dict[str, object]:
+    text = row.text or ""
+    return {
+        "id": int(row.id),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "audience_label": SHOP_AUDIENCE_LABELS.get(row.audience, row.audience),
+        "text_snippet": text[:BROADCAST_SNIPPET_LENGTH],
+        "text_truncated": len(text) > BROADCAST_SNIPPET_LENGTH,
+        "total": int(row.total or 0),
+        "ok_count": int(row.ok_count or 0),
+        "fail_count": int(row.fail_count or 0),
+        "review_count": int(row.review_count or 0),
+        "status": row.status,
+        "status_label": STATUS_LABELS.get(row.status, row.status),
+        "created_by": row.created_by or "",
+        "is_active": row.status in ACTIVE_STATUSES,
+    }
+
+
 def register_shop_broadcast_pages(
     app,
     *,
-    render: Callable,
     require_staff: Callable,
     get_db: Callable,
 ) -> None:
     @app.get(SHOP_BROADCAST_PATH)
-    async def shop_broadcast_page(
-        request: Request,
+    async def shop_broadcast_page(staff: dict = Depends(require_staff)) -> Response:
+        shop_broadcast_scope(staff)
+        return spa_response("shop-broadcast")
+
+    @app.get(SHOP_BROADCAST_API_PATH)
+    async def shop_broadcast_data(
         staff: dict = Depends(require_staff),
         session: AsyncSession = Depends(get_db),
-    ) -> Response:
+    ) -> JSONResponse:
         scope = shop_broadcast_scope(staff)
-        history = await list_broadcast_history(session, limit=40, shop_id=scope)
-        return render(
-            request,
-            "shop_broadcast.html",
+        history = await list_broadcast_history(session, limit=BROADCAST_HISTORY_LIMIT, shop_id=scope)
+        return JSONResponse(
             {
-                "staff": staff,
-                "history": history,
-                "audience_labels": SHOP_AUDIENCE_LABELS,
-                "status_labels": STATUS_LABELS,
+                "sections": marketing_tabs(staff),
+                "history": [history_row(row) for row in history],
+                "audiences": [{"value": key, "label": label} for key, label in SHOP_AUDIENCE_LABELS.items()],
+                "max_text": MAX_SHOP_TEXT_UTF16,
+                # A fresh key per read: a resent form reuses its key, so it cannot queue twice.
                 "request_key": new_shop_request_key(),
-                "flash_ok": request.query_params.get("ok"),
-                "flash_err": request.query_params.get("err"),
             },
+            headers={"Cache-Control": "no-store"},
         )
 
     @app.post(SHOP_BROADCAST_PATH)

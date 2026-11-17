@@ -16,6 +16,7 @@ import { SectionTabs } from "../../ui/SectionTabs";
 import { EmptyBlock, Loadable, Notice } from "../../ui/States";
 import { ColorTagDialog } from "./ColorTagDialog";
 import { CreateDialog } from "./CreateDialogs";
+import type { ChildPricingLink } from "./childPricingTypes";
 import { RESELLER_TABS } from "./labels";
 import { legacyEditTarget } from "./legacyEdit";
 import { ReasonDialog, type ReasonRequest } from "./ReasonDialog";
@@ -25,6 +26,7 @@ import type { ResellerList, ResellerRow } from "./types";
 
 const LIST_PATH = "/api/panel/resellers";
 const BULK_URL = "/resellers/bulk-action";
+const CHILD_PRICING_PATH = "/resellers/children-pricing";
 const NO_COLOR = "";
 
 function listPath(q: string, color: string, page: string): string {
@@ -183,7 +185,7 @@ function OversoldNotice({ ids }: { ids: number[] }) {
   );
 }
 
-function Content({ data, reload }: { data: ResellerList; reload: () => void }) {
+function Content({ data, reload }: { data: ResellerList & ChildPricingLink; reload: () => void }) {
   const [creating, setCreating] = useState(false);
   const [tagTarget, setTagTarget] = useState<ResellerRow | null>(null);
   return (
@@ -194,10 +196,18 @@ function Content({ data, reload }: { data: ResellerList; reload: () => void }) {
         title={data.owner_view ? "نمایندگان" : "نمایندگان من"}
         description={data.owner_view ? "فروشگاه‌های نماینده، ظرفیت و دسترسی‌هایشان" : "نمایندگانی که زیر مجموعهٔ شما هستند"}
         actions={
-          <Button className="button--ink !h-12 !rounded-lg px-6 text-sm" onPress={() => setCreating(true)}>
-            <Icon name="solar:add-circle-linear" size={20} />
-            افزودن نماینده
-          </Button>
+          <>
+            {data.can_price_children ? (
+              <Button variant="outline" className="!h-12 !rounded-lg px-6 text-sm" onPress={() => window.location.assign(CHILD_PRICING_PATH)}>
+                <Icon name="solar:tag-price-bold" size={20} />
+                قیمت و اعتبار زیرمجموعه
+              </Button>
+            ) : null}
+            <Button className="button--ink !h-12 !rounded-lg px-6 text-sm" onPress={() => setCreating(true)}>
+              <Icon name="solar:add-circle-linear" size={20} />
+              افزودن نماینده
+            </Button>
+          </>
         }
       />
       {data.owner_view ? <SectionTabs label="نمایندگی" items={RESELLER_TABS} active="list" /> : null}
@@ -215,7 +225,7 @@ function Body() {
   useLegacyEditRedirect();
   useUrlFlash();
   useStashedFlash();
-  const state = useJson<ResellerList>(listPath(query.get("q"), query.get("color"), query.get("page")), { keepPrevious: true });
+  const state = useJson<ResellerList & ChildPricingLink>(listPath(query.get("q"), query.get("color"), query.get("page")), { keepPrevious: true });
   return <Loadable state={state}>{(data) => <Content data={data} reload={state.reload} />}</Loadable>;
 }
 

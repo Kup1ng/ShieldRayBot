@@ -15,6 +15,7 @@ type SubView = { parent: ViewId; label: string };
 
 const SUB_VIEWS: Partial<Record<ViewId, SubView>> = {
   service: { parent: "services", label: "سرویس‌ها" },
+  subscription: { parent: "services", label: "سرویس‌ها" },
   support: { parent: "home", label: "خانه" },
   club: { parent: "home", label: "خانه" },
   ticket: { parent: "support", label: "پشتیبانی" },
@@ -25,7 +26,7 @@ const VIEW_SECTIONS: Partial<Record<ViewId, string>> = { support: "support", tic
 
 const LEGACY_VIEWS: Record<string, ViewId> = { wallet: "account" };
 
-const KNOWN_VIEWS = new Set<ViewId>(["home", "services", "service", "shop", "account", "support", "ticket", "club", "review", "ops"]);
+const KNOWN_VIEWS = new Set<ViewId>(["home", "services", "service", "shop", "account", "support", "ticket", "club", "review", "ops", "subscription"]);
 
 function reviewParent(persona: Persona): SubView {
   return persona === "admin" ? { parent: "home", label: "داشبورد" } : { parent: "ops", label: "فروشگاه" };
@@ -160,13 +161,15 @@ export function MiniProvider({ initialMe, initialRoute, onMeChange, children }: 
     (view: ViewId) => {
       // The server decides who reviews; the screen shows its answer (including a refusal).
       if (view === "review") return persona === "admin" || persona === "reseller";
+      // The owner's own package lives on the platform; a shop's Mini App has no such routes.
+      if (view === "subscription") return persona === "reseller" && commerce && !me.shop;
       const section = VIEW_SECTIONS[view];
       if (section && !can(section)) return false;
       if (SUB_VIEWS[view]) return commerce;
       if (view === "home") return true;
       return (me.nav || []).some((item) => item.id === view);
     },
-    [can, commerce, me.nav, persona],
+    [can, commerce, me.nav, me.shop, persona],
   );
 
   const normalize = useCallback(

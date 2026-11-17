@@ -576,3 +576,14 @@ tests/test_dashboard_layout.py
 tests/test_pg_capability_probe_credentials.py
 tests/test_platform_pg_access_end_to_end.py
 tests/test_plan_template_only_role.py
+#
+# React panel ports of the 0.6 pages: shop isolation, Owner-only data and permission gating.
+tests/test_panel_menu.py
+tests/test_miniapp_order_pay_service_name.py
+tests/test_panel_home_link_health.py
+tests/test_panel_pg_users_payg_rates.py
+tests/test_panel_shop_settings_extras.py
+tests/test_panel_tickets_who.py
+tests/test_panel_users_points.py
+tests/test_panel_plan_packs.py
+tests/test_shop_credit_panel.py

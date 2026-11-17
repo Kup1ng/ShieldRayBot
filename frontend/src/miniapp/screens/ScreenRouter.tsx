@@ -12,6 +12,7 @@ import { ReviewScreen } from "./review/ReviewScreen";
 import { ServiceScreen } from "./services/ServiceScreen";
 import { ServicesScreen } from "./services/ServicesScreen";
 import { ShopScreen } from "./shop/ShopScreen";
+import { SubscriptionScreen } from "./subscription/SubscriptionScreen";
 import { SupportScreen } from "./support/SupportScreen";
 import { TicketScreen } from "./support/TicketScreen";
 
@@ -26,6 +27,7 @@ const SCREENS: Record<ViewId, ComponentType> = {
   club: ClubScreen,
   review: ReviewScreen,
   ops: OpsScreen,
+  subscription: SubscriptionScreen,
 };
 
 /** One screen at a time; the key remounts it so every visit starts from fresh state. */

@@ -1,4 +1,8 @@
-"""«نمایندگان من» › «قیمت و اعتبار زیرمجموعه»: a level-1 shop prices and backs its level-2 shops."""
+"""«نمایندگان من» › «قیمت و اعتبار زیرمجموعه»: a level-1 shop prices and backs its level-2 shops.
+
+The page is the React panel's (``frontend/src/panel/pages/resellers/ChildPricingPage.tsx``); it reads
+``/api/panel/resellers/children-pricing`` and posts the form handlers below, which keep the scope checks.
+"""
 
 from __future__ import annotations
 
@@ -6,15 +10,17 @@ from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.payg_plan_form import payg_settings_from_form
-from app.db.models import ResellerProfile, ShopCreditAccount
+from app.api.spa_pages import spa_response
+from app.db.models import ChildPricePlan, ResellerProfile, ShopCreditAccount
 from app.services.child_pricing import (
     ChildPlanInput,
+    PLAN_LIMIT,
     ChildPricingError,
     assign_child_plan,
     create_child_plan,
@@ -28,6 +34,16 @@ from app.services.numbers import parse_int
 from app.services.shop_credit import child_shop_ids, shop_credit_limit
 
 PAGE = "/resellers/children-pricing"
+API_PATH = "/api/panel/resellers/children-pricing"
+NO_ACCESS = "دسترسی ندارید"
+
+
+def authorized_parent(staff: dict) -> int:
+    """The level-1 shop the staff member prices children for, or a 403."""
+    try:
+        return parent_scope(staff)
+    except PermissionError:
+        raise HTTPException(403, NO_ACCESS) from None
 
 
 def _back(*, ok: str = "", err: str = "") -> RedirectResponse:
@@ -41,7 +57,7 @@ def _number(form: Mapping[str, Any], key: str, *, optional: bool = False) -> int
         return None if optional else 0
     try:
         value = parse_int(raw)
-    except ValueError:
+    except (ValueError, OverflowError):
         raise ChildPricingError("عدد نامعتبر است") from None
     if value < 0:
         raise ChildPricingError("عدد نامعتبر است")
@@ -65,34 +81,50 @@ async def _children(session: AsyncSession, parent_shop_id: int) -> list[dict[str
     ids = await child_shop_ids(session, parent_shop_id)
     if not ids:
         return []
-    profiles = (await session.scalars(select(ResellerProfile).where(ResellerProfile.user_id.in_(ids)))).all()
+    profiles = (await session.scalars(select(ResellerProfile).where(ResellerProfile.user_id.in_(ids))
+                                         .order_by(ResellerProfile.user_id))).all()
     limits = {int(a.shop_id): int(a.credit_limit or 0) for a in (await session.scalars(
         select(ShopCreditAccount).where(ShopCreditAccount.shop_id.in_(ids)))).all()}
     return [{"shop_id": int(p.user_id), "label": p.pg_admin_username or p.web_username or f"#{p.user_id}",
              "plan_id": p.child_plan_id, "credit_limit": limits.get(int(p.user_id), 0)} for p in profiles]
 
 
-def register_child_pricing_pages(app: FastAPI, *, render: Callable, require_staff: Callable, get_db: Callable) -> None:
-    @app.get(PAGE, response_class=HTMLResponse)
-    async def children_pricing(request: Request, staff: dict = Depends(require_staff),
-                               session: AsyncSession = Depends(get_db)) -> Any:
-        try:
-            parent = parent_scope(staff)
-        except PermissionError:
-            return RedirectResponse("/home", status_code=303)
-        return render(request, "children_pricing.html", {
-            "staff": staff, "plans": await list_child_plans(session, parent),
-            "children": await _children(session, parent), "free_credit": await shop_credit_limit(session, parent),
-            "flash_ok": request.query_params.get("ok"), "flash_err": request.query_params.get("err"),
-        })
+def plan_row(plan: ChildPricePlan) -> dict[str, Any]:
+    return {
+        "id": int(plan.id),
+        "name": plan.name,
+        "payg_basis": plan.payg_basis,
+        "price_per_gb": int(plan.price_per_gb),
+        "payg_user_price": int(plan.payg_user_price),
+        "payg_user_price_per_30d": bool(plan.payg_user_price_per_30d),
+        "payg_unlimited_price": None if plan.payg_unlimited_price is None else int(plan.payg_unlimited_price),
+    }
+
+
+def register_child_pricing_pages(app: FastAPI, *, require_staff: Callable, get_db: Callable) -> None:
+    @app.get(PAGE)
+    async def children_pricing(staff: dict = Depends(require_staff)) -> Response:
+        authorized_parent(staff)
+        return spa_response("resellers/children-pricing")
+
+    @app.get(API_PATH)
+    async def children_pricing_data(staff: dict = Depends(require_staff),
+                                    session: AsyncSession = Depends(get_db)) -> JSONResponse:
+        parent = authorized_parent(staff)
+        return JSONResponse(
+            {
+                "plans": [plan_row(plan) for plan in await list_child_plans(session, parent)],
+                "children": await _children(session, parent),
+                "free_credit": int(await shop_credit_limit(session, parent)),
+                "plan_limit": PLAN_LIMIT,
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.post(f"{PAGE}/plans")
     async def children_pricing_plan(request: Request, staff: dict = Depends(require_staff),
                                     session: AsyncSession = Depends(get_db)) -> RedirectResponse:
-        try:
-            parent = parent_scope(staff)
-        except PermissionError:
-            return RedirectResponse("/home", status_code=303)
+        parent = authorized_parent(staff)
         try:
             await create_child_plan(session, parent, plan_from_form(await request.form()))
         except ChildPricingError as exc:
@@ -102,10 +134,7 @@ def register_child_pricing_pages(app: FastAPI, *, render: Callable, require_staf
     @app.post(f"{PAGE}/plans/{{plan_id}}")
     async def children_pricing_plan_edit(plan_id: int, request: Request, staff: dict = Depends(require_staff),
                                          session: AsyncSession = Depends(get_db)) -> RedirectResponse:
-        try:
-            parent = parent_scope(staff)
-        except PermissionError:
-            return RedirectResponse("/home", status_code=303)
+        parent = authorized_parent(staff)
         try:
             await update_child_plan(session, parent, int(plan_id), plan_from_form(await request.form()))
         except ChildPricingError as exc:
@@ -115,10 +144,7 @@ def register_child_pricing_pages(app: FastAPI, *, render: Callable, require_staf
     @app.post(f"{PAGE}/plans/{{plan_id}}/delete")
     async def children_pricing_plan_delete(plan_id: int, staff: dict = Depends(require_staff),
                                            session: AsyncSession = Depends(get_db)) -> RedirectResponse:
-        try:
-            parent = parent_scope(staff)
-        except PermissionError:
-            return RedirectResponse("/home", status_code=303)
+        parent = authorized_parent(staff)
         try:
             await delete_child_plan(session, parent, int(plan_id))
         except ChildPricingError as exc:
@@ -128,10 +154,7 @@ def register_child_pricing_pages(app: FastAPI, *, render: Callable, require_staf
     @app.post(PAGE + "/{child_shop_id}")
     async def children_pricing_child(child_shop_id: int, request: Request, staff: dict = Depends(require_staff),
                                      session: AsyncSession = Depends(get_db)) -> RedirectResponse:
-        try:
-            parent = parent_scope(staff)
-        except PermissionError:
-            return RedirectResponse("/home", status_code=303)
+        parent = authorized_parent(staff)
         form = await request.form()
         try:
             await assign_child_plan(session, parent, int(child_shop_id), _number(form, "plan_id", optional=True) or None)

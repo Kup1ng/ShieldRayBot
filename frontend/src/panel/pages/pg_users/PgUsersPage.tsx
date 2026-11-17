@@ -18,7 +18,7 @@ import { daysLeftText, USER_OP_ORDER, USER_OPS, userStatusColor } from "./format
 import { useRowSelection } from "./selection";
 import type { PgUserOp, PgUserRow, PgUsersPayload } from "./types";
 import { CreateUserDialog, EditUserDialog, LinkDialog } from "./UserDialogs";
-import { PgTabs, selectCell, selectColumn } from "./ui";
+import { PgTabs, resetConfirmText, selectCell, selectColumn } from "./ui";
 
 const LIST_PATH = "/api/panel/pg/users";
 const BULK_URL = "/pg/users/bulk-action";
@@ -120,7 +120,7 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
         const meta = USER_OPS[op];
         setReason({
           title: meta.title,
-          message: meta.text,
+          message: op === "reset" ? resetConfirmText(meta.text, data.payg_rates) : meta.text,
           confirmLabel: meta.confirm,
           reasonLabel: REASON_LABEL,
           tone: meta.tone,
@@ -130,7 +130,7 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
         });
       },
     }),
-    [reload],
+    [reload, data.payg_rates],
   );
 
   const buttons = availableOps(data.rows, selection.ids, USER_OP_ORDER).map((op) => {
@@ -191,8 +191,8 @@ function UsersBody({ data, reload, onSearch, onPage }: { data: PgUsersPayload; r
         <PagerBar pager={data.pager} noun="کاربر" onPage={onPage} />
       </GlassSection>
       <BulkBar selected={selection.ids.size} buttons={buttons} onClear={selection.clear} label="عملیات گروهی کاربران" />
-      <CreateUserDialog open={createOpen} can={data.can} templates={data.templates} groups={data.groups} onClose={() => setCreateOpen(false)} refresh={reload} />
-      <EditUserDialog row={editing} groups={data.groups} onClose={() => setEditing(null)} refresh={reload} />
+      <CreateUserDialog open={createOpen} can={data.can} templates={data.templates} groups={data.groups} rates={data.payg_rates} onClose={() => setCreateOpen(false)} refresh={reload} />
+      <EditUserDialog row={editing} groups={data.groups} rates={data.payg_rates} onClose={() => setEditing(null)} refresh={reload} />
       <LinkDialog target={link} onClose={() => setLink(null)} />
       <ReasonDialog request={reason} onClose={() => setReason(null)} />
     </>

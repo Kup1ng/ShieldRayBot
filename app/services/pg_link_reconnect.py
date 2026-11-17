@@ -10,11 +10,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
 from app.services import pg_link_health
+from app.services.authz import authz_from_staff, can_shop, is_explicit_owner_staff
 from app.services.pasarguard import PasarGuardError, get_pg, reset_pg
 from app.services.pg_read_resilience import PgReadUnavailable, web_read_budget
 from app.services.security_policy import UnsafePgUrlError
@@ -38,6 +41,13 @@ class ReconnectResult:
     latency_ms: int | None
     failure_kind: str | None
     rate_limited: bool = False
+
+
+def owner_may_reconnect(staff: Mapping[str, Any]) -> bool:
+    """Only the explicit Owner may reset the single panel link; ``role=admin`` alone is not enough."""
+    if not is_explicit_owner_staff(dict(staff)):
+        return False
+    return can_shop(authz_from_staff(dict(staff)), PG_LINK_RECONNECT_PERMISSION)
 
 
 def is_reconnect_locked() -> bool:

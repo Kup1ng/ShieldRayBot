@@ -115,6 +115,48 @@ describe("account and wallet", () => {
   });
 });
 
+describe("loyalty points on the wallet card", () => {
+  const withPoints = (extra: Record<string, unknown>, overrides: Partial<MePayload> = {}) => {
+    const base = meWithWallet(7000, overrides);
+    return { ...base, customer: { ...base.customer, ...extra } } as MePayload;
+  };
+
+  it("shows the points under the balance and opens the club from them", async () => {
+    const user = userEvent.setup();
+    account(withPoints({ loyalty_enabled: true, points: 1500 }));
+    const wallet = screen.getByRole("region", { name: "کیف پول" });
+    expect(within(wallet).getByText(/۱,۵۰۰/)).toBeTruthy();
+    await user.click(within(wallet).getByRole("button", { name: /۱,۵۰۰ امتیاز/ }));
+    expect(currentView()).toBe("club");
+  });
+
+  it("leaves the wallet card as it was while the club is off", () => {
+    account(withPoints({ loyalty_enabled: false, points: 1500 }));
+    const wallet = screen.getByRole("region", { name: "کیف پول" });
+    expect(within(wallet).queryByText(/امتیاز/)).toBeNull();
+  });
+
+  it("shows no points for a payload that says nothing about the club", () => {
+    account(withPoints({}));
+    expect(within(screen.getByRole("region", { name: "کیف پول" })).queryByText(/امتیاز/)).toBeNull();
+  });
+
+  it("shows the points as plain text when the shop has not opened its club", () => {
+    visit(`/miniapp/s/${KEY}/`);
+    account(withPoints({ loyalty_enabled: true, points: 10 }, { sections: SHOP_SECTIONS }));
+    const wallet = screen.getByRole("region", { name: "کیف پول" });
+    expect(within(wallet).getByText(/۱۰/)).toBeTruthy();
+    expect(within(wallet).queryByRole("button", { name: /امتیاز/ })).toBeNull();
+  });
+
+  it("reads a non-numeric points value as zero, never as markup", () => {
+    account(withPoints({ loyalty_enabled: true, points: HOSTILE }));
+    const wallet = screen.getByRole("region", { name: "کیف پول" });
+    expect(wallet.querySelector("img")).toBeNull();
+    expect(within(wallet).getByRole("button", { name: "۰ امتیاز، باشگاه" })).toBeTruthy();
+  });
+});
+
 describe("account in a shop's Mini App", () => {
   it("offers only the sections the shop opened and never asks for the closed ones", async () => {
     visit(`/miniapp/s/${KEY}/`);

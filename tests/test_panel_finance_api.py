@@ -12,7 +12,7 @@ from unittest.mock import patch
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api import spa_pages
 from app.api.finance_pages import register_finance_pages
@@ -32,6 +32,7 @@ from app.db.models import (
 )
 from app.services.authz import authz_from_staff, can_shop
 from app.services.list_query import DEFAULT_LIST_PAGE_SIZE
+from tests.pgtest import pg_engine
 
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_parent_id": None, "org_status": "active", "permissions": []}
 SHOP_A, SHOP_B = 10, 20
@@ -50,7 +51,7 @@ def shop_staff(shop_id: int | None, permissions: list[str] | None = None, **extr
 
 class FinanceApiCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -176,10 +177,14 @@ class PermissionTests(FinanceApiCase):
         owner = (await self.get("/api/panel/finance", dict(OWNER))).json()
         self.assertEqual(owner["tabs"], ["reports", "orders", "payments", "delivery", "cancellations", "automation"])
         self.assertTrue(owner["can_settings"])
+        self.assertTrue(owner["can_payg_report"])
         payments_only = (await self.get("/api/panel/finance", shop_staff(SHOP_A, ["payments"]))).json()
         self.assertEqual(payments_only["tabs"], ["reports", "payments"])
         self.assertFalse(payments_only["can_settings"])
         self.assertFalse(payments_only["can_void_payment"])
+        self.assertFalse(payments_only["can_payg_report"])
+        with_orders = (await self.get("/api/panel/finance", shop_staff(SHOP_A))).json()
+        self.assertFalse(with_orders["can_payg_report"], "the PAYG shops report is the web Owner's only")
 
     async def test_a_shop_member_needs_the_void_permission_and_a_shop_to_void(self) -> None:
         voider = shop_staff(SHOP_A, ["payments", "payment_void"])

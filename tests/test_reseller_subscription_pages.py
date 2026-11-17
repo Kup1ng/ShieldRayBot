@@ -13,14 +13,15 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import spa_pages
 from app.api.panel_resellers_api import register_panel_resellers_api
 from app.api.reseller_subscription_pages import register_reseller_subscription_pages
-from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan, ResellerProfile
+from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan, ResellerPlanExtraPack, ResellerProfile
 from app.services.billing import GB
-from app.services.reseller_package import STALE_PAGE
+from app.services.reseller_package import EXTRAS_CLEARED_WARN, STALE_PAGE
+from tests.pgtest import pg_engine
 
 PERMS = '["orders","payments"]'
 
@@ -35,7 +36,7 @@ def plan(plan_id: int, *, users: int, gb: int, price: int, **extra) -> ResellerP
 
 class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -198,6 +199,42 @@ class MySubscriptionPageTests(unittest.IsolatedAsyncioTestCase):
         err = await self.post("/renew", plan_id=1, generation=2)
         self.assertIn("err", err)
         self.assertEqual(await self.wallet(), 1_000_000)
+
+
+    async def test_quick_buy_amounts_come_from_the_current_plans_packs(self) -> None:
+        async with self.Session() as session:
+            session.add_all([
+                ResellerPlanExtraPack(plan_id=1, kind="gb", amount=10, sort_order=1, is_active=True),
+                ResellerPlanExtraPack(plan_id=1, kind="gb", amount=25, sort_order=2, is_active=True),
+                ResellerPlanExtraPack(plan_id=1, kind="gb", amount=50, sort_order=3, is_active=False),
+                ResellerPlanExtraPack(plan_id=2, kind="users", amount=5, sort_order=1, is_active=True),
+            ])
+            await session.commit()
+        extras = (await self.client.get("/api/panel/my-subscription")).json()["extras"]
+        # Plan 2's pack never leaks into plan 1; a kind with no active pack on a configured plan is not sold.
+        self.assertEqual((extras["gb_options"], extras["gb_price"]), ([10, 25], 1_000))
+        self.assertEqual((extras["user_options"], extras["user_price"]), ([], 0))
+
+    async def test_no_quick_buy_when_the_plan_does_not_allow_it(self) -> None:
+        async with self.Session() as session:
+            (await session.get(ResellerPlan, 1)).allow_buy_extra = False
+            await session.commit()
+        self.assertIsNone((await self.client.get("/api/panel/my-subscription")).json()["extras"])
+
+    async def test_renewal_choices_warn_about_what_the_renewal_drops(self) -> None:
+        async with self.Session() as session:
+            target = await session.get(ResellerPlan, 2)
+            target.keep_extras_on_renew = False
+            target.carry_remaining_period = False
+            sub = await session.scalar(select(PgAdminSubscription).where(PgAdminSubscription.pg_username == "shop3"))
+            sub.extra_gb_purchased = 5
+            await session.commit()
+        data = (await self.client.get("/api/panel/my-subscription")).json()
+        choices = {c["plan_id"]: c for c in data["overview"]["choices"]}
+        self.assertIn(EXTRAS_CLEARED_WARN, choices[2]["warnings"])
+        self.assertTrue(any("زمان باقی‌مانده منتقل نمی‌شود" in w for w in choices[2]["warnings"]))
+        self.assertEqual(choices[1]["warnings"], [])
+        self.assertTrue(data["extras"]["keep_on_renew"])
 
 
 if __name__ == "__main__":

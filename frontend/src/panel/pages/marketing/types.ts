@@ -175,3 +175,24 @@ export type BroadcastRow = {
 };
 
 export type BroadcastData = { sections: MarketingSection[]; history: BroadcastRow[] };
+
+/** /api/panel/random-discounts (app/api/random_discounts.py). */
+export type RandomDiscountRow = {
+  id: number;
+  title: string;
+  mode: "automatic" | "code";
+  reduction_kind: "amount" | "percent";
+  minimum: number;
+  maximum: number;
+  step: number;
+  window_minutes: number;
+  code: string;
+  is_active: boolean;
+};
+
+export type RandomDiscountsData = {
+  sections: MarketingSection[];
+  discounts: RandomDiscountRow[];
+  next_before: number | null;
+  request_key: string;
+};

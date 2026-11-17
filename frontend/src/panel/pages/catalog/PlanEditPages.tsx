@@ -113,6 +113,9 @@ function ResellerPlanEditBody({ id }: { id: number }) {
                   limits={data.limits}
                   categories={data.categories}
                   styleOptions={data.plan_style_options}
+                  packStyleOptions={data.pack_style_options}
+                  packConfig={data.pack_config.reseller}
+                  packs={data.packs}
                   onDone={(result) => {
                     stashFlash(result.message);
                     followLocation(back);

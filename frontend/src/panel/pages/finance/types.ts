@@ -10,6 +10,8 @@ export type FinanceOverview = {
   can_payments: boolean;
   can_settings: boolean;
   can_void_payment: boolean;
+  /** Only the web Owner: shows the «نمایندگان PAYG» tab. */
+  can_payg_report: boolean;
 };
 
 export type UserRef = { id: number | null; name: string; is_demo: boolean };

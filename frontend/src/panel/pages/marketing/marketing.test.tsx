@@ -19,6 +19,9 @@ describe("marketing tab strip", () => {
     expect(activeSection("/campaigns", "")).toBe("campaigns");
     expect(activeSection("/funnel", "")).toBe("funnel");
     expect(activeSection("/broadcast", "")).toBe("broadcast");
+    expect(activeSection("/random-discounts", "")).toBe("random_discounts");
+    expect(activeSection("/cashback", "")).toBe("cashback");
+    expect(activeSection("/shop-broadcast", "")).toBe("shop_broadcast");
     expect(activeSection("/users", "")).toBe("");
   });
 

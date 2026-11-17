@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.panel_home_api import register_panel_home_api
 from app.db import Base
@@ -26,6 +24,7 @@ from app.services.panel_home_payload import (
     link_health_payload,
     pg_limits_payload,
 )
+from tests.pgtest import pg_engine
 
 OWNER = {
     "role": "admin", "id": 1, "username": "root", "org_principal_id": 1, "org_depth": 0,
@@ -45,7 +44,7 @@ class ApiHarness(unittest.IsolatedAsyncioTestCase):
     """The home API on a tiny app whose guards read ``self.staff`` / ``self.denied``."""
 
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -327,7 +326,7 @@ class InboxEndpointTests(ApiHarness):
             "inbox_has": True, "inbox_hidden_by_dismiss": 2, "update": {"update_available": True, "version": "1.0", "remote_version": "1.1", "url": PANEL_SECRET},
             "ticket_alert": {"title": "<b>t</b>", "detail": "d", "href": "/tickets", "ticket_id": 7},
             "shop_maintenance": True, "capacity_warn": False,
-            "payg_risk": {"suspended": [{"label": "A", "balance": -5, "user_id": 3}], "low": [], "threshold": 100},
+            "payg_risk": {"suspended": [{"label": "A", "balance": -5, "user_id": 3}], "low": [], "threshold": 100, "review": 3},
             "action_center": {"has_items": False, "entries": []}, "staff": {"password": "x"},
         }
         with patch("app.services.panel_inbox.build_inbox_context", AsyncMock(return_value=context)):
@@ -339,6 +338,7 @@ class InboxEndpointTests(ApiHarness):
         self.assertEqual(body["ticket_alert"]["entity_id"], "7")
         self.assertEqual(body["ticket_alert"]["title"], "<b>t</b>")
         self.assertEqual(body["payg"]["suspended"], [{"label": "A", "balance": -5}])
+        self.assertEqual(body["payg"]["review"], 3)
         self.assertTrue(body["shop_maintenance"])
         self.assertFalse(body["capacity_warn"])
 
@@ -410,6 +410,7 @@ class PayloadTests(unittest.TestCase):
         body = inbox_payload({})
         self.assertFalse(body["has_items"])
         self.assertEqual(body["payg"]["suspended"], [])
+        self.assertEqual(body["payg"]["review"], 0)
 
 
 if __name__ == "__main__":

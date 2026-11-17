@@ -24,7 +24,9 @@ function mount(me: MePayload) {
   const api = fakeApi({
     "GET /api/mini/me": () => ({ json: me }),
     "GET /api/mini/service/7": () => ({ json: { service: { id: 7, username: "soon", status: "active", status_fa: "فعال", subscription_url: "https://sub.example.com/s" } } }),
-    "GET /api/mini/plans": () => ({ json: { wallet_pay_enabled: true, plans: [{ id: 2, name: "ماهانه", price: 100000, days: 30, gb: 50 }] } }),
+    "GET /api/mini/service/7/renewal-options": () => ({
+      json: { wallet_pay_enabled: true, grouped: false, current: null, categories: [], other: [], plans: [{ id: 2, name: "ماهانه", price: 100000, days: 30, gb: 50, relation: "current" }] },
+    }),
     "GET /api/mini/guides": () => ({ json: { guides: [{ id: "g", title: "آموزش اندروید", body: "متن", opens_subscription: false, media_count: 0, links: [] }] } }),
   });
   renderMini(
@@ -78,9 +80,9 @@ describe("home screen follows the Figma dashboard", () => {
   it("still warns about a service that ends soon and opens its renewal", async () => {
     const api = mount(withHome());
     await userEvent.setup().click(button("تمدید")!);
-    expect(await screen.findByRole("radio")).toBeTruthy();
+    expect(await screen.findByText("ماهانه")).toBeTruthy();
     expect(api.callsTo("GET", "/api/mini/service/7").length).toBeGreaterThan(0);
-    expect(api.callsTo("GET", "/api/mini/plans").length).toBe(1);
+    expect(api.callsTo("GET", "/api/mini/service/7/renewal-options").length).toBe(1);
   });
 });
 

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import BotUser, PanelTicket, Ticket
 from app.services import tickets as bot_tickets
 from app.services.button_styles import item_button_style_options
-from app.services.formatting import bot_user_panel_label
+from app.services.formatting import bot_user_ticket_who
 from app.services.panel_tickets import (
     PRIORITY_BADGE,
     PRIORITY_LABELS,
@@ -83,7 +83,7 @@ def _bot_row(ticket: Ticket, users: dict[int, BotUser]) -> dict[str, Any]:
     return {
         "id": int(ticket.id),
         "user_id": user_id,
-        "user_label": bot_user_panel_label(users.get(user_id), fallback_id=user_id),
+        "user_label": bot_user_ticket_who(users.get(user_id), fallback_id=user_id),
         "subject": ticket.subject,
         "status": ticket.status,
         "status_label": BOT_STATUS_LABELS.get(ticket.status, ticket.status or UNKNOWN_LABEL),

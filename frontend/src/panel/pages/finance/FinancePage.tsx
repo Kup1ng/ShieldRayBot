@@ -1,6 +1,6 @@
 "use client";
 
-import { Button, Tabs, toast } from "@heroui/react";
+import { Button, toast } from "@heroui/react";
 import { useEffect, useState } from "react";
 
 import { Icon } from "@/icons/Icon";
@@ -15,21 +15,13 @@ import { AutomationTab } from "./AutomationTab";
 import { CancellationsTab } from "./CancellationsTab";
 import { DeliveryTab } from "./DeliveryTab";
 import { ReceiptDialog } from "./Dialogs";
+import { FinanceTabStrip, PAYG_TAB, tabHref, stripTabs, type StripTab } from "./FinanceTabStrip";
 import { OrdersTab } from "./OrdersTab";
 import { PaymentsTab } from "./PaymentsTab";
 import { ReportsTab } from "./ReportsTab";
 import { pickTab } from "./pickTab";
 import { SettingsDialog } from "./SettingsDialog";
 import type { FinanceOverview, FinanceTab } from "./types";
-
-const TAB_LABELS: Record<FinanceTab, string> = {
-  reports: "گزارشات",
-  orders: "سفارشات",
-  payments: "پرداخت‌ها",
-  delivery: "تحویل ناموفق",
-  cancellations: "درخواست‌های لغو",
-  automation: "تمدید خودکار",
-};
 
 const SETTINGS_TABS = new Set(["payment", "billing", "cleanup", "purge"]);
 // Query keys that belong to one tab; they are dropped when the tab changes.
@@ -63,6 +55,8 @@ function Content({ overview }: { overview: FinanceOverview }) {
   useAddressFlash(true);
 
   const goTab = (next: FinanceTab) => query.set({ tab: next, ...Object.fromEntries(TAB_KEYS.map((key) => [key, null])) });
+  // The PAYG report is a page of its own, so its tab navigates instead of switching content.
+  const selectTab = (next: StripTab) => (next === PAYG_TAB ? window.location.assign(tabHref(next)) : goTab(next));
 
   return (
     <>
@@ -80,23 +74,7 @@ function Content({ overview }: { overview: FinanceOverview }) {
           ) : null
         }
       />
-      <div className="mb-4 overflow-x-auto">
-        <Tabs selectedKey={tab} onSelectionChange={(key) => goTab(String(key) as FinanceTab)}>
-          <Tabs.ListContainer>
-            <Tabs.List aria-label="مدیریت مالی">
-              {overview.tabs.map((id) => (
-                <Tabs.Tab key={id} id={id}>
-                  <span className="flex items-center gap-1.5">
-                    {TAB_LABELS[id]}
-                    {id === "cancellations" && session.alerts.cancellations ? <span role="img" aria-label="درخواست لغو در انتظار" className="inline-block size-2 rounded-full bg-danger" /> : null}
-                  </span>
-                  <Tabs.Indicator />
-                </Tabs.Tab>
-              ))}
-            </Tabs.List>
-          </Tabs.ListContainer>
-        </Tabs>
-      </div>
+      <FinanceTabStrip tabs={stripTabs(overview)} selected={tab} cancelAlert={Boolean(session.alerts.cancellations)} onSelect={selectTab} />
       {tab === "reports" ? <ReportsTab goTab={goTab} /> : null}
       {tab === "orders" ? <OrdersTab onReceipt={setReceiptId} /> : null}
       {tab === "payments" ? <PaymentsTab onReceipt={setReceiptId} /> : null}
