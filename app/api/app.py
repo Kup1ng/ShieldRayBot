@@ -1361,7 +1361,9 @@ def create_api_app(lifespan=None) -> FastAPI:
         )
         if wants_json:
             detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else "خطا"
-            return JSONResponse({"detail": detail}, status_code=exc.status_code)
+            # Keep the exception's headers (as FastAPI's own handler does): the Mini App reads why it was
+            # refused from ``X-Mini-Error``, and a 401 may carry ``WWW-Authenticate``.
+            return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
         if exc.status_code == 404:
             return _status_page(
                 request,
