@@ -7,7 +7,8 @@
 **Runtime model:** one `DATABASE_URL` per process, PostgreSQL only. The app refuses
 any other URL at startup, the tests run on PostgreSQL (`tests/conftest.py`,
 `tests/pgtest.py`), and the one place that still reads SQLite is the offline
-migration of an old SQLite database documented below.
+migration of an old SQLite database documented below. There is no
+dual-write / dual-runtime path.
 
 ---
 
