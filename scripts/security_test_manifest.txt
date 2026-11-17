@@ -601,3 +601,12 @@ tests/test_platform_pg_admins_page.py
 tests/test_pg_role_parity.py
 tests/test_reseller_revoke_panel_admin.py
 tests/test_pg_quota_parity.py
+#
+# React panel and Mini App ports of the 0.6.2 pages: shop isolation of the plan board and
+# category offers, the user card and edit payloads, name links, onboarding gates, and the
+# Mini App page naming only a validated bot username.
+tests/test_panel_catalog_board.py
+tests/test_user_edit_payload.py
+tests/test_panel_name_link_payloads.py
+tests/test_miniapp_onboarding_gates.py
+tests/test_miniapp_shell_page.py
