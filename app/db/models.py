@@ -1096,6 +1096,14 @@ class CashbackRule(Base):
     """One cashback rule of a shop (``shop_id`` NULL is the platform shop)."""
 
     __tablename__ = "cashback_rules"
+    __table_args__ = (
+        Index(
+            "uq_cashback_rules_request_key",
+            "request_key",
+            unique=True,
+            postgresql_where=text("request_key IS NOT NULL"),
+        ),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     shop_id: Mapped[Optional[int]] = mapped_column(ForeignKey("bot_users.id"), nullable=True, index=True)
@@ -1119,6 +1127,8 @@ class CashbackRule(Base):
     customer_max_amount: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
     allow_with_discount: Mapped[bool] = mapped_column(Boolean, default=True)
     priority: Mapped[int] = mapped_column(Integer, default=0)
+    # The create form's key: a resent form returns the rule it already made instead of a second one.
+    request_key: Mapped[Optional[str]] = mapped_column(String(32), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

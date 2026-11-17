@@ -59,7 +59,7 @@ export function purchasesLabel(rule: Pick<CashbackRule, "events" | "first_purcha
 
 const text = (value: number | null): string => (value === null ? "" : String(value));
 
-function RuleForm({ rule, limits, onSaved, onCancel }: { rule: CashbackRule | null; limits: CashbackLimits; onSaved: () => void; onCancel: () => void }) {
+function RuleForm({ rule, requestKey, limits, onSaved, onCancel }: { rule: CashbackRule | null; requestKey: string; limits: CashbackLimits; onSaved: () => void; onCancel: () => void }) {
   const [name, setName] = useState(rule?.name ?? "");
   const [mode, setMode] = useState<CashbackMode>(rule?.mode ?? "percent");
   const [percent, setPercent] = useState(rule && rule.mode === "percent" ? rule.percent : "");
@@ -95,6 +95,7 @@ function RuleForm({ rule, limits, onSaved, onCancel }: { rule: CashbackRule | nu
         event_addon: events.includes("addon"),
         first_purchase_only: firstOnly,
         allow_with_discount: withDiscount,
+        ...(rule ? {} : { request_key: requestKey }),
       };
       const result = await run(rule ? `${PAGE}/rules/${rule.id}` : `${PAGE}/rules`, fields);
       if (result?.ok) onSaved();
@@ -261,7 +262,7 @@ function CashbackBody({ data, reload }: { data: CashbackData; reload: () => void
         </GlassSection>
       </div>
       <FormModal isOpen={editing !== null} onOpenChange={(open) => !open && setEditing(null)} title={rule ? "ویرایش قانون کش‌بک" : "قانون تازهٔ کش‌بک"} size="md">
-        {editing !== null ? <RuleForm key={rule?.id ?? "new"} rule={rule} limits={data.limits} onSaved={saved} onCancel={() => setEditing(null)} /> : null}
+        {editing !== null ? <RuleForm key={rule?.id ?? data.request_key} rule={rule} requestKey={data.request_key} limits={data.limits} onSaved={saved} onCancel={() => setEditing(null)} /> : null}
       </FormModal>
     </>
   );

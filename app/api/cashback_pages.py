@@ -6,6 +6,7 @@ The page is the React panel's (``frontend/src/panel/pages/marketing/CashbackPage
 
 from __future__ import annotations
 
+import secrets
 from collections.abc import Callable, Mapping
 from typing import Any
 from urllib.parse import quote
@@ -25,12 +26,13 @@ from app.services.cashback_rules import (
     RuleInput,
     budget_used,
     cashback_scope,
+    create_rule,
     delete_rule,
     list_rules,
     load_settings,
-    save_rule,
     save_settings,
     set_rule_enabled,
+    update_rule,
 )
 from app.services.marketing_panel import marketing_tabs
 from app.services.numbers import parse_int
@@ -167,6 +169,7 @@ def register_cashback_pages(app: FastAPI, *, require_staff: Callable, get_db: Ca
                     "hold_hours": settings.hold_hours, "monthly_budget": settings.monthly_budget,
                 },
                 "budget_used": await budget_used(session, shop_id),
+                "request_key": secrets.token_hex(16),
                 "limits": {
                     "rule_limit": RULE_LIMIT, "max_hold_hours": MAX_HOLD_HOURS,
                     "max_priority": MAX_PRIORITY, "max_monthly_count": MAX_MONTHLY_COUNT,
@@ -202,7 +205,7 @@ def _register_rule_routes(app: FastAPI, *, form_action: Callable, require_staff:
         request: Request, staff: dict = Depends(require_staff), session: AsyncSession = Depends(get_db),
     ) -> RedirectResponse:
         async def action(shop_id: int | None, form: Mapping[str, Any]) -> str:
-            await save_rule(session, shop_id, rule_from_form(form))
+            await create_rule(session, shop_id, rule_from_form(form), request_key=form.get("request_key"))
             return "قانون کش‌بک ساخته شد"
         return await form_action(request, staff, action)
 
@@ -211,7 +214,7 @@ def _register_rule_routes(app: FastAPI, *, form_action: Callable, require_staff:
         rule_id: int, request: Request, staff: dict = Depends(require_staff), session: AsyncSession = Depends(get_db),
     ) -> RedirectResponse:
         async def action(shop_id: int | None, form: Mapping[str, Any]) -> str:
-            await save_rule(session, shop_id, rule_from_form(form), rule_id=rule_id)
+            await update_rule(session, shop_id, rule_id, rule_from_form(form))
             return "قانون کش‌بک ذخیره شد"
         return await form_action(request, staff, action)
 

@@ -6,16 +6,19 @@ Every read and write is scoped by the shop resolved from the signed-in staff
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import CashbackBudget, CashbackRule
 from app.services.authz import authz_from_staff, can_shop
+from app.services.db_safe import rollback_quiet
 from app.services.shop_scope import is_platform_admin, shop_owner_id
 from app.services.users import get_setting, set_setting
 
@@ -24,6 +27,8 @@ RULE_LIMIT = 50
 MAX_MONEY = 2_000_000_000
 EVENTS = ("new", "renew", "addon")
 COMBINE_MODES = ("best", "sum")
+REQUEST_KEY_PATTERN = re.compile(r"[0-9a-f]{32}")
+STALE_FORM_TEXT = "فرم منقضی شده است؛ صفحه را تازه کنید و دوباره بفرستید"
 
 
 def cashback_scope(staff: Mapping[str, Any]) -> int | None:
@@ -85,14 +90,41 @@ def _apply(rule: CashbackRule, data: RuleInput) -> None:
         setattr(rule, field, getattr(data, field))
 
 
-async def save_rule(session: AsyncSession, shop_id: int | None, data: RuleInput, *, rule_id: int | None = None) -> CashbackRule:
-    if rule_id is None:
-        if len(await list_rules(session, shop_id)) >= RULE_LIMIT:
-            raise ValueError(f"حداکثر {RULE_LIMIT} قانون کش‌بک مجاز است")
-        rule = CashbackRule(shop_id=shop_id, enabled=True, name=data.name)
-        session.add(rule)
-    else:
-        rule = await _own_rule(session, shop_id, rule_id)
+async def _rule_by_request(session: AsyncSession, shop_id: int | None, request_key: str) -> CashbackRule | None:
+    return await session.scalar(select(CashbackRule).where(_shop_scope(shop_id), CashbackRule.request_key == request_key))
+
+
+async def create_rule(session: AsyncSession, shop_id: int | None, data: RuleInput, *, request_key: object) -> CashbackRule:
+    """A new rule; the same form sent again (same ``request_key``) returns the rule it already made.
+
+    With the «sum» combine mode a duplicate rule would pay the cashback twice, so a create
+    without a valid key is refused rather than allowed through.
+    """
+    if not isinstance(request_key, str) or not REQUEST_KEY_PATTERN.fullmatch(request_key):
+        raise ValueError(STALE_FORM_TEXT)
+    existing = await _rule_by_request(session, shop_id, request_key)
+    if existing is not None:
+        return existing
+    count = await session.scalar(select(func.count()).select_from(CashbackRule).where(_shop_scope(shop_id)))
+    if int(count or 0) >= RULE_LIMIT:
+        raise ValueError(f"حداکثر {RULE_LIMIT} قانون کش‌بک مجاز است")
+    rule = CashbackRule(shop_id=shop_id, enabled=True, name=data.name, request_key=request_key)
+    _apply(rule, data)
+    session.add(rule)
+    try:
+        await session.commit()
+    except IntegrityError as exc:
+        # A concurrent copy of the same form won the unique key; hand back its rule.
+        await rollback_quiet(session)
+        existing = await _rule_by_request(session, shop_id, request_key)
+        if existing is not None:
+            return existing
+        raise ValueError(STALE_FORM_TEXT) from exc
+    return rule
+
+
+async def update_rule(session: AsyncSession, shop_id: int | None, rule_id: int, data: RuleInput) -> CashbackRule:
+    rule = await _own_rule(session, shop_id, rule_id)
     _apply(rule, data)
     await session.commit()
     return rule

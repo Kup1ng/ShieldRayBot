@@ -17,12 +17,13 @@ from app.api.cashback_pages import API_PATH, _percent_text, register_cashback_pa
 from app.db.models import Base, BotUser, CashbackBudget, CashbackRule
 from app.services.cashback_rules import (
     cashback_scope,
+    create_rule,
     delete_rule,
     list_rules,
     load_settings,
-    save_rule,
     save_settings,
     set_rule_enabled,
+    update_rule,
 )
 from app.services.marketing_nav import marketing_groups, marketing_sections
 from tests.pgtest import pg_engine
@@ -30,6 +31,7 @@ from tests.pgtest import pg_engine
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
 SHOP = {"role": "reseller", "bot_user_id": 5, "permissions": ["cashback"]}
 VALID = {"name": "۱۰٪", "mode": "percent", "percent": "10", "event_new": "1", "allow_with_discount": "1"}
+KEY = "0123456789abcdef0123456789abcdef"
 
 
 class FormTests(unittest.TestCase):
@@ -90,9 +92,10 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_shop_never_reaches_another_shops_rules_or_settings(self) -> None:
         async with self.Session() as session:
-            rule = await save_rule(session, 5, rule_from_form(VALID))
+            rule = await create_rule(session, 5, rule_from_form(VALID), request_key=KEY)
             for action in (lambda: set_rule_enabled(session, 6, rule.id, False), lambda: delete_rule(session, 6, rule.id),
-                           lambda: save_rule(session, 6, rule_from_form(VALID), rule_id=rule.id)):
+                           lambda: update_rule(session, 6, rule.id, rule_from_form(VALID)),
+                           lambda: create_rule(session, 6, rule_from_form(VALID), request_key=KEY)):
                 with self.assertRaises(ValueError):
                     await action()
             self.assertEqual([r.id for r in await list_rules(session, 5)], [rule.id])
@@ -106,10 +109,25 @@ class IsolationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_an_edit_changes_the_same_rule_in_place(self) -> None:
         async with self.Session() as session:
-            rule = await save_rule(session, 5, rule_from_form(VALID))
-            await save_rule(session, 5, rule_from_form({**VALID, "name": "۵٪", "percent": "5"}), rule_id=rule.id)
+            rule = await create_rule(session, 5, rule_from_form(VALID), request_key=KEY)
+            await update_rule(session, 5, rule.id, rule_from_form({**VALID, "name": "۵٪", "percent": "5"}))
             rules = await list_rules(session, 5)
         self.assertEqual([(r.id, r.name, r.percent_bps) for r in rules], [(rule.id, "۵٪", 500)])
+
+    async def test_the_same_request_key_returns_the_rule_it_already_made(self) -> None:
+        async with self.Session() as session:
+            first = await create_rule(session, 5, rule_from_form(VALID), request_key=KEY)
+            again = await create_rule(session, 5, rule_from_form({**VALID, "name": "دوباره"}), request_key=KEY)
+            rules = await list_rules(session, 5)
+        self.assertEqual(again.id, first.id)
+        self.assertEqual([(r.id, r.name) for r in rules], [(first.id, "۱۰٪")])
+
+    async def test_a_create_without_a_valid_request_key_is_refused(self) -> None:
+        async with self.Session() as session:
+            for key in (None, "", "short", KEY.upper(), KEY + "0", 12345, True):
+                with self.subTest(key=key), self.assertRaises(ValueError):
+                    await create_rule(session, 5, rule_from_form(VALID), request_key=key)
+            self.assertEqual(await list_rules(session, 5), [])
 
 
 class PanelRouteTests(unittest.IsolatedAsyncioTestCase):
@@ -147,8 +165,11 @@ class PanelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.staff = shop_staff
         return (await self.client.get(API_PATH)).json()["rules"]
 
+    async def fresh_key(self) -> str:
+        return (await self.client.get(API_PATH)).json()["request_key"]
+
     async def create_rule(self, **changes: str) -> int:
-        response = await self.client.post("/cashback/rules", data={**VALID, **changes})
+        response = await self.client.post("/cashback/rules", data={**VALID, "request_key": await self.fresh_key(), **changes})
         self.assertIn("ok", parse_qs(urlsplit(response.headers["location"]).query))
         return (await self.rules_of(self.staff))[-1]["id"]
 
@@ -192,6 +213,21 @@ class PanelRouteTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(rule["allow_with_discount"])
         self.assertFalse(rule["first_purchase_only"])
         self.assertIsNone(rule["customer_max_count"])
+
+    async def test_a_resent_create_form_makes_one_rule(self) -> None:
+        form = {**VALID, "request_key": await self.fresh_key()}
+        for _ in range(3):
+            response = await self.client.post("/cashback/rules", data=form)
+            self.assertIn("ok", parse_qs(urlsplit(response.headers["location"]).query))
+        self.assertEqual(len(await self.rules_of(SHOP)), 1)
+
+    async def test_each_read_hands_out_a_fresh_key_and_a_create_without_one_is_refused(self) -> None:
+        self.assertNotEqual(await self.fresh_key(), await self.fresh_key())
+        self.assertRegex(await self.fresh_key(), r"^[0-9a-f]{32}$")
+        for form in (VALID, {**VALID, "request_key": "not-a-key"}):
+            response = await self.client.post("/cashback/rules", data=form)
+            self.assertIn("err", parse_qs(urlsplit(response.headers["location"]).query))
+        self.assertEqual(await self.rules_of(SHOP), [])
 
     def test_percent_text_is_exact_for_every_basis_point_value(self) -> None:
         for bps, text in ((0, "0"), (1, "0.01"), (7, "0.07"), (250, "2.5"), (1000, "10"), (10_000, "100"), (1999, "19.99")):
@@ -245,7 +281,7 @@ class PanelRouteTests(unittest.IsolatedAsyncioTestCase):
         await self.create_rule()
         self.assertEqual(await self.rules_of(OWNER), [])
         self.staff = OWNER
-        await self.client.post("/cashback/rules", data={**VALID, "name": "پلتفرم"})
+        await self.client.post("/cashback/rules", data={**VALID, "name": "پلتفرم", "request_key": await self.fresh_key()})
         self.assertEqual([r["name"] for r in await self.rules_of(OWNER)], ["پلتفرم"])
         self.assertEqual([r["name"] for r in await self.rules_of(SHOP)], ["۱۰٪"])
 

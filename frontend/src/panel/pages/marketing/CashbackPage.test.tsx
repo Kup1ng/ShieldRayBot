@@ -36,6 +36,7 @@ function data(patch: Partial<CashbackData> = {}): CashbackData {
     settings: { enabled: true, combine: "best", hold_hours: 24, monthly_budget: 9000 },
     budget_used: 1234,
     limits: { rule_limit: 50, max_hold_hours: 2160, max_priority: 1000, max_monthly_count: 10000 },
+    request_key: "k1".repeat(16),
     ...patch,
   };
 }
@@ -142,6 +143,7 @@ describe("cashback page", () => {
     expect(fields).toMatchObject({
       name: "عید", mode: "percent", percent: "2.5", max_per_order: "", min_order_amount: "0", priority: "0", customer_max_count: "", customer_max_amount: "",
       event_new: true, event_renew: true, event_addon: true, first_purchase_only: false, allow_with_discount: true,
+      request_key: "k1".repeat(16),
     });
     expect(fields).not.toHaveProperty("fixed_amount");
     expect(fields).not.toHaveProperty("shop_id");
@@ -178,6 +180,7 @@ describe("cashback page", () => {
     expect(path).toBe("/cashback/rules/8");
     expect(fields).toMatchObject({ name: "مبلغ ثابت", mode: "fixed", fixed_amount: "7000", event_new: false, event_renew: false, event_addon: true });
     expect(fields).not.toHaveProperty("percent");
+    expect(fields).not.toHaveProperty("request_key");
   });
 
   it("turns a rule off by posting nothing and on by posting enabled", async () => {

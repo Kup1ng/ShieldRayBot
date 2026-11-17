@@ -43,4 +43,6 @@ export type CashbackData = {
   settings: CashbackSettings;
   budget_used: number;
   limits: CashbackLimits;
+  /** Sent back with a new rule so a resent form does not make a second one. */
+  request_key: string;
 };
