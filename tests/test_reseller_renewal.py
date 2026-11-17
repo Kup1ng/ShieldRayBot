@@ -84,14 +84,16 @@ class TimedRenewalTests(RenewalTestCase):
         self.assertEqual(str(stale.exception), STALE_PAGE, "the screen the refused renewal came from is spent")
         self.assertEqual((await self.profile()).plan_id, BRONZE)
 
-    async def test_panel_refusal_of_the_new_limits_returns_the_money(self) -> None:
+    async def test_refused_limits_after_the_refill_keep_the_paid_renewal_instead_of_a_free_refill(self) -> None:
         self.pg.modify_admin = AsyncMock(side_effect=PasarGuardError("bad limits", 422))
-        with self.assertRaises(ValueError) as caught:
-            await self.renew(SILVER)
-        self.assertEqual(str(caught.exception), RENEW_REFUSED)
+        result = await self.renew(SILVER)
+        self.pg.reset_admin_usage.assert_awaited_once_with("shop1")
+        self.assertTrue(result["usage_reset"])
+        self.assertIn(RENEW_LIMITS_REFUSED_WARNING, result["warnings"])
         sub = await self.sub()
-        self.assertEqual((sub.base_gb, sub.base_users, sub.plan_id), (100, 10, BRONZE))
-        self.assertEqual((await self.wallet(), (await self.profile()).plan_id), (1_000_000, BRONZE))
+        self.assertEqual(sub.plan_id, SILVER, "the paid target stays saved for the review")
+        self.assertEqual(((await self.profile()).plan_id, await self.refunds()), (SILVER, 0))
+        self.assertLess(await self.wallet(), 1_000_000, "the refill was given, so the charge stands")
 
     async def test_refused_limits_after_an_unanswered_refill_do_not_refund_either(self) -> None:
         self.pg.reset_admin_usage = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
