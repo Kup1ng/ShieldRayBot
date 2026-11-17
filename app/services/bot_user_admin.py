@@ -768,6 +768,9 @@ async def admin_adjust_user_wallet(
             expected_sign = 1 if direction == "credit" else -1
             if int(existing.amount) * expected_sign <= 0:
                 raise ValueError("کلید یکتای عملیات نامعتبر است")
+            # The first request may have committed after this session loaded the customer, and
+            # the platform balance is read from the loaded row: reload it to report the purse as it is.
+            await session.get(BotUser, int(user.id), populate_existing=True)
             balance = await get_wallet_balance(session, int(user.id), shop_id=shop_id)
             return AdminWalletChange(
                 user=user,

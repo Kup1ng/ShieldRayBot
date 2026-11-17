@@ -372,6 +372,28 @@ class PlatformWalletIdempotencyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(int(count or 0), 1)
         self.assertTrue(all(b == 13_000 for b in balances))
 
+    async def test_a_replay_reports_the_balance_the_first_request_left(self):
+        """A repeated submit that loaded the customer before the first one committed shows the current purse."""
+        import secrets
+
+        from app.db.models import BotUser
+        from app.services.bot_user_admin import admin_adjust_user_wallet
+
+        key = secrets.token_hex(8)
+        async with self.Session() as late:
+            loaded_early = await late.get(BotUser, 1)
+            async with self.Session() as first_session:
+                first = await admin_adjust_user_wallet(
+                    first_session, await first_session.get(BotUser, 1), 3_000,
+                    mode="credit", actor="a", note="double", request_key=key,
+                )
+            again = await admin_adjust_user_wallet(
+                late, loaded_early, 3_000, mode="credit", actor="a", note="double", request_key=key
+            )
+        self.assertEqual(first.balance_after, 13_000)
+        self.assertTrue(again.replayed)
+        self.assertEqual(again.balance_after, 13_000)
+
     async def test_same_nonce_does_not_collide_across_users_or_shops(self):
         """Identical form nonces for different users/shops must not share a ledger key."""
         from app.db.models import BotUser, ShopWallet, WalletTransaction
