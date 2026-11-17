@@ -5,16 +5,14 @@ import { fa } from "../../core/format";
 import { StatusChip } from "../../ui/Data";
 import { GlassSection } from "../../ui/Page";
 import { formatDays, formatGb, formatPackAmount } from "./format";
+import { AddCategoryRow, CategoryIntro, GroupHead, PlainHead } from "./PlanBoardRows";
+import { buildBoardRows, type BoardRow, type SpecialKind } from "./planBoard";
 import type { PackDraft } from "./PlanForms";
 import { ActiveChip, BulkBar, RowActions, SelectableTable, type BulkOp, type Column, type RowAction } from "./Tables";
 import type { PackRow, PlanRow, PlansOverview } from "./types";
 import { useBulk } from "./useBulk";
 
-export type SpecialKind = "trial" | "custom" | "wholesale";
-
-type Row = { id: number; plan?: PlanRow; special?: SpecialKind };
-
-const SPECIAL_IDS: Record<SpecialKind, number> = { trial: -1, custom: -2, wholesale: -3 };
+export type { SpecialKind } from "./planBoard";
 
 const PLAN_BULK: BulkOp[] = [
   { key: "toggle", label: "روشن/خاموش", confirmMessage: (n) => `وضعیت ${n.toLocaleString("fa-IR")} پلن تغییر کند؟`, confirmTitle: "تغییر وضعیت گروهی", confirmLabel: "اعمال" },
@@ -23,7 +21,6 @@ const PLAN_BULK: BulkOp[] = [
 
 const COLUMNS: Column[] = [
   { id: "name", label: "نام", rowHeader: true },
-  { id: "category", label: "برچسب" },
   { id: "price", label: "قیمت" },
   { id: "duration", label: "مدت" },
   { id: "volume", label: "حجم" },
@@ -62,11 +59,17 @@ function SourceCell({ plan }: { plan: PlanRow }) {
   return plan.pg_group_ids ? <bdi className="num">گروه {plan.pg_group_ids}</bdi> : <Dash />;
 }
 
-export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data: PlansOverview; reload: () => void; onSetting: (kind: SpecialKind) => void; onEditPack: (draft: PackDraft) => void }) {
-  const rows: Row[] = [
-    ...data.plans.map((plan) => ({ id: plan.id, plan })),
-    ...(["trial", "custom", "wholesale"] as SpecialKind[]).map((special) => ({ id: SPECIAL_IDS[special], special })),
-  ];
+export type CategoryHandlers = {
+  /** «پلن در این دسته»: open the plan form on that category. */
+  onAddPlan: (categoryId: number) => void;
+  /** «ویرایش نام و رنگ» of a category, or a new one when null. */
+  onEditCategory: (categoryId: number | null) => void;
+};
+
+type SectionProps = CategoryHandlers & { data: PlansOverview; reload: () => void; onSetting: (kind: SpecialKind) => void; onEditPack: (draft: PackDraft) => void };
+
+export function UserPlansSection({ data, reload, onSetting, onEditPack, onAddPlan, onEditCategory }: SectionProps) {
+  const rows = buildBoardRows(data);
   const bulk = useBulk("/plans/bulk-action", "/plans", data.plans.map((p) => p.id), reload);
 
   const act = async (path: string, text?: string) => {
@@ -102,8 +105,8 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
 
   const settingAction = (kind: SpecialKind): RowAction[] => [{ id: "setting", label: "تنظیم", icon: "solar:settings-bold", run: () => onSetting(kind) }];
 
-  const cells = (row: Row) => {
-    if (row.plan) {
+  const cells = (row: BoardRow) => {
+    if (row.kind === "plan") {
       const p = row.plan;
       const incomplete = p.template_missing || p.source_empty;
       return [
@@ -116,7 +119,6 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
             </Warnings>
           ) : null}
         </span>,
-        p.category_name ? <bdi key="c">{p.category_name}</bdi> : <Dash key="c" />,
         <bdi key="p" className="num">{fa(p.price)} <span className="text-xs text-muted">تومان</span></bdi>,
         formatDays(p.duration_days),
         formatGb(p.data_limit_gb),
@@ -128,6 +130,7 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
         <RowActions key="a" label={`عملیات پلن ${p.name}`} actions={planActions(p)} />,
       ];
     }
+    if (row.kind !== "special") return [];
     if (row.special === "trial") {
       const t = data.trial;
       return [
@@ -137,7 +140,6 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
           </span>
           {t.limit_issue ? <StatusChip color="warning">خارج از سقف</StatusChip> : null}
         </span>,
-        <Dash key="c" />,
         "رایگان",
         t.exists ? formatDays(t.duration_days) : <Dash key="d" />,
         t.exists ? formatGb(t.data_limit_gb) : <Dash key="v" />,
@@ -156,7 +158,6 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
           <span className="font-medium text-foreground">پلن دلخواه</span>
           {c.limit_issue ? <StatusChip color="warning">خارج از سقف</StatusChip> : null}
         </span>,
-        <Dash key="c" />,
         "هر گیگ / روز",
         <bdi key="d" className="num">{c.min_days}–{c.max_days} روز</bdi>,
         <bdi key="v" className="num">{c.min_gb}–{c.max_gb} گیگ</bdi>,
@@ -171,7 +172,6 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
     const w = data.wholesale;
     return [
       <span key="n" className="font-medium text-foreground">فروش عمده</span>,
-      <Dash key="c" />,
       "تخفیف پلکانی",
       <Dash key="d" />,
       <bdi key="v" className="num">{w.min_qty}–{w.max_qty} عدد</bdi>,
@@ -179,6 +179,23 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
       <ActiveChip key="st" active={w.enabled} />,
       <RowActions key="a" label="عملیات فروش عمده" actions={settingAction("wholesale")} />,
     ];
+  };
+
+  const fullRow = (row: BoardRow) => {
+    switch (row.kind) {
+      case "group":
+        return <GroupHead group={row.group} onAddPlan={onAddPlan} onEdit={onEditCategory} onChanged={reload} />;
+      case "other":
+        return <PlainHead title={row.title} note={row.note} count={row.count} />;
+      case "types":
+        return <PlainHead title="انواع دیگر" note="تست، دلخواه و عمده دسته نمی‌گیرند" />;
+      case "add":
+        return <AddCategoryRow onNew={() => onEditCategory(null)} />;
+      case "intro":
+        return <CategoryIntro onNew={() => onEditCategory(null)} />;
+      default:
+        return null;
+    }
   };
 
   return (
@@ -193,7 +210,8 @@ export function UserPlansSection({ data, reload, onSetting, onEditPack }: { data
           empty="پلن ثابتی نیست — از «افزودن پلن» بسازید."
           selected={bulk.selected}
           onSelectedChange={bulk.setSelected}
-          unselectable={(r) => !r.plan}
+          unselectable={(r) => r.kind !== "plan"}
+          fullRow={fullRow}
           minWidth={860}
         />
         <BulkBar count={bulk.count} ops={PLAN_BULK} busy={bulk.busy} onRun={(op) => void bulk.run(op)} onClear={bulk.clear} />

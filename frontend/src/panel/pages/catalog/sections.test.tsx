@@ -24,6 +24,7 @@ const OVERVIEW = {
     { id: 4, name: HOSTILE, price: 150000, duration_days: 30, data_limit_gb: 40, pg_template_id: 9, pg_group_ids: null, category_id: null, category_name: null, is_active: true, template_missing: true, source_empty: false, limit_issue: null },
     { id: 5, name: "دوم", price: 1, duration_days: 0, data_limit_gb: null, pg_template_id: null, pg_group_ids: null, category_id: null, category_name: "ویژه", is_active: false, template_missing: false, source_empty: true, limit_issue: "خارج از سقف حساب" },
   ],
+  plan_board: { has_categories: false, groups: [], other: { title: "", note: "", plan_ids: [] } },
   trial: { exists: true, enabled: true, name: "تست", duration_days: 1, data_limit_gb: 1, pg_template_id: null, pg_group_ids: ["1"], naming: { prefix: "", suffix: "", pattern: "" }, button_style: "inherit", limit_issue: null },
   custom: { enabled: false, price_per_gb: "1000", price_per_day: "500", min_gb: "1", max_gb: "500", min_days: "1", max_days: "365", template_id: null, group_ids: [], naming: { prefix: "", suffix: "", pattern: "" }, button_style: "inherit", limit_issue: null },
   wholesale: { enabled: false, min_qty: "5", max_qty: "20", button_text: "x", tiers: [] },
@@ -37,7 +38,7 @@ const reseller = (over: Partial<ResellerPlanRow>): ResellerPlanRow => ({
 
 describe("user plans section", () => {
   it("lists plans, the trial, custom and wholesale rows and the add-on packs, escaping names", () => {
-    render(<UserPlansSection data={OVERVIEW} reload={() => undefined} onSetting={() => undefined} onEditPack={() => undefined} />);
+    render(<UserPlansSection data={OVERVIEW} reload={() => undefined} onSetting={() => undefined} onEditPack={() => undefined} onAddPlan={() => undefined} onEditCategory={() => undefined} />);
     expect(screen.getByText(HOSTILE)).toBeTruthy();
     expect(document.querySelector("img[onerror]")).toBeNull();
     expect(screen.getByText("پلن دلخواه")).toBeTruthy();
@@ -51,7 +52,7 @@ describe("user plans section", () => {
 
   it("asks before bulk actions and posts the selected ids to the existing handler", async () => {
     const user = userEvent.setup();
-    render(<UserPlansSection data={OVERVIEW} reload={() => undefined} onSetting={() => undefined} onEditPack={() => undefined} />);
+    render(<UserPlansSection data={OVERVIEW} reload={() => undefined} onSetting={() => undefined} onEditPack={() => undefined} onAddPlan={() => undefined} onEditCategory={() => undefined} />);
     const table = screen.getByRole("grid", { name: "پلن‌های کاربران" });
     // The dialog falls back to the browser confirm in tests.
     vi.spyOn(window, "confirm").mockReturnValue(true);

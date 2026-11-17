@@ -27,7 +27,8 @@ export function setCsrfToken(token: string): void {
   csrfToken = token;
 }
 
-function currentCsrf(): string {
+/** The panel's CSRF token, for the few raw posts that read the handler's JSON themselves. */
+export function currentCsrf(): string {
   if (csrfToken) return csrfToken;
   const match = document.cookie.split("; ").find((c) => c.startsWith(`${CSRF_COOKIE}=`));
   return match ? decodeURIComponent(match.slice(CSRF_COOKIE.length + 1)) : "";

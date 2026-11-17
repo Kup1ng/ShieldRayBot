@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, Plan, PlanCategory
+from app.services.panel_catalog_plans import plan_form_categories
 from app.services.plan_categories import move_category
 from app.services.plan_category_board import (
     NOTE_CATEGORY_OFF,
@@ -310,35 +311,31 @@ class CategoryRouteTests(_CategoryDbCase):
         self.assertIn("خاموش", twin.json()["error"])
 
 
-class PlanCategoryFieldTests(unittest.TestCase):
-    """The category chips of the plan forms, rendered from the shared macro."""
+class PlanFormCategoriesTests(unittest.TestCase):
+    """The categories the plan forms offer as chips (the React form reads them from the plan JSON)."""
 
     @staticmethod
-    def render(categories: list[PlanCategory], **kwargs: object) -> str:
-        from jinja2 import Environment, FileSystemLoader
-
-        env = Environment(loader=FileSystemLoader("app/web/templates"), autoescape=True)
-        macro = env.get_template("_plan_category_field.html").module.plan_category_field
-        return str(macro(categories, {1: "success"}, **kwargs))
+    def offered(categories: list[PlanCategory], current: int | None = None) -> list[dict]:
+        return plan_form_categories(categories, current, {1: "success"})
 
     def test_only_switched_on_user_categories_are_offered(self):
-        html = self.render([
+        offered = self.offered([
             _category(1, "ویژه"), _category(2, "خاموش", active=False), _category(3, "نمایندگان", audience="resellers"),
         ])
-        self.assertIn('data-value="1" data-tone="success"', html)
-        self.assertNotIn('data-value="2"', html)
-        self.assertNotIn('data-value="3"', html)
-        self.assertIn('<option value="" selected>', html)
+        self.assertEqual([(c["id"], c["tone"]) for c in offered], [(1, "success")])
 
-    def test_the_plans_own_switched_off_category_stays_selected(self):
-        html = self.render([_category(1, "ویژه"), _category(2, "قدیمی", active=False)], selected=2)
-        self.assertIn('<option value="2" selected>', html)
-        self.assertIn("plan-cat-chip-off", html)
+    def test_nothing_is_selected_for_a_plan_without_a_category(self):
+        # The chip row ends in «بدون دسته»; the plan's own category is what the form starts on.
+        self.assertTrue(all(c["id"] != 2 for c in self.offered([_category(1, "ویژه"), _category(2, "قدیمی", active=False)])))
 
-    def test_a_hostile_category_name_is_escaped(self):
-        html = self.render([_category(1, '<script>alert(1)</script>')])
-        self.assertNotIn("<script>alert(1)</script>", html)
-        self.assertIn("&lt;script&gt;", html)
+    def test_the_plans_own_switched_off_category_stays_on_offer_and_is_marked_off(self):
+        offered = self.offered([_category(1, "ویژه"), _category(2, "قدیمی", active=False)], current=2)
+        self.assertEqual([(c["id"], c["is_active"]) for c in offered], [(1, True), (2, False)])
+
+    def test_a_hostile_category_name_is_returned_as_plain_data(self):
+        offered = self.offered([_category(1, "<script>alert(1)</script>")])
+        self.assertEqual(offered[0]["name"], "<script>alert(1)</script>")
+
 
 if __name__ == "__main__":
     unittest.main()

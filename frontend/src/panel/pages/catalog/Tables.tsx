@@ -69,12 +69,20 @@ type SelectableTableProps<T> = {
   onSelectedChange?: (keys: Selection) => void;
   /** Rows that cannot be selected (system plans). */
   unselectable?: (row: T) => boolean;
+  /** A row drawn as one cell across the whole width (a group heading); such a row is never selectable. */
+  fullRow?: (row: T) => ReactNode | null;
   minWidth?: number;
 };
 
 /** A HeroUI table with optional row selection, an empty state and horizontal scroll on a phone. */
-export function SelectableTable<T>({ ariaLabel, columns, rows, rowId, cells, empty, selected, onSelectedChange, unselectable, minWidth = 640 }: SelectableTableProps<T>) {
+export function SelectableTable<T>({ ariaLabel, columns, rows, rowId, cells, empty, selected, onSelectedChange, unselectable, fullRow, minWidth = 640 }: SelectableTableProps<T>) {
   const selectable = Boolean(onSelectedChange);
+  const spans = new Map<number, ReactNode>();
+  for (const row of rows) {
+    const content = fullRow?.(row) ?? null;
+    if (content !== null) spans.set(rowId(row), content);
+  }
+  const blocked = rows.filter((row) => spans.has(rowId(row)) || unselectable?.(row)).map(rowId);
   return (
     <Table variant="secondary">
       <Table.ScrollContainer>
@@ -84,7 +92,7 @@ export function SelectableTable<T>({ ariaLabel, columns, rows, rowId, cells, emp
           selectionMode={selectable ? "multiple" : "none"}
           selectedKeys={selected}
           onSelectionChange={onSelectedChange}
-          disabledKeys={unselectable ? rows.filter(unselectable).map(rowId) : undefined}
+          disabledKeys={blocked.length ? blocked : undefined}
         >
           <Table.Header>
             {selectable ? (
@@ -105,26 +113,36 @@ export function SelectableTable<T>({ ariaLabel, columns, rows, rowId, cells, emp
             ))}
           </Table.Header>
           <Table.Body renderEmptyState={() => <EmptyBlock title={empty} />}>
-            {rows.map((row) => (
-              <Table.Row key={rowId(row)} id={rowId(row)}>
-                {selectable ? (
-                  <Table.Cell className="pe-0">
-                    <Checkbox aria-label="انتخاب ردیف" slot="selection" variant="secondary">
-                      <Checkbox.Content>
-                        <Checkbox.Control>
-                          <Checkbox.Indicator />
-                        </Checkbox.Control>
-                      </Checkbox.Content>
-                    </Checkbox>
-                  </Table.Cell>
-                ) : null}
-                {cells(row).map((cell, index) => (
-                  <Table.Cell key={columns[index]?.id ?? index} className={columns[index]?.className}>
-                    {cell}
-                  </Table.Cell>
-                ))}
-              </Table.Row>
-            ))}
+            {rows.map((row) => {
+              const span = spans.get(rowId(row));
+              if (span !== undefined) {
+                return (
+                  <Table.Row key={rowId(row)} id={rowId(row)}>
+                    <Table.Cell colSpan={columns.length + (selectable ? 1 : 0)}>{span}</Table.Cell>
+                  </Table.Row>
+                );
+              }
+              return (
+                <Table.Row key={rowId(row)} id={rowId(row)}>
+                  {selectable ? (
+                    <Table.Cell className="pe-0">
+                      <Checkbox aria-label="انتخاب ردیف" slot="selection" variant="secondary">
+                        <Checkbox.Content>
+                          <Checkbox.Control>
+                            <Checkbox.Indicator />
+                          </Checkbox.Control>
+                        </Checkbox.Content>
+                      </Checkbox>
+                    </Table.Cell>
+                  ) : null}
+                  {cells(row).map((cell, index) => (
+                    <Table.Cell key={columns[index]?.id ?? index} className={columns[index]?.className}>
+                      {cell}
+                    </Table.Cell>
+                  ))}
+                </Table.Row>
+              );
+            })}
           </Table.Body>
         </Table.Content>
       </Table.ScrollContainer>
