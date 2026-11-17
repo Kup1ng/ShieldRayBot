@@ -8,6 +8,7 @@ import { SwitchInput, TextAreaInput } from "../../ui/Fields";
 import { Ltr } from "../../ui/Data";
 import { GlassSection } from "../../ui/Page";
 import { SaveBar } from "../../settings-ui/GroupSections";
+import { MainAppGuideCard } from "../../settings-ui/MainAppGuideCard";
 import type { TabProps } from "./GenericTab";
 import { DEFAULT_ACCENT, inkFor } from "./logic";
 import type { MiniappExtra } from "./types";
@@ -52,6 +53,7 @@ export function MiniappTab({ data, reload }: TabProps<MiniappExtra>) {
 
   return (
     <form onSubmit={submit} className="flex min-w-0 flex-col gap-6">
+      <MainAppGuideCard guide={extra.main_app} />
       <GlassSection
         title="ظاهر مینی‌اپ"
         description={

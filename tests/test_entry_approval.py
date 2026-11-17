@@ -24,13 +24,14 @@ from app.bot import entry_gate
 from app.db import Base
 from app.db.models import BotUser, BotUserShop, EntryApproval, Order, PurchaseContact, ResellerProfile, ResellerSetting, Setting
 from app.services import entry_approval as ea
-from app.services.entry_approval_config import KEY_SINCE, prepare_saved_values, read_config
+from app.services.entry_approval_config import GROUP_TITLE as ENTRY_APPROVAL_GROUP, KEY_SINCE, prepare_saved_values, read_config
 from app.services.entry_approval_notify import parse_admin_callback, request_text
 from app.services.miniapp_auth import ENTRY_PENDING, ERROR_HEADER, assert_mini_entry_approval
 from app.services.miniapp_shop import MiniScope
 from app.services.users import clear_settings_cache, get_all_settings, set_settings_bulk
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
 from tests.pgtest import pg_engine, pg_sync_engine
+from tests.settings_json import settings_fields, settings_url
 
 PERMS_WITH_APPROVAL = "dashboard,shop_settings,customers_approve"
 LONG_AGO = datetime(2020, 1, 1, tzinfo=timezone.utc)
@@ -458,36 +459,60 @@ class EndpointTests(RoutesHarness):
         self.assertEqual((await self.call(limited, "GET", "/entry-approvals")).status_code, 403)
         self.assertEqual((await self.call(limited, "POST", "/entry-approvals/2/approve")).status_code, 403)
 
+    async def owner_limits(self) -> dict:
+        response = await self.call(OWNER_SESSION, "GET", settings_url("limits"))
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    async def shop_limits(self, session: dict = SHOP_SESSION) -> dict:
+        response = await self.call(session, "GET", "/api/panel/shop-settings?tab=limits")
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
     async def test_the_limits_tab_shows_the_switches_and_the_list(self):
-        owner = await self.call(OWNER_SESSION, "GET", "/settings?tab=limits")
-        for needle in ("s_entry_approval_enabled", "s_entry_approval_retry_hours", 'id="ea-requests"', "entry-approval-admin.js"):
-            self.assertIn(needle, owner.text)
-        shop = await self.call(SHOP_SESSION, "GET", "/shop-settings?tab=limits")
-        self.assertIn("s_entry_approval_enabled", shop.text)
+        # The React tab draws the list from /entry-approvals above the fields these payloads carry.
+        owner = settings_fields(await self.owner_limits())
+        for key in ("entry_approval_enabled", "entry_approval_retry_hours"):
+            self.assertIn(key, owner)
+        shop = {f["key"] for section in (await self.shop_limits())["sections"] for f in section["fields"]}
+        self.assertIn("entry_approval_enabled", shop)
+        self.assertIn("entry_approval_retry_hours", shop)
+        self.assertEqual(owner["entry_approval_enabled"]["kind"], "toggle")
+        self.assertEqual((await self.call(OWNER_SESSION, "GET", "/entry-approvals")).status_code, 200)
+        self.assertEqual((await self.call(SHOP_SESSION, "GET", "/entry-approvals")).status_code, 200)
 
     async def test_the_switches_are_the_first_card_after_the_requests_list(self):
-        for session, path in ((OWNER_SESSION, "/settings?tab=limits"), (SHOP_SESSION, "/shop-settings?tab=limits")):
-            page = (await self.call(session, "GET", path)).text
-            requests_at = page.index('id="ea-requests"')
-            switch_at = page.index("s_entry_approval_enabled")
-            referral_at = page.index("s_referral_required")
-            self.assertLess(requests_at, switch_at)
-            self.assertLess(switch_at, referral_at)
+        owner = [group["name"] for group in (await self.owner_limits())["groups"]]
+        shop = [section["title"] for section in (await self.shop_limits())["sections"]]
+        for names in (owner, shop):
+            self.assertEqual(names[0], ENTRY_APPROVAL_GROUP)
+            self.assertIn("معرف اجباری", names)
+            self.assertLess(names.index(ENTRY_APPROVAL_GROUP), names.index("معرف اجباری"))
+        first_owner = (await self.owner_limits())["groups"][0]["fields"][0]
+        self.assertEqual(first_owner["key"], "entry_approval_enabled")
 
     async def test_dependent_fields_follow_the_switch_before_saving(self):
-        # The switch shows its fields live only when the show-when script is on the page.
-        for session, path in ((OWNER_SESSION, "/settings?tab=limits"), (SHOP_SESSION, "/shop-settings?tab=limits")):
-            page = (await self.call(session, "GET", path)).text
-            self.assertIn('data-show-when="s_entry_approval_enabled:1"', page)
-            self.assertIn("/static/settings-show-when.js", page)
+        # The form hides a field whose rule is not met by the switch's current value, saved or not.
+        rule = {"key": "entry_approval_enabled", "values": ["1"]}
+        owner = settings_fields(await self.owner_limits())
+        shop = {f["key"]: f for section in (await self.shop_limits())["sections"] for f in section["fields"]}
+        for fields in (owner, shop):
+            self.assertIsNone(fields["entry_approval_enabled"]["show_when"])
+            dependent = [key for key in fields if key.startswith("entry_approval_") and key != "entry_approval_enabled"]
+            self.assertGreaterEqual(len(dependent), 9)
+            for key in dependent:
+                with self.subTest(key=key):
+                    self.assertEqual(fields[key]["show_when"], rule)
 
     async def test_a_shop_without_the_permission_does_not_see_the_switch(self):
         async with self.Session() as session:
             await session.execute(update(ResellerProfile).where(ResellerProfile.user_id == 5).values(web_permissions="dashboard,shop_settings"))
             await session.commit()
-        shop = await self.call({**SHOP_SESSION, "permissions": ["dashboard", "shop_settings"]}, "GET", "/shop-settings?tab=limits")
-        self.assertEqual(shop.status_code, 200)
-        self.assertNotIn("s_entry_approval_enabled", shop.text)
+        body = await self.shop_limits({**SHOP_SESSION, "permissions": ["dashboard", "shop_settings"]})
+        keys = {f["key"] for section in body["sections"] for f in section["fields"]}
+        self.assertFalse([key for key in keys if key.startswith("entry_approval_")])
+        self.assertNotIn(ENTRY_APPROVAL_GROUP, [section["title"] for section in body["sections"]])
+        self.assertIn("referral_required", keys)
 
 
 class MigrationTests(unittest.TestCase):

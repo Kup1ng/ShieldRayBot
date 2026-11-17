@@ -1,8 +1,8 @@
 /** Shapes of the settings JSON endpoint (app/api/panel_settings_api.py, app/services/settings_panel.py). */
 
-import type { Choice, MenuEntry, PreviewKind, SettingGroup, StyleOption } from "../../settings-ui/types";
+import type { Choice, MainAppGuide, MenuEntry, PreviewKind, SettingGroup, StyleOption } from "../../settings-ui/types";
 
-export type { Choice, GroupNotice, GuideMediaItem, GuidesExtra, MenuEntry, PreviewKind, SettingField, SettingGroup, StyleOption } from "../../settings-ui/types";
+export type { Choice, GroupNotice, GuideMediaItem, GuidesExtra, MainAppGuide, MenuEntry, PreviewKind, SettingField, SettingGroup, StyleOption } from "../../settings-ui/types";
 
 export type NavTab = { key: string; label: string; href: string | null };
 export type NavGroup = { key: string; label: string; is_active: boolean; tabs: NavTab[] };
@@ -67,6 +67,7 @@ export type MiniappExtra = {
   notice_max: number;
   shops_enabled: boolean;
   miniapp_url: string;
+  main_app: MainAppGuide | null;
 };
 
 export type LinksExtra = { bot_username: string; links: Record<string, string | null> };

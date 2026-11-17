@@ -13,17 +13,14 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-import httpx
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import GetMe
-from fastapi import FastAPI
-from fastapi.responses import HTMLResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.api.miniapp_pages import register_miniapp_pages
-from app.api.shop_settings import _miniapp_switch_context
+from app.api.shop_settings_panel import _miniapp_extra
 from app.db.models import Base, BotUser, ResellerProfile
 from app.services import miniapp_main_app
+from app.services.main_app_payload import main_app_payload
 from app.services.miniapp_main_app import (
     MainAppGuide,
     clean_bot_username,
@@ -184,9 +181,9 @@ class ShopAndPageTests(unittest.IsolatedAsyncioTestCase):
         guide = AsyncMock(return_value=MainAppGuide(url="", bot_username="", enabled=None))
         async with self.Session() as session:
             profile = await session.get(ResellerProfile, 1)
-            with patch("app.api.shop_settings.main_app_guide", guide):
-                ctx = await _miniapp_switch_context(session, profile)
-        self.assertIs(ctx["main_app"], guide.return_value)
+            with patch("app.api.shop_settings_panel.main_app_guide", guide):
+                extra = await _miniapp_extra(session, profile, {})
+        self.assertEqual(extra["main_app"], main_app_payload(guide.return_value))
         self.assertEqual(guide.await_args.args, (SHOP_TOKEN,))
         self.assertEqual(guide.await_args.kwargs, {"url": f"{URL}s/{self.key}/", "known_username": "Shop5Bot"})
 
@@ -195,26 +192,19 @@ class ShopAndPageTests(unittest.IsolatedAsyncioTestCase):
             await set_setting(session, SHOP_SWITCH, "0", reseller_id=5)
             clear_settings_cache()
             profile = await session.get(ResellerProfile, 1)
-            with patch("app.api.shop_settings.main_app_guide", AsyncMock(side_effect=AssertionError("not asked"))):
-                self.assertIsNone((await _miniapp_switch_context(session, profile))["main_app"])
+            with patch("app.api.shop_settings_panel.main_app_guide", AsyncMock(side_effect=AssertionError("not asked"))):
+                self.assertIsNone((await _miniapp_extra(session, profile, {}))["main_app"])
 
-    async def test_each_page_names_its_own_bot_and_nothing_unsafe(self) -> None:
-        seen: list[dict] = []
+    async def test_a_shop_without_a_profile_has_no_guide(self) -> None:
+        async with self.Session() as session:
+            with patch("app.api.shop_settings_panel.main_app_guide", AsyncMock(side_effect=AssertionError("not asked"))):
+                self.assertIsNone((await _miniapp_extra(session, None, {}))["main_app"])
 
-        def render(_request, _name, ctx):
-            seen.append(ctx)
-            return HTMLResponse("page")
-
-        async def get_db():
-            async with self.Session() as session:
-                yield session
-
-        app = FastAPI()
-        register_miniapp_pages(app, render=render, get_db=get_db)
-        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            for path in ("/miniapp/", f"/miniapp/s/{self.key}/", f"/miniapp/s/{self.other_key}/"):
-                self.assertEqual((await client.get(path)).status_code, 200, path)
-        self.assertEqual([ctx["mini_bot_username"] for ctx in seen], ["PlatformBot", "Shop5Bot", ""])
+    def test_the_json_guide_carries_only_the_public_facts(self) -> None:
+        self.assertIsNone(main_app_payload(None))
+        payload = main_app_payload(MainAppGuide(url=URL, bot_username="PlatformBot", enabled=True))
+        self.assertEqual(payload, {"url": URL, "bot_username": "PlatformBot", "enabled": True, "open_link": "https://t.me/PlatformBot?startapp"})
+        self.assertEqual(main_app_payload(MainAppGuide(url="", bot_username="", enabled=None))["open_link"], "")
 
 
 if __name__ == "__main__":

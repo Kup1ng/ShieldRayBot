@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { useJson, useQuery, useUrlFlash } from "../../core/data";
 import { PanelShell } from "../../layout/PanelShell";
+import { EntryApprovalRequests } from "../../settings-ui/EntryApprovalRequests";
 import { PageHeader } from "../../ui/Page";
 import { Loadable } from "../../ui/States";
 import { ShopSettingsForm } from "./settings/ShopSettingsForm";
@@ -77,7 +78,7 @@ function GenericTab({ data, reload }: TabProps) {
       guides={data.tab === "guides" ? (data.extra as GuidesExtra) : undefined}
       reset={data.reset}
       chatPreview={data.preview}
-      before={data.tab === "service_import" ? <ServiceImportPanel /> : undefined}
+      before={data.tab === "service_import" ? <ServiceImportPanel /> : data.tab === "limits" ? <EntryApprovalRequests /> : undefined}
     />
   );
 }

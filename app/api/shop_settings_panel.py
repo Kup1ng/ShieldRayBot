@@ -17,13 +17,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.guide_media_pages import SHOP_BASE, guides_media_view
 from app.db.models import ResellerProfile
-from app.services.authz import resolve_shop_permissions_from_profile
+from app.services.authz import resolve_shop_permissions_from_profile, shop_feature_allowed
 from app.services.bot_appearance import load_appearance_context
 from app.services.button_styles import STYLE_OPTIONS, colors_page_grouped_sections
 from app.services.chat_cleanup_config import KEY_ENABLED, KEY_PERSISTENT_MENU, KEY_RESTART_BUTTON
 from app.services.connection_guides import default_connection_guides, parse_connection_guides, serialize_connection_guides
 from app.services.daily_report import ACTOR_SHOP, DEFAULT_REPORT_TEMPLATE, metric_groups_for_ui, parse_metric_keys
+from app.services.entry_approval_config import GROUP_TITLE as ENTRY_APPROVAL_GROUP, PERMISSION as ENTRY_APPROVAL_PERMISSION
+from app.services.main_app_payload import main_app_payload
 from app.services.miniapp_branding import ACCENT_PRESETS, ACCENT_SETTING, NOTICE_SETTING
+from app.services.miniapp_main_app import main_app_guide
 from app.services.miniapp_shop import (
     SHOP_SWITCH,
     shop_miniapp_available,
@@ -180,15 +183,23 @@ async def _miniapp_extra(session: AsyncSession, profile: ResellerProfile | None,
         "accent": saved if saved in {p["value"] for p in presets} else "",
         "notice": values.get(NOTICE_SETTING, ""),
         "presets": presets,
+        "main_app": None,
     }
     if profile is None:
         return extra
     on_now = (await get_setting(session, SHOP_SWITCH, "0", reseller_id=int(profile.user_id))) == "1"
+    url = shop_miniapp_url(profile.miniapp_key or "")
     extra.update(
         available=await shop_miniapp_available(session, profile),
         blocker=await shop_miniapp_blocker(session, profile),
         on=on_now,
-        url=shop_miniapp_url(profile.miniapp_key or ""),
+        url=url,
+        # The «Open» button in Telegram search only works while the shop's own Mini App is on.
+        main_app=main_app_payload(
+            await main_app_guide(reveal_bot_token(profile.bot_token or ""), url=url, known_username=profile.bot_username)
+            if on_now and url
+            else None
+        ),
     )
     return extra
 
@@ -289,6 +300,10 @@ async def shop_settings_payload(session: AsyncSession, staff: dict, tab: str) ->
     if tab == "daily_report" and not (values.get("admin_daily_report_template") or "").strip():
         values["admin_daily_report_template"] = DEFAULT_REPORT_TEMPLATE
     profile = await load_profile(session, shop_id)
+    groups = visible_groups(tab)
+    if tab == "limits" and not shop_feature_allowed(key=ENTRY_APPROVAL_PERMISSION, staff=staff):
+        # Nobody in the shop could decide the requests, so the switch is not offered.
+        groups.pop(ENTRY_APPROVAL_GROUP, None)
     nav = group_settings_tabs(tabs_with_message_variables(RESELLER_SETTINGS_TABS, staff), tab)
     return {
         "tab": tab,
@@ -297,6 +312,6 @@ async def shop_settings_payload(session: AsyncSession, staff: dict, tab: str) ->
         "shop_title": values.get("shop_title", ""),
         "reset": {"enabled": tab in RESETTABLE_SETTINGS_TABS, "confirm": MENU_RESET_CONFIRM if tab == "menu" else RESET_CONFIRM},
         "style_options": _style_options() if tab in {"limits", "guides", "colors"} else [],
-        "sections": sections_payload(visible_groups(tab), values, caption=USER_ALERT_CAPTION if tab == "notifications" else ""),
+        "sections": sections_payload(groups, values, caption=USER_ALERT_CAPTION if tab == "notifications" else ""),
         "extra": await _tab_extra(session, staff, tab, shop_id, profile, values),
     }

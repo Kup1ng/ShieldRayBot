@@ -13,6 +13,7 @@ import { SelectInput, SubmitButton, SwitchInput, TextAreaInput } from "../../../
 import { GlassSection } from "../../../ui/Page";
 import { Notice } from "../../../ui/States";
 import { MenuOrderEditor, type MenuLists } from "../../../settings-ui/MenuOrderEditor";
+import { MainAppGuideCard } from "../../../settings-ui/MainAppGuideCard";
 import { menuLabelsPreview } from "../../../settings-ui/previewLogic";
 import { ChatPreviewCard, PREVIEW_LAYOUT } from "../../../settings-ui/TelegramPreview";
 import type { ColorsExtra, MenuExtra, MiniappExtra, StyleOption } from "../types";
@@ -93,6 +94,7 @@ export function MiniappTab({ data, reload }: TabProps) {
           <Notice title="مینی‌اپ فعال نیست">{extra.blocker || "مینی‌اپ برای فروشگاه شما فعال نشده است. برای فعال شدن با مدیریت هماهنگ کنید."}</Notice>
         )}
       </GlassSection>
+      <MainAppGuideCard guide={extra.main_app} shop />
       <form
         className="flex flex-col gap-4"
         onSubmit={(event) => {

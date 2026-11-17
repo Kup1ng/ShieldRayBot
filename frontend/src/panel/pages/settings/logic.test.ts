@@ -4,8 +4,14 @@ import { inkFor, namingSample, webhookPreview } from "./logic";
 
 describe("small helpers", () => {
   it("builds the service naming example like the bot does", () => {
-    expect(namingSample("", "-x", "", "ab12cd34")).toBe("clk_ab12cd34-x");
+    expect(namingSample("clk", "-x", "", "ab12cd34")).toBe("clk_ab12cd34-x");
     expect(namingSample("vip", "", "{prefix}-{id}-{plan_volume}{plan_unit}-{username}", "r")).toBe("vip-42-30GB-ali_user");
+  });
+
+  it("builds the naming example without a prefix when the prefix is emptied, and without a dangling separator", () => {
+    expect(namingSample("", "", "", "ab12cd34")).toBe("ab12cd34");
+    expect(namingSample("  ", "-x", "", "ab12cd34")).toBe("ab12cd34-x");
+    expect(namingSample("", "", "{prefix}_{id}_{suffix}", "r")).toBe("42");
   });
 
   it("picks dark ink on light brand colours and white on dark ones", () => {

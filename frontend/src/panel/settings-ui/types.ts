@@ -40,3 +40,20 @@ export type MenuEntry = { key: string; label: string; required: boolean };
 
 /** What the Telegram preview card is for: the bot's chat, or its profile page. */
 export type PreviewKind = "chat" | "profile" | null;
+
+/** The «Open» button guide of a Mini App settings tab (BotFather's «Main Mini App»); `enabled` is null when Telegram could not be asked. */
+export type MainAppGuide = { url: string; bot_username: string; enabled: boolean | null; open_link: string };
+
+/** One row of `GET /entry-approvals`: a customer waiting for, or refused, the bot's entry. */
+export type EntryApprovalRow = {
+  id: number;
+  customer: number;
+  customer_name: string;
+  username: string;
+  status: string;
+  requested_at: string;
+  decided_at: string;
+  expired: boolean;
+};
+export type EntryApprovalView = "pending" | "closed";
+export type EntryApprovalAction = "approve" | "reject" | "block";

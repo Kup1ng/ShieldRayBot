@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import ResellerSetting, Setting
 from app.services import settings_panel
+from app.services.miniapp_main_app import MainAppGuide
 from app.services.notifications import SYSTEM_NOTIFY_KEYS
 from app.services.rich_text import pack_rich_text
 from app.services.users import (
@@ -45,6 +46,7 @@ ENV = {
     "WEBHOOK_PATH": "/telegram/webhook",
     "BOT_UPDATE_MODE": "polling",
 }
+MINIAPP_URL = "https://panel.example.com/miniapp/"
 BOT_TABS = [key for key, _label in SETTINGS_TABS]
 
 
@@ -72,6 +74,11 @@ class SettingsApiCase(RoutesHarness):
             patcher = patch(target, value)
             patcher.start()
             self.addCleanup(patcher.stop)
+        # The guide asks Telegram (getMe) about the platform bot; no test reaches the network.
+        self.platform_guide = AsyncMock(return_value=MainAppGuide(url=MINIAPP_URL, bot_username="my_bot", enabled=False))
+        patcher = patch("app.api.panel_settings_api.platform_main_app_guide", self.platform_guide)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     async def tab(self, tab: str, session: dict | None = None):
         return await self.call(session or OWNER_SESSION, "GET", settings_url(tab))
@@ -281,6 +288,43 @@ class SpecialTabTests(SettingsApiCase):
             await session.commit()
         clear_settings_cache()
         self.assertEqual((await self.body("miniapp"))["extra"]["accent"], "")
+
+    async def test_the_miniapp_tab_carries_the_open_button_guide_without_the_token(self) -> None:
+        response = await self.tab("miniapp")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["extra"]["main_app"],
+            {"url": MINIAPP_URL, "bot_username": "my_bot", "enabled": False, "open_link": "https://t.me/my_bot?startapp"},
+        )
+        self.assertNotIn(BOT_TOKEN, response.text)
+        self.platform_guide.assert_awaited_once()
+
+    async def test_other_tabs_do_not_ask_telegram_about_the_open_button(self) -> None:
+        for tab in ("welcome", "limits", "menu"):
+            await self.body(tab)
+        self.platform_guide.assert_not_awaited()
+
+    async def test_an_unreachable_telegram_leaves_the_status_unknown_not_the_tab_broken(self) -> None:
+        self.platform_guide.return_value = MainAppGuide(url="", bot_username="", enabled=None)
+        main_app = (await self.body("miniapp"))["extra"]["main_app"]
+        self.assertEqual(main_app, {"url": "", "bot_username": "", "enabled": None, "open_link": ""})
+
+    async def test_the_notifications_tab_offers_the_entry_request_alert(self) -> None:
+        items = {item["key"]: item for item in (await self.body("notifications"))["extra"]["items"]}
+        self.assertIn("notify_entry_approval", items)
+        self.assertTrue(items["notify_entry_approval"]["on"])
+        self.assertFalse(items["notify_entry_approval"]["system"])
+
+    async def test_the_limits_tab_starts_with_the_entry_approval_switches(self) -> None:
+        body = await self.body("limits")
+        self.assertEqual(body["groups"][0]["name"], "تأیید ورود کاربران جدید")
+        fields = settings_fields(body)
+        self.assertFalse(fields["entry_approval_enabled"]["value"])
+        self.assertIsNone(fields["entry_approval_enabled"]["show_when"])
+        self.assertEqual(fields["entry_approval_retry_hours"]["value"], "24")
+        self.assertEqual(fields["entry_approval_retry_hours"]["show_when"], {"key": "entry_approval_enabled", "values": ["1"]})
+        # The moment the gate was switched on is bookkeeping, never a field of the form.
+        self.assertNotIn("entry_approval_since", fields)
 
     async def test_the_links_tab_carries_the_bots_deep_links(self) -> None:
         extra = (await self.body("links"))["extra"]

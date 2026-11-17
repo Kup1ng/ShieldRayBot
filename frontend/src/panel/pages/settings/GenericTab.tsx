@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { GlassSection } from "../../ui/Page";
+import { EntryApprovalRequests } from "../../settings-ui/EntryApprovalRequests";
 import { SettingsForm } from "../../settings-ui/SettingsForm";
 import type { FormModel } from "../../settings-ui/useSettingsForm";
 import { namingSample } from "./logic";
@@ -43,7 +44,7 @@ function NamingSample({ form }: { form: FormModel }) {
   );
 }
 
-/** Owner adapter: the tabs that are plain groups of fields (welcome, messages, buttons, screens, qr, naming, limits, guides, service import). */
+/** Owner adapter: the tabs that are plain groups of fields (welcome, messages, buttons, screens, qr, naming, limits with the entry requests, guides, service import). */
 export function GenericTab({ data, reload }: TabProps) {
   const tab = data.tab;
   return (
@@ -61,6 +62,7 @@ export function GenericTab({ data, reload }: TabProps) {
         <>
           {tab === "service_import" ? <ServiceImportPanel /> : null}
           {tab === "naming" ? <NamingSample form={form} /> : null}
+          {tab === "limits" ? <EntryApprovalRequests /> : null}
         </>
       )}
     />

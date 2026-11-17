@@ -19,7 +19,9 @@ from app.bot.keyboards import DEFAULT_ACTIVE_MENU_ORDER, DEFAULT_MENU_ORDER
 from app.config import get_settings
 from app.services.bot_appearance import load_appearance_context
 from app.services.chat_cleanup_config import KEY_ENABLED, KEY_PERSISTENT_MENU, KEY_RESTART_BUTTON
+from app.services.main_app_payload import main_app_payload
 from app.services.miniapp_branding import ACCENT_PRESETS, ACCENT_SETTING, NOTICE_MAX, NOTICE_SETTING
+from app.services.miniapp_main_app import platform_main_app_guide
 from app.services.miniapp_shop import PLATFORM_SWITCH
 from app.services.settings_panel import TRUE_VALUES, resolve_tab, tab_payload
 from app.services.setup_wizard import current_setup_values
@@ -103,6 +105,7 @@ async def miniapp_extra(session: AsyncSession) -> dict[str, Any]:
         "notice_max": NOTICE_MAX,
         "shops_enabled": str(values.get(PLATFORM_SWITCH, "0")).lower() in TRUE_VALUES,
         "miniapp_url": get_settings().miniapp_url or "",
+        "main_app": main_app_payload(await platform_main_app_guide()),
     }
 
 
