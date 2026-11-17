@@ -20,12 +20,12 @@ async function home() {
 }
 
 describe("launch inside Telegram", () => {
-  it("reads /me (and the club, for the invite code) with Telegram's signed sign-in and shows the customer's wallet", async () => {
+  it("reads /me (the club for the invite code, the offer to add a previous service) with Telegram's signed sign-in and shows the customer's wallet", async () => {
     installTelegram({ initData: "query_id=x&hash=y" });
     const api = fakeApi({ "GET /api/mini/me": () => ({ json: customerMe() }) });
     render(<MiniApp />);
     await home();
-    await waitFor(() => expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/mini/me", "GET /api/mini/club"]));
+    await waitFor(() => expect(api.calls.map((c) => `${c.method} ${c.path}`)).toEqual(["GET /api/mini/me", "GET /api/mini/club", "GET /api/mini/service-import/offer"]));
     expect(api.calls[0].headers["X-Telegram-Init-Data"]).toBe("query_id=x&hash=y");
     expect(screen.getByText("۲۴۰,۰۰۰ تومان")).toBeTruthy();
   });

@@ -15,6 +15,7 @@ import { type Club } from "../club/clubKit";
 import { openTopup } from "../account/topup";
 import { AdminHome } from "../ops/AdminHome";
 import { ShopPeek } from "../ops/ShopPeek";
+import { ImportOfferCard } from "../serviceImport/ImportOfferCard";
 import { SubscriptionLink } from "../subscription/SubscriptionLink";
 
 /** Figma dashboard: the large round avatar. The name stays for screen readers and the shop's caption sits under it. */
@@ -165,6 +166,8 @@ function CustomerHome() {
           </ActionButton>
         ) : null}
       </section>
+
+      <ImportOfferCard />
 
       {(home.attention ?? []).map((service) => (
         <AttentionCard key={String(service.id)} service={service} onRenew={(id) => go("service", { serviceId: id, then: "renew" })} />

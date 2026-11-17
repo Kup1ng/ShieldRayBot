@@ -7,7 +7,6 @@ from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.bot import keyboards as kb
@@ -19,8 +18,8 @@ from app.bot.tg_utils import safe_edit_text
 from app.db.models import BotUser, UserService
 from app.services.formatting import service_card
 from app.services.referral_scope import is_referral_of_shop
-from app.services.service_import_offer import is_offer_dismissed
-from app.services.service_scope import customer_may_use_service, list_customer_services, shop_services_clause
+from app.services.service_import_offer import customer_has_services, is_offer_dismissed
+from app.services.service_scope import customer_may_use_service, list_customer_services
 from app.services.users import current_shop_reseller_id, get_all_settings, on
 from app.services.message_variables import DOMAIN_USER
 from app.services import bot_feedback_texts as feedback
@@ -31,12 +30,7 @@ logger = logging.getLogger(__name__)
 router = Router(name="start")
 
 async def _has_services(session: AsyncSession, user_id: int) -> bool:
-    result = await session.execute(
-        select(UserService.id)
-        .where(UserService.bot_user_id == user_id, shop_services_clause(current_shop_reseller_id()))
-        .limit(1)
-    )
-    return result.scalar_one_or_none() is not None
+    return await customer_has_services(session, user_id, current_shop_reseller_id())
 
 async def render_home(
     message: Message,

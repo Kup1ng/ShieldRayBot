@@ -17,7 +17,8 @@ from aiogram.types import (
     RichMessageButton,
 )
 
-from app.bot.service_import_ui import add_existing_row, import_enabled
+from app.bot.service_import_ui import add_existing_row
+from app.services.service_import_offer import offer_applies
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +32,7 @@ HOME_ADD_NOTE = "برای اضافه کردن سرویس قبلی یا از طر
 
 def should_offer_import(ui: dict | None, *, has_services: bool, dismissed: bool) -> bool:
     """A customer of this shop with no service who did not ask to stop, while adding old services is on."""
-    return import_enabled(ui) and not has_services and not dismissed
+    return offer_applies(ui, has_services=has_services, dismissed=dismissed)
 
 
 def build_import_prompt(ui: dict | None) -> InputRichMessage:

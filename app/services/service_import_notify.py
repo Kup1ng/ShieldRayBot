@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import html
 import logging
+from typing import TYPE_CHECKING
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -14,6 +15,9 @@ from app.config import get_settings
 from app.db.models import BotUser
 from app.services.formatting import format_message, format_user_label, info_block, kv_line
 from app.services.notifications import _dispatch_dual_notify
+
+if TYPE_CHECKING:
+    from app.services.service_import import ImportResult
 
 logger = logging.getLogger(__name__)
 
@@ -55,3 +59,15 @@ async def notify_service_import_request(
     except (TelegramAPIError, OSError, TimeoutError):
         logger.warning("service import request notice failed request=%s", request_id, exc_info=True)
         return 0
+
+
+async def announce_import_result(
+    bot: Bot, session: AsyncSession, *, user: BotUser, result: ImportResult, shop_id: int | None
+) -> None:
+    """Tell the admins about a freshly queued request; a repeat of the same link stays quiet."""
+    if not result.new_request or result.request_id is None:
+        return
+    await notify_service_import_request(
+        bot, session, user=user, panel_username=str(result.info.get("username") or ""),
+        request_id=result.request_id, shop_id=shop_id,
+    )
