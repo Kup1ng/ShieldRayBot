@@ -13,6 +13,7 @@ from app.services.billing import GB
 from app.services.pasarguard import PasarGuardError
 from app.services.pg_admin_subscription import (
     NO_TIME_RENEWAL,
+    RENEW_LIMITS_REFUSED_WARNING,
     RENEW_REFUSED,
     RENEW_UNKNOWN_WARNING,
 )
@@ -92,6 +93,14 @@ class TimedRenewalTests(RenewalTestCase):
         self.assertEqual((sub.base_gb, sub.base_users, sub.plan_id), (100, 10, BRONZE))
         self.assertEqual((await self.wallet(), (await self.profile()).plan_id), (1_000_000, BRONZE))
 
+    async def test_refused_limits_after_an_unanswered_refill_do_not_refund_either(self) -> None:
+        self.pg.reset_admin_usage = AsyncMock(side_effect=httpx.ReadTimeout("slow"))
+        self.pg.modify_admin = AsyncMock(side_effect=PasarGuardError("bad limits", 422))
+        result = await self.renew(SILVER)
+        self.assertIn(RENEW_UNKNOWN_WARNING, result["warnings"])
+        self.assertIn(RENEW_LIMITS_REFUSED_WARNING, result["warnings"])
+        self.assertEqual(await self.refunds(), 0)
+
     async def test_a_lost_answer_keeps_the_renewal_and_warns(self) -> None:
         for step in ("reset_admin_usage", "modify_admin"):
             with self.subTest(step=step):
@@ -142,3 +151,13 @@ class UntimedPlanTests(RenewalTestCase):
         self.assertFalse(result["timed"])
         self.assertEqual(await self.wallet(), 850_000)
         self.assertIn("زمان و مصرف تغییری نکرد", renewal_effect(result))
+
+    async def test_refused_limits_on_a_move_without_a_refill_still_return_the_money(self) -> None:
+        self.pg.modify_admin = AsyncMock(side_effect=PasarGuardError("bad limits", 422))
+        with self.assertRaises(ValueError) as caught:
+            await self.renew(UNTIMED)
+        self.assertEqual(str(caught.exception), RENEW_REFUSED)
+        self.pg.reset_admin_usage.assert_not_awaited()
+        sub = await self.sub()
+        self.assertEqual((sub.base_gb, sub.base_users, sub.plan_id), (100, 10, BRONZE))
+        self.assertEqual((await self.wallet(), await self.refunds()), (1_000_000, 1))

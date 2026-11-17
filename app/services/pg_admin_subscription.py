@@ -859,6 +859,10 @@ RENEW_UNKNOWN_WARNING = (
     "پاسخ پاسارگارد برای اعمال تمدید نرسید. تمدید ثبت شده؛ دوباره تمدید نکنید. "
     "اگر ظرفیت یا مصرف درست نشد با پشتیبانی تماس بگیرید."
 )
+RENEW_LIMITS_REFUSED_WARNING = (
+    "تمدید ثبت شد و مصرف ادمین صفر شد، ولی پاسارگارد سقف‌های جدید را نپذیرفت. "
+    "دوباره تمدید نکنید؛ برای اعمال سقف‌ها با پشتیبانی تماس بگیرید."
+)
 NO_TIME_RENEWAL = "این پلن زمان ندارد و تمدید معنی ندارد؛ برای افزایش حجم یا کاربر بسته بخرید یا پلن را ارتقا دهید"
 
 
@@ -974,11 +978,29 @@ async def _apply_renewal_on_panel(
         "reset_usage", uname, lambda: get_pg().reset_admin_usage(uname), warnings,
     )
     if _has_capacity_totals(sub):
-        await _panel_step("capacity", uname, lambda: sync_pg_capacity_from_sub(session, sub), warnings)
+        await _push_renewed_limits(session, sub, uname, warnings, after_refill=refills_volume)
     restored = await restore_subscription_access(session, sub, commit=False)
     if restored["errors"]:
         warnings.append("بازگرداندن دسترسی ادمین یا کاربران کامل انجام نشد؛ در صورت مشکل با پشتیبانی تماس بگیرید.")
     return _PanelOutcome(restored=restored, usage_reset=usage_reset)
+
+
+async def _push_renewed_limits(
+    session: AsyncSession, sub: PgAdminSubscription, uname: str, warnings: list[str], *, after_refill: bool,
+) -> None:
+    """Push the paid limits; a refusal undoes the renewal only while nothing on the panel has changed.
+
+    After the refill step returned, the admin's counter is (or may be) reset and cannot be put
+    back, so undoing then would hand out a free refill with the refund. The paid renewal stands
+    with the intended limits saved, and the refusal is left for review.
+    """
+    try:
+        await _panel_step("capacity", uname, lambda: sync_pg_capacity_from_sub(session, sub), warnings)
+    except _RenewRefused:
+        if not after_refill:
+            raise
+        logger.error("renewal limits refused after the usage refill admin=%s; renewal kept for review", uname)
+        warnings.append(RENEW_LIMITS_REFUSED_WARNING)
 
 
 async def _undo_refused_renewal(
@@ -1030,9 +1052,10 @@ async def renew_subscription(
     """Start the plan's next period: extend the time, refill the admin's volume, reopen access.
 
     Early renewal extends from max(now, expires_at). The amount is recomputed here. The charge
-    and the new period are committed before the panel is called. If the panel refuses a step the
-    renewal is undone and the money returned; if it does not answer, the renewal stands and the
-    result carries a warning (no blind refund). A customer's usage is never reset. A plan with no
+    and the new period are committed before the panel is called. If the panel refuses a step before
+    anything on it changed, the renewal is undone and the money returned; once the admin's usage
+    was reset, or if the panel does not answer, the renewal stands and the result carries a
+    warning (no blind refund). A customer's usage is never reset. A plan with no
     period cannot be renewed: it changes only through a pack or by moving to it (``moving``), and
     moving to it neither extends the time nor refills the volume.
     """
