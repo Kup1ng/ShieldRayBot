@@ -9,7 +9,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 import app.db.models  # noqa: F401
@@ -73,6 +73,7 @@ from app.services.resource_principal import (
 )
 from app.services.secret_box import encrypt_secret
 from app.services.shop_scope import is_platform_admin, shop_owner_id
+from tests.pgtest import pg_engine
 
 
 _WEB = "WebRed12!@Ab"
@@ -114,7 +115,7 @@ def _owner_staff(owner) -> dict:
 
 class Phase3ERedTeamTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -667,11 +668,18 @@ class Phase3ERedTeamTests(unittest.IsolatedAsyncioTestCase):
             assert auth
             broad = _role("Operator", 99, BROAD)
             from app.services.pg_access import map_pg_role_to_features
+            from app.services.pg_read_cache import ROLE_FEATURES_PATH, cache_put
 
-            pg_acc._ROLE_CACHE[99] = (
-                10**18,
-                map_pg_role_to_features(broad),
-                broad,
+            # Poison a foreign identity; principal path must still fail closed.
+            cache_put(
+                "owner@https://pg.example:platform",
+                ROLE_FEATURES_PATH,
+                {"role_id": 99},
+                {
+                    "ok": True,
+                    "features": map_pg_role_to_features(broad),
+                    "role": broad,
+                },
             )
             payload = build_principal_session_payload(auth)
             payload["pg_role_id"] = 99

@@ -13,7 +13,7 @@ BIN="/usr/local/bin/pgclock"
 WRAPPER_SRC="${ROOT}/scripts/pgclock"
 
 if [[ ! -f "${ROOT}/run.py" || ! -d "${ROOT}/app" ]]; then
-  echo "Not a PGClockBot install: ${ROOT}" >&2
+  echo "Not a ShieldRay install: ${ROOT}" >&2
   exit 1
 fi
 if [[ ! -f "${WRAPPER_SRC}" ]]; then

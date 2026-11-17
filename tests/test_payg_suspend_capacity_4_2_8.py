@@ -14,6 +14,7 @@ from app.services.reseller_capacity import (
     plan_extra_gb_price,
     plan_renew_price,
 )
+from tests.template_source import template_with_includes
 
 
 class PaygSuspendHelpersTests(unittest.IsolatedAsyncioTestCase):
@@ -44,9 +45,10 @@ class PaygSuspendHelpersTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payg_purchase_min_wallet(10_000), 20_001)
 
     async def test_buy_extra_gb_rejects_forged_amount(self):
-        from app.services.reseller_capacity import buy_extra_gb
+        from app.services.reseller_capacity import unit_offer
 
         plan = MagicMock(
+            id=None,
             allow_buy_extra=True,
             billing_mode="fixed",
             plan_kind="subscription",
@@ -57,11 +59,8 @@ class PaygSuspendHelpersTests(unittest.IsolatedAsyncioTestCase):
             billing_balance=100_000,
             pg_admin_username="r1",
         )
-        user = MagicMock(id=1, wallet_balance=1_000_000)
         with self.assertRaises(ValueError):
-            await buy_extra_gb(
-                AsyncMock(), user=user, profile=profile, plan=plan, gb=999_999
-            )
+            unit_offer(profile, plan, "gb", 999_999)
 
 
 class ResellerCapacityPlanTests(unittest.TestCase):
@@ -97,7 +96,7 @@ class ResellerCapacityPlanTests(unittest.TestCase):
         self.assertEqual(plan_renew_price(plan), 12_000)
 
     def test_templates_have_extra_switch(self):
-        plans = Path("app/web/templates/plans.html").read_text(encoding="utf-8")
+        plans = template_with_includes("plans.html")
         edit = Path("app/web/templates/reseller_plan_edit.html").read_text(encoding="utf-8")
         self.assertIn("allow_buy_extra", plans)
         self.assertIn("extra_gb_price", plans)
@@ -155,14 +154,23 @@ class SchemaAddonTests(unittest.TestCase):
         self.assertTrue(hasattr(ResellerPlan, "allow_buy_extra"))
         self.assertTrue(hasattr(ResellerPlan, "extra_gb_price"))
 
-    def test_migrate_script(self):
-        src = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("billing_suspended_at", src)
-        self.assertIn("allow_buy_extra", src)
-        alem = Path("alembic/versions/0005_payg_suspend_plan_addons.py").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("billing_suspended_user_ids", alem)
+    def test_upgrade_adds_the_suspend_and_addon_columns(self):
+        from sqlalchemy import inspect
+
+        from app.db.alembic_runner import upgrade_head
+        from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, sync_url
+
+        schema = ensure_schema(new_schema())
+        upgrade_head(sync_url(schema))
+        engine = pg_sync_engine(schema=schema)
+        try:
+            inspector = inspect(engine)
+            profile_columns = {column["name"] for column in inspector.get_columns("reseller_profiles")}
+            plan_columns = {column["name"] for column in inspector.get_columns("reseller_plans")}
+        finally:
+            engine.dispose()
+        self.assertLessEqual({"billing_suspended_at", "billing_suspended_user_ids"}, profile_columns)
+        self.assertLessEqual({"allow_buy_extra", "extra_gb_price"}, plan_columns)
 
 
 if __name__ == "__main__":

@@ -15,7 +15,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 import app.db.models  # noqa: F401
@@ -48,6 +48,7 @@ from app.services.shop_scope import (
     resolve_shop_scope_id,
     shop_owner_id,
 )
+from tests.pgtest import pg_engine
 
 
 def _owner_staff(**extra) -> dict:
@@ -98,7 +99,7 @@ class ExplicitOwnerWorksTests(unittest.IsolatedAsyncioTestCase):
     """E — explicit Owner Principal retains platform shop privileges."""
 
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -130,7 +131,7 @@ class StickyBotAdminOwnerTests(unittest.IsolatedAsyncioTestCase):
     """B — sticky BotUser.role=admin is not Owner without ADMIN_IDS."""
 
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -196,7 +197,7 @@ class PrincipalAttachDenyTests(unittest.IsolatedAsyncioTestCase):
     """C — reseller/pg_staff security-sensitive path without Principal → DENY."""
 
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(

@@ -2,17 +2,16 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from datetime import timedelta
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import FastAPI
 from sqlalchemy import event
 from trial_users_support import NOW, OWNER, TrialUsersTestCase, shop_staff
 
+from app.api.panel_users_api import register_panel_users_api
 from app.api.trial_users_pages import register_trial_users_pages
 from app.db.models import MarketingPreference, UserService
 from app.services.marketing_nav import TRIAL_USERS, marketing_sections
@@ -197,25 +196,32 @@ class ListBehaviourTests(TrialUsersTestCase):
 
 
 class TrialUsersPageTests(TrialUsersTestCase):
+    """The page's data (``/api/panel/trial-users``) and the guard of its shell."""
+
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
-        from app.api.app import render
-
         self.staff: dict = {}
 
         async def get_db():
             async with self.Session() as session:
                 yield session
 
+        def require_perm(perm: str):
+            return lambda: self.staff
+
         app = FastAPI()
-        register_trial_users_pages(app, render=render, require_staff=lambda: self.staff, get_db=get_db)
+        register_trial_users_pages(app, require_staff=lambda: self.staff, get_db=get_db)
+        register_panel_users_api(
+            app, require_staff=lambda: self.staff, require_admin=lambda: self.staff, require_perm=require_perm,
+            require_pg_perm=require_perm, get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
         await super().asyncTearDown()
 
-    async def _get(self, staff: dict, url: str = "/trial-users"):
+    async def _get(self, staff: dict, url: str = "/api/panel/trial-users"):
         self.staff.clear()
         self.staff.update(staff)
         return await self.client.get(url)
@@ -227,18 +233,20 @@ class TrialUsersPageTests(TrialUsersTestCase):
             {"role": "pg_staff", "permissions": ["trial_users"]},
             {"role": "reseller", "permissions": ["trial_users"], "bot_user_id": None},
         ):
-            with self.subTest(staff=staff):
-                self.assertEqual((await self._get(staff)).status_code, 403)
+            for url in ("/api/panel/trial-users", "/trial-users"):
+                with self.subTest(staff=staff, url=url):
+                    self.assertEqual((await self._get(staff, url)).status_code, 403)
 
-    async def test_hostile_names_are_escaped_and_the_phone_never_appears(self) -> None:
+    async def test_hostile_names_are_data_and_the_phone_never_appears(self) -> None:
         async with self.Session() as session:
             user = await self._user(session, 500, name="<script>alert(1)</script>")
             await self._take_trial(session, user)
             await session.commit()
         response = await self._get(OWNER)
         self.assertEqual(response.status_code, 200)
-        self.assertNotIn("<script>alert(1)</script>", response.text)
-        self.assertIn("&lt;script&gt;", response.text)
+        self.assertTrue(response.headers["content-type"].startswith("application/json"))
+        self.assertEqual([row["name"] for row in response.json()["rows"]], ["<script>alert(1)</script>"])
+        self.assertNotIn("phone", response.text)
 
     async def test_shop_staff_see_their_shop_whatever_the_query_says(self) -> None:
         async with self.Session() as session:
@@ -249,23 +257,22 @@ class TrialUsersPageTests(TrialUsersTestCase):
             await session.commit()
         response = await self._get(
             shop_staff(self.shop_a.id, ["trial_users"]),
-            f"/trial-users?shop_id={self.shop_b.id}&reseller_id={self.shop_b.id}",
+            f"/api/panel/trial-users?shop_id={self.shop_b.id}&reseller_id={self.shop_b.id}",
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("mine", response.text)
+        self.assertEqual([row["name"] for row in response.json()["rows"]], ["mine"])
         self.assertNotIn("theirs", response.text)
 
     async def test_the_settings_shortcut_points_each_role_to_its_own_settings(self) -> None:
         owner = await self._get(OWNER)
-        self.assertIn('href="/settings?tab=limits"', owner.text)
+        self.assertEqual(owner.json()["settings_href"], "/settings?tab=limits")
         with_settings = await self._get(shop_staff(self.shop_a.id, ["trial_users", "shop_settings"]))
-        self.assertIn('href="/shop-settings?tab=limits"', with_settings.text)
-        self.assertNotIn("/settings?tab=limits", with_settings.text.replace("/shop-settings?tab=limits", ""))
+        self.assertEqual(with_settings.json()["settings_href"], "/shop-settings?tab=limits")
         without = await self._get(shop_staff(self.shop_a.id, ["trial_users"]))
-        self.assertNotIn("tab=limits", without.text)
+        self.assertIsNone(without.json()["settings_href"])
 
     async def test_a_malformed_cursor_or_filter_is_ignored(self) -> None:
-        response = await self._get(OWNER, "/trial-users?before=abc&filter=%27%3B--&q=" + "x" * 500)
+        response = await self._get(OWNER, "/api/panel/trial-users?before=abc&filter=%27%3B--&q=" + "x" * 500)
         self.assertEqual(response.status_code, 200)
 
     async def test_the_tab_is_offered_only_with_the_permission(self) -> None:

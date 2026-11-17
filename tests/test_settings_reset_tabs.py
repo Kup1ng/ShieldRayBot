@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.bot.keyboards import default_menu_layout_settings
 from app.db.models import ResellerSetting, Setting
 from app.services.users import DEFAULT_SETTINGS, SETTING_GROUPS, clear_settings_cache
+from tests.settings_json import settings_url
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
 
 
@@ -36,8 +37,8 @@ class ResetTabsTests(RoutesHarness):
 
     async def test_welcome_reset_brings_back_the_text_and_keeps_the_shop_name(self) -> None:
         await self.request(OWNER_SESSION, "POST", "/settings?tab=welcome", {"s_shop_title": "فروشگاه من", "s_welcome_text": "سلام"})
-        page = await self.request(OWNER_SESSION, "GET", "/settings?tab=welcome")
-        self.assertIn("بازگردانی همه به پیش‌فرض", page.text)
+        page = await self.request(OWNER_SESSION, "GET", settings_url("welcome"))
+        self.assertTrue(page.json()["can_reset"])
         reset = await self.request(OWNER_SESSION, "POST", "/settings?tab=welcome", {"reset_defaults": "1"})
         self.assertIn("saved=1", reset.headers["location"])
         self.assertEqual(await self.stored("welcome_text"), DEFAULT_SETTINGS["welcome_text"])

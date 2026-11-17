@@ -1,0 +1,482 @@
+/* Status page (403 / 404 / 500 / maintenance / returns): self-contained, so it renders even when the
+   React build is missing. Same look as the panel: YekanBakh, glass card over the purple crystals,
+   light and dark following the saved «shieldray-theme». Never loads panel.css. */
+
+@font-face {
+  font-family: "YekanBakh";
+  src: url("/static/spa/fonts/YekanBakh-VF.woff2") format("woff2");
+  font-weight: 100 950;
+  font-display: swap;
+}
+
+:root {
+  /* The panel's type, spacing and radius scale (panel.css, panel-ds.css), repeated here because
+     this page never loads them. */
+  --fs-1: 11px; --fs-2: 12px; --fs-3: 14px; --fs-4: 17px; --fs-5: 24px;
+  --space-0: 4px; --space-1: 8px; --space-3: 24px;
+  --g3: 12px;
+  --r-sm: 10px; --inner-radius: 16px; --radius: 20px;
+
+  --ps-bg: oklch(95.5% 0.0018 312.88);
+  --ps-fg: oklch(20% 0.0031 312.88);
+  --ps-muted: oklch(50% 0.0046 312.88);
+  --ps-surface: oklch(97.5% 0.0012 312.88);
+  --ps-border: oklch(88% 0.0023 312.88);
+  --ps-accent: oklch(57.34% 0.2586 312.88);
+  --ps-accent-fg: #fff;
+  --ps-danger: oklch(65.32% 0.2328 25.74);
+  --ps-warning: oklch(78.19% 0.1585 72.33);
+  --ps-success: oklch(70% 0.17 150);
+  --ps-ink: oklch(20% 0.0031 312.88);
+  --ps-ink-fg: #fff;
+  --ps-glass: rgb(255 255 255 / 0.5);
+  --ps-glass-border: rgb(255 255 255 / 0.2);
+  --ps-glass-shadow: 0 24px 48px 0 rgb(33 38 43 / 0.1);
+  --ps-crystal: 1;
+  --ps-tone: var(--ps-accent);
+  color-scheme: light;
+}
+
+html[data-theme="dark"] {
+  --ps-bg: oklch(16% 0.0031 312.88);
+  --ps-fg: oklch(96% 0.002 312.88);
+  --ps-muted: oklch(70% 0.0031 312.88);
+  --ps-surface: oklch(22% 0.0031 312.88);
+  --ps-border: oklch(30% 0.0031 312.88);
+  --ps-danger: oklch(59.4% 0.1967 24.63);
+  --ps-warning: oklch(82.03% 0.1388 76.34);
+  --ps-ink: #fff;
+  --ps-ink-fg: oklch(20% 0.0031 312.88);
+  --ps-glass: color-mix(in oklab, oklch(22% 0.0031 312.88) 62%, transparent);
+  --ps-glass-border: rgb(255 255 255 / 0.06);
+  --ps-glass-shadow: 0 24px 48px 0 rgb(0 0 0 / 0.32);
+  --ps-crystal: 0.85;
+  color-scheme: dark;
+}
+
+/* Without the theme script the page still follows the system setting. */
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme]) {
+    --ps-bg: oklch(16% 0.0031 312.88);
+    --ps-fg: oklch(96% 0.002 312.88);
+    --ps-muted: oklch(70% 0.0031 312.88);
+    --ps-surface: oklch(22% 0.0031 312.88);
+    --ps-border: oklch(30% 0.0031 312.88);
+    --ps-ink: #fff;
+    --ps-ink-fg: oklch(20% 0.0031 312.88);
+    --ps-glass: color-mix(in oklab, oklch(22% 0.0031 312.88) 62%, transparent);
+    --ps-glass-border: rgb(255 255 255 / 0.06);
+    --ps-crystal: 0.85;
+    color-scheme: dark;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  background: var(--ps-bg);
+}
+
+.panel-status-body {
+  margin: 0;
+  min-height: 100dvh;
+  background: transparent;
+  color: var(--ps-fg);
+  font-family: "YekanBakh", Tahoma, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.muted {
+  color: var(--ps-muted);
+}
+
+.panel-status {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  min-height: 100dvh;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 1.5rem 1rem 1rem;
+}
+
+.panel-status[data-status="500"],
+.panel-status[data-status="error"] {
+  --ps-tone: var(--ps-danger);
+}
+.panel-status[data-status="403"],
+.panel-status[data-status="warn"],
+.panel-status[data-status="pending"] {
+  --ps-tone: var(--ps-warning);
+}
+.panel-status[data-status="ok"],
+.panel-status[data-status="200"] {
+  --ps-tone: var(--ps-success);
+}
+
+/* The purple crystals behind the glass, fixed and inert. */
+.panel-status-atmosphere {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.panel-status-orb {
+  position: absolute;
+  width: 600px;
+  height: 600px;
+  max-width: none;
+  background: center / contain no-repeat;
+  opacity: var(--ps-crystal);
+}
+.panel-status-orb-a {
+  top: -200px;
+  left: -260px;
+  background-image: url("/static/spa/brand/crystal-b.webp");
+  animation: panel-status-drift-a 14s ease-in-out infinite alternate;
+}
+.panel-status-orb-b {
+  right: -250px;
+  bottom: -240px;
+  background-image: url("/static/spa/brand/crystal-c.webp");
+  transform: scaleY(-1) rotate(180deg);
+  animation: panel-status-drift-b 18s ease-in-out infinite alternate;
+}
+.panel-status-grid {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 600px;
+  height: 600px;
+  transform: translate(-50%, -50%);
+  background: center / contain no-repeat url("/static/spa/brand/crystal-a.webp");
+  opacity: 0.2;
+}
+
+.panel-status-brand {
+  display: flex;
+  width: min(100%, 32rem);
+  height: 72px;
+  align-items: center;
+  gap: var(--g3);
+  padding: 0 1.5rem;
+  border: 2px solid var(--ps-glass-border);
+  border-radius: var(--inner-radius);
+  background: var(--ps-glass);
+  box-shadow: var(--ps-glass-shadow);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  backdrop-filter: blur(28px) saturate(140%);
+  animation: panel-status-in 480ms ease both;
+}
+.panel-status-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--r-sm);
+  object-fit: contain;
+}
+.panel-status-brand-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.3;
+}
+.panel-status-brand-text strong {
+  font-size: var(--fs-4);
+  font-weight: 600;
+}
+.panel-status-brand-text .muted {
+  font-size: var(--fs-2);
+}
+
+.panel-status-stage {
+  display: flex;
+  width: 100%;
+  flex: 1;
+  align-items: center;
+  justify-content: center;
+}
+
+.panel-status-card {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  width: min(100%, 26rem);
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-0);
+  padding: 2rem 1.5rem;
+  text-align: center;
+  border: 2px solid var(--ps-glass-border);
+  border-radius: var(--radius);
+  background: var(--ps-glass);
+  box-shadow: var(--ps-glass-shadow);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  backdrop-filter: blur(28px) saturate(140%);
+  animation: panel-status-card-in 560ms ease 60ms both;
+}
+.panel-status--guided .panel-status-card {
+  width: min(100%, 32rem);
+  align-items: stretch;
+  text-align: start;
+}
+
+.panel-status-card-accent {
+  position: absolute;
+  inset-inline: 0;
+  top: 0;
+  height: 3px;
+  background: var(--ps-tone);
+}
+
+.panel-status-watermark {
+  position: absolute;
+  inset-inline: 0;
+  top: 0.25rem;
+  margin: 0;
+  font-size: calc(var(--fs-5) * 4.5);
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  color: color-mix(in srgb, var(--ps-tone) 10%, transparent);
+  pointer-events: none;
+  animation: panel-status-mark 700ms ease 120ms both;
+}
+
+.panel-status-badge {
+  position: relative;
+  display: flex;
+  width: 3.5rem;
+  height: 3.5rem;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.5rem;
+  border: 1px solid color-mix(in srgb, var(--ps-tone) 30%, var(--ps-border));
+  border-radius: var(--inner-radius);
+  background: color-mix(in srgb, var(--ps-tone) 14%, var(--ps-surface));
+  color: var(--ps-tone);
+  animation: panel-status-in 520ms ease 140ms both;
+}
+.panel-status--guided .panel-status-badge {
+  align-self: center;
+}
+.panel-status-badge-ico {
+  width: 26px;
+  height: 26px;
+}
+
+.panel-status-kicker {
+  position: relative;
+  margin: 0;
+  font-size: var(--fs-2);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  font-variant-numeric: tabular-nums;
+}
+.panel-status-title {
+  position: relative;
+  margin: 0 0 0.25rem;
+  max-width: 18ch;
+  font-size: var(--fs-5);
+  font-weight: 700;
+  line-height: 1.4;
+}
+.panel-status-msg {
+  position: relative;
+  margin: 0;
+  max-width: 30ch;
+  font-size: var(--fs-3);
+  line-height: 1.8;
+}
+.panel-status--guided .panel-status-title,
+.panel-status--guided .panel-status-msg {
+  max-width: none;
+}
+
+.panel-status-body-html {
+  position: relative;
+  margin-top: 0.5rem;
+  font-size: var(--fs-3);
+  line-height: 1.8;
+}
+.panel-status-body-html form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: 0.5rem;
+}
+.panel-status-ref {
+  position: relative;
+  margin: 0.5rem 0 0;
+  font-size: var(--fs-2);
+}
+
+.panel-status-guide {
+  position: relative;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--ps-border);
+}
+.panel-status-guide-title {
+  margin: 0 0 0.75rem;
+  font-size: var(--fs-3);
+  font-weight: 700;
+}
+.panel-status-guide-steps {
+  display: flex;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  flex-direction: column;
+  gap: var(--g3);
+}
+.panel-status-guide-steps > li {
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--ps-border);
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--ps-surface) 80%, transparent);
+}
+.panel-status-guide-step-title {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: var(--fs-3);
+  font-weight: 700;
+}
+.panel-status-guide-step-body {
+  margin: 0;
+  font-size: var(--fs-2);
+  line-height: 1.8;
+  color: var(--ps-muted);
+}
+.panel-status-guide-step-body code,
+.panel-status-guide-note code {
+  padding: 0.1em 0.35em;
+  border: 1px solid var(--ps-border);
+  border-radius: var(--r-sm);
+  background: var(--ps-surface);
+  color: var(--ps-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: var(--fs-1);
+}
+.panel-status-code {
+  margin: 0.5rem 0 0;
+  padding: 0.7rem 0.85rem;
+  overflow-x: auto;
+  border: 1px solid var(--ps-border);
+  border-radius: var(--r-sm);
+  background: var(--ps-surface);
+  font-size: var(--fs-2);
+  line-height: 1.5;
+  text-align: left;
+}
+.panel-status-code code {
+  color: var(--ps-fg);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  white-space: pre;
+}
+.panel-status-guide-note {
+  margin: 0.75rem 0 0;
+  font-size: var(--fs-2);
+  line-height: 1.8;
+}
+
+.panel-status-actions {
+  position: relative;
+  display: flex;
+  width: 100%;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-1);
+  margin-top: 1.25rem;
+}
+.panel-status-actions--single {
+  justify-content: center;
+}
+.panel-status-btn {
+  display: inline-flex;
+  min-height: 3rem;
+  flex: 1 1 8rem;
+  align-items: center;
+  justify-content: center;
+  padding: 0 1.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  background: var(--ps-ink);
+  color: var(--ps-ink-fg);
+  font: inherit;
+  font-size: var(--fs-3);
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+.panel-status-btn--ghost {
+  border-color: var(--ps-border);
+  background: transparent;
+  color: var(--ps-fg);
+}
+.panel-status-btn:hover {
+  opacity: 0.9;
+}
+.panel-status-btn:focus-visible {
+  outline: 2px solid var(--ps-accent);
+  outline-offset: 2px;
+}
+
+.panel-status-foot {
+  max-width: 32rem;
+  margin: 0;
+  padding-bottom: 0.5rem;
+  font-size: var(--fs-2);
+  text-align: center;
+}
+
+@keyframes panel-status-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes panel-status-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes panel-status-mark {
+  from {
+    opacity: 0;
+    transform: scale(0.92);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes panel-status-drift-a {
+  to {
+    transform: translate(24px, 18px);
+  }
+}
+@keyframes panel-status-drift-b {
+  to {
+    transform: scaleY(-1) rotate(180deg) translate(-24px, -18px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-status *,
+  .panel-status-atmosphere * {
+    animation: none;
+  }
+}

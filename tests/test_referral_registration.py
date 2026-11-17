@@ -12,17 +12,18 @@ from unittest.mock import AsyncMock, patch
 
 from aiogram.types import CallbackQuery, Chat, Message, MessageEntity, ReplyKeyboardRemove, Update, User
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, PointsRule, ReferralEvent, ResellerProfile, Role
 from app.services.referral_registration import ReferralRequired, referral_required_outbound
 from app.services.users import clear_settings_cache, get_or_create_user, set_setting
+from tests.pgtest import pg_engine
 
 
 class ReferralRegistrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -119,7 +120,8 @@ class ReferralRegistrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_shop_accepts_own_customer_and_owner_but_rejects_foreign_codes(self):
         owner = await self.user(role=Role.RESELLER.value)
         customer = await self.user(101, "SHOP1234", reseller_id=owner.id)
-        foreign = await self.user(102, "OTHER123", reseller_id=999)
+        other_shop = await self.user(104, "SHOP9999", role=Role.RESELLER.value)
+        foreign = await self.user(102, "OTHER123", reseller_id=other_shop.id)
         platform = await self.user(103, "MAIN1234")
         await self.require_referral(scope=owner.id)
         for code in (foreign.referral_code, platform.referral_code):
@@ -134,11 +136,12 @@ class ReferralRegistrationTests(unittest.IsolatedAsyncioTestCase):
     async def test_platform_rejects_shop_referral_and_self_referral(self):
         from app.services.referral_registration import find_registration_referrer
 
-        referrer = await self.user(reseller_id=999)
+        other_shop = await self.user(104, "SHOP9999", role=Role.RESELLER.value)
+        referrer = await self.user(reseller_id=other_shop.id)
         await self.require_referral()
         with self.assertRaises(ReferralRequired):
             await get_or_create_user(self.session, 200, referred_by_code=referrer.referral_code)
-        self.assertIsNone(await find_registration_referrer(self.session, referrer.referral_code, telegram_id=100, reseller_owner_id=999))
+        self.assertIsNone(await find_registration_referrer(self.session, referrer.referral_code, telegram_id=100, reseller_owner_id=other_shop.id))
 
     def message(self, text, tid=200):
         return Message(

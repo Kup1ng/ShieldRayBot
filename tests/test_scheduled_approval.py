@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -11,10 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, Order, Payment, PaymentReceiptFingerprint, Role
@@ -29,6 +27,7 @@ from app.services.scheduled_approval import (
     shops_with_waiting_receipts,
 )
 from app.services.users import DEFAULT_SETTINGS, SETTING_GROUPS
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 NOW = datetime(2026, 11, 1, 12, 0, tzinfo=timezone.utc)
@@ -63,7 +62,7 @@ class RuleTests(unittest.TestCase):
 class ApprovalTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'a.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -401,26 +400,25 @@ class SettingsLayoutTests(unittest.TestCase):
 
         for key in ("auto_approve_after_minutes", "auto_approve_after_max_amount", "auto_approve_after_returning_only"):
             self.assertEqual(SETTING_VISIBILITY[key], ("auto_approve_payments", ("1",)))
-        order = [row[0] for row in SETTING_GROUPS["روش‌های پرداخت"]]
-        card = order.index("pay_card_enabled")
+        # Receipt approval rules sit together in «رسیدها», the timed rules right after the switch.
+        order = [row[0] for row in SETTING_GROUPS["رسیدها"]]
         self.assertEqual(
-            order[card : card + 7],
+            order[:4],
             [
-                "pay_card_enabled",
                 "auto_approve_payments",
                 "auto_approve_after_minutes",
                 "auto_approve_after_max_amount",
                 "auto_approve_after_returning_only",
-                "pay_card_auto_enabled",
-                "pay_bbc_enabled",
             ],
         )
 
     def test_the_settings_tab_for_the_web_app_is_named_after_the_brand(self) -> None:
         from jinja2 import Environment, FileSystemLoader
 
+        from app.services.settings_hub import system_hub_sections
+
         env = Environment(loader=FileSystemLoader(ROOT / "app/web/templates"), autoescape=True)
-        html = env.from_string("{% from '_panel_settings_tabs.html' import panel_settings_tabs %}{{ panel_settings_tabs('pwa') }}").render()
+        html = env.from_string("{% from '_settings_hub.html' import settings_hub %}{{ settings_hub(s) }}").render(s=system_hub_sections())
         self.assertIn("ظاهر و برند", html)
         self.assertNotIn("وب‌اپ", html)
 
@@ -434,7 +432,7 @@ class MigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("receipt_at_migration", ROOT / "alembic/versions/0075_payment_receipt_at.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE payments (id INTEGER PRIMARY KEY, status TEXT, amount INTEGER)"))
             conn.execute(text("INSERT INTO payments VALUES (1, 'pending', 90000)"))

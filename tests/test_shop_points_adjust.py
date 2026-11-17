@@ -14,7 +14,7 @@ import httpx
 import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import app.services.shop_points_adjust as points_module
 from app.services.shop_manual_adjust import ManualAdjustError
@@ -24,6 +24,7 @@ from app.services.shop_points_adjust import (
     points_adjust_shop,
     shop_points_form_context,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SHOP_A = 81
@@ -75,9 +76,7 @@ class PointsDbHarness(unittest.IsolatedAsyncioTestCase):
         from app.db.models import BotUser, BotUserShop, ResellerProfile
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'points.db'}", connect_args={"timeout": 15}
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -206,10 +205,12 @@ class OwnerPointsFormTests(PointsDbHarness):
         key = secrets.token_hex(16)
         async with self.Session() as session:
             user = await session.get(BotUser, 101)
-            await admin_adjust_points(session, user, 5, reason="fix", admin_identity="root", shop_id=None, request_key=key)
+            first = await admin_adjust_points(session, user, 5, reason="fix", admin_identity="root", shop_id=None, request_key=key)
         async with self.Session() as session:
             user = await session.get(BotUser, 101)
-            await admin_adjust_points(session, user, 5, reason="fix", admin_identity="root", shop_id=None, request_key=key)
+            again = await admin_adjust_points(session, user, 5, reason="fix", admin_identity="root", shop_id=None, request_key=key)
+        self.assertFalse(first.replayed)
+        self.assertTrue(again.replayed)
         self.assertEqual(await self._points(101, None), 45)
 
 
@@ -221,7 +222,7 @@ class PointsMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("points_days", ROOT / "alembic/versions/0080_shop_points_adjust_days.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             migration.upgrade()
             migration.upgrade()

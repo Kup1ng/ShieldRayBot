@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# PGClockBot — single entry CLI (Ubuntu 22.04+)
+# ShieldRay — single entry CLI (Ubuntu 22.04+)
 # Usage:
 #   bash pgclock.sh
 #   bash pgclock.sh install|update|env|web|service|uninstall|status|help
@@ -1469,7 +1469,7 @@ install_restart_helper() {
   cp "$ctl_src" "$tmp_ctl"
   chmod 755 "$tmp_ctl"
   cat > "$tmp_sudoers" <<EOF
-# Managed by PGClockBot — passwordless service control for panel SSL/updates/CLI
+# Managed by ShieldRay — passwordless service control for panel SSL/updates/CLI
 ${service_user} ALL=(root) NOPASSWD: ${ctl_dst} *
 ${service_user} ALL=(root) NOPASSWD: /bin/systemctl start ${SERVICE_NAME}, /usr/bin/systemctl start ${SERVICE_NAME}, /bin/systemctl stop ${SERVICE_NAME}, /usr/bin/systemctl stop ${SERVICE_NAME}, /bin/systemctl restart ${SERVICE_NAME}, /usr/bin/systemctl restart ${SERVICE_NAME}, /bin/systemctl try-restart ${SERVICE_NAME}, /usr/bin/systemctl try-restart ${SERVICE_NAME}, /bin/systemctl enable ${SERVICE_NAME}, /usr/bin/systemctl enable ${SERVICE_NAME}, /bin/systemctl is-active ${SERVICE_NAME}, /usr/bin/systemctl is-active ${SERVICE_NAME}
 EOF
@@ -1499,7 +1499,7 @@ install_systemd() {
   local start_now="${2:-1}"
   local content
   content="[Unit]
-Description=PGClockBot — PasarGuard Telegram shop
+Description=ShieldRay — PasarGuard Telegram shop
 After=network.target postgresql.service
 Wants=postgresql.service
 
@@ -2304,7 +2304,7 @@ cmd_doctor() {
 cmd_help() {
   cat <<EOF
 
-  MrClockBot manager (PGClockBot)
+  ShieldRay manager
 
   Usage:
     bash pgclock.sh                 Interactive menu
@@ -2355,7 +2355,7 @@ banner() {
      |_|  |_|_|   \____|_|\___/ \___|_|\_\____/ \___/ \__|
 ART
     printf '%s\n' "$N"
-    printf '  %sPasarGuard Telegram Shop · CLI manager · stable 0.5%s\n' "$D" "$N"
+    printf '  %sPasarGuard Telegram Shop · CLI manager · stable 0.6%s\n' "$D" "$N"
     echo ""
   } > /dev/tty
 }
@@ -2365,9 +2365,9 @@ banner_small() {
     echo ""
     printf '%s──────────────────────────────────────────────%s\n' "$O" "$N"
     if [[ -n "${1:-}" ]]; then
-      printf '%s  MrClockBot%s  ·  %s%s%s  ·  v%s\n' "$O" "$N" "$B" "$1" "$N" "$(read_app_version)"
+      printf '%s  ShieldRay%s  ·  %s%s%s  ·  v%s\n' "$O" "$N" "$B" "$1" "$N" "$(read_app_version)"
     else
-      printf '%s  MrClockBot%s  ·  v%s\n' "$O" "$N" "$(read_app_version)"
+      printf '%s  ShieldRay%s  ·  v%s\n' "$O" "$N" "$(read_app_version)"
     fi
     printf '%s──────────────────────────────────────────────%s\n' "$O" "$N"
     echo ""

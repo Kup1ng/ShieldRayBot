@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import re
 from pathlib import Path
 from types import ModuleType
 
@@ -23,6 +22,7 @@ from app.services.connection_status_texts import (
     CONNECTION_STATUS_MENU_KEY, LEGACY_MONITOR_TEXTS, MONITOR_TEXT_DEFAULTS, readable_monitor_texts,
 )
 from app.services.users import DEFAULT_SETTINGS
+from tests.settings_json import settings_url
 from tests.test_update_owner_only import OWNER_SESSION, RoutesHarness
 
 NEW_LABEL = "📡 وضعیت سرورها"
@@ -135,11 +135,11 @@ class StatusMenuDefaultTests(MonitorDatabaseCase):
 
 class MenuEditorOffersTheButtonFromTheStorageTests(RoutesHarness):
     async def test_a_default_menu_lists_the_status_button_in_the_storage_not_the_active_list(self) -> None:
-        response = await self.call(OWNER_SESSION, "GET", "/settings?tab=menu")
+        response = await self.call(OWNER_SESSION, "GET", settings_url("menu"))
         self.assertEqual(response.status_code, 200)
-        html = response.text
-        active = html.split('id="active-list"', 1)[1].split('id="pool-list"', 1)[0]
-        pool = html.split('id="pool-list"', 1)[1]
-        self.assertNotIn(f'data-key="{CONNECTION_STATUS_MENU_KEY}"', active)
-        self.assertIn(f'data-key="{CONNECTION_STATUS_MENU_KEY}"', pool)
-        self.assertEqual(len(re.findall(r'data-key="shop"', active)), 1)
+        extra = response.json()["extra"]
+        active = [item["key"] for item in extra["items"]]
+        pool = [item["key"] for item in extra["pool"]]
+        self.assertNotIn(CONNECTION_STATUS_MENU_KEY, active)
+        self.assertIn(CONNECTION_STATUS_MENU_KEY, pool)
+        self.assertEqual(active.count("shop"), 1)

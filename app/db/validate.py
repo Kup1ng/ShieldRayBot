@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import create_engine, inspect, text
+from sqlalchemy import create_engine, func, inspect, select, text
 from sqlalchemy.engine import Engine
 
 from app.db import Base
@@ -105,33 +105,33 @@ def table_counts(engine: Engine) -> dict[str, int]:
 
 
 def scan_varchar_overflows(engine: Engine) -> list[dict[str, Any]]:
-    """Find string values that exceed declared VARCHAR lengths (SQLite does not enforce)."""
+    """Find string values longer than their VARCHAR (a SQLite source never enforced the length).
+
+    Rows are named by the table's primary key, which is not always ``id`` (some tables have a
+    composite key); only the offending rows are fetched. Columns an older source schema does not
+    have yet are skipped.
+    """
     violations: list[dict[str, Any]] = []
     insp = inspect(engine)
     with engine.connect() as conn:
         for table in Base.metadata.sorted_tables:
             if not insp.has_table(table.name):
                 continue
+            present = {column["name"] for column in insp.get_columns(table.name)}
+            key = [column for column in table.primary_key.columns if column.name in present]
+            if not key:
+                continue
             for col in table.columns:
-                if not hasattr(col.type, "length") or not col.type.length:
+                length = getattr(col.type, "length", None)
+                if not length or col.name not in present:
                     continue
-                length = int(col.type.length)
-                # dialect-agnostic length check via Python after fetch is safer for SQLite
-                rows = conn.execute(
-                    text(f"SELECT id, {col.name} AS v FROM {table.name} WHERE {col.name} IS NOT NULL")
-                ).fetchall()
-                for row in rows:
-                    val = row.v
-                    if isinstance(val, str) and len(val) > length:
-                        violations.append(
-                            {
-                                "table": table.name,
-                                "column": col.name,
-                                "id": row.id,
-                                "length": len(val),
-                                "max": length,
-                            }
-                        )
+                query = select(*key, col.label("v")).where(col.is_not(None), func.length(col) > int(length))
+                for row in conn.execute(query):
+                    values = row._mapping
+                    row_key = values[key[0].name] if len(key) == 1 else {c.name: values[c.name] for c in key}
+                    violations.append(
+                        {"table": table.name, "column": col.name, "id": row_key, "length": len(row.v), "max": int(length)}
+                    )
     return violations
 
 

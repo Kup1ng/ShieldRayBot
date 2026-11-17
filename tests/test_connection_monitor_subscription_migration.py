@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import os
-import secrets
-import tempfile
 import unittest
 from pathlib import Path
 from types import ModuleType
@@ -14,7 +11,8 @@ import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import create_async_engine
+
+from tests.pgtest import pg_sync_engine
 
 
 def load_migration(name: str) -> ModuleType:
@@ -25,24 +23,14 @@ def load_migration(name: str) -> ModuleType:
     return module
 
 
-class SubscriptionMigrationTests(unittest.IsolatedAsyncioTestCase):
-    async def test_repeat_upgrade_and_downgrade_keep_legacy_and_new_rows_with_foreign_keys(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="pgclock-subscription-migration-") as folder:
-            url = os.environ.get("PGCLOCK_CONNECTION_TEST_URL") or f"sqlite+aiosqlite:///{Path(folder) / 'existing.db'}"
-            engine = create_async_engine(url)
-            schema = "subscription_migration_" + secrets.token_hex(8)
-            try:
-                async with engine.begin() as connection:
-                    if connection.dialect.name == "postgresql":
-                        await connection.execute(sa.text(f'CREATE SCHEMA "{schema}"'))
-                        await connection.execute(sa.text(f'SET LOCAL search_path TO "{schema}"'))
-                    else:
-                        await connection.execute(sa.text("PRAGMA foreign_keys=ON"))
-                    await connection.run_sync(self.check_migration)
-                    if connection.dialect.name == "postgresql":
-                        await connection.execute(sa.text(f'DROP SCHEMA "{schema}" CASCADE'))
-            finally:
-                await engine.dispose()
+class SubscriptionMigrationTests(unittest.TestCase):
+    def test_repeat_upgrade_and_downgrade_keep_legacy_and_new_rows_with_foreign_keys(self) -> None:
+        engine = pg_sync_engine()
+        try:
+            with engine.begin() as connection:
+                self.check_migration(connection)
+        finally:
+            engine.dispose()
 
     def check_migration(self, connection: sa.Connection) -> None:
         migration = load_migration("0058_monitor_subscription_configs")
@@ -83,6 +71,3 @@ class SubscriptionMigrationTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(columns["pg_host_id"]["nullable"])
             migration.upgrade()
             self.assertEqual(connection.execute(sa.text("SELECT count(*) FROM connection_monitor_snapshots")).scalar_one(), 2)
-            if connection.dialect.name == "sqlite":
-                self.assertEqual(connection.execute(sa.text("PRAGMA foreign_keys")).scalar_one(), 1)
-                self.assertEqual(connection.execute(sa.text("PRAGMA foreign_key_check")).all(), [])

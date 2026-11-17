@@ -93,7 +93,7 @@ class UsersOpsUnitTests(unittest.TestCase):
 class UsersOpsUiTests(unittest.TestCase):
     def test_template_has_ops_chrome(self):
         users = (ROOT / "app/web/templates/users.html").read_text(encoding="utf-8")
-        self.assertIn("users-ops-overview", users)
+        self.assertNotIn("stat_strip(", users)
         self.assertIn("alert-dot", users)
         self.assertIn("badge-risk", users)
         self.assertIn("cell-name-tags", users)
@@ -148,8 +148,9 @@ class UsersOpsUiTests(unittest.TestCase):
         self.assertIn(".badge.badge-risk", css)
         self.assertNotIn(".risk-dot {", css)
 
-        base = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
-        self.assertIn("مشتریان", base)
+        from tests.sidebar_view import sidebar
+
+        self.assertIn(("مشتریان", "/users"), sidebar("reseller", perms=("dashboard",))["shop"])
 
     def test_action_center_deep_link(self):
         ux = (ROOT / "app/services/ux20.py").read_text(encoding="utf-8")
@@ -157,11 +158,16 @@ class UsersOpsUiTests(unittest.TestCase):
         self.assertIn('filter_key="expiring"', ux)
 
     def test_api_scoped_users_page(self):
+        # The list's data is gathered in one service the JSON endpoint serves; the page route
+        # and the endpoint keep the same dashboard permission.
         api = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
         self.assertIn("require_perm(\"dashboard\")", api)
-        self.assertIn("scoped_users_where", api)
-        self.assertIn("build_users_ops_page", api)
-        self.assertIn("can_manage_users", api)
+        endpoint = (ROOT / "app/api/panel_users_api.py").read_text(encoding="utf-8")
+        self.assertIn("PAGE_PERMISSION = \"dashboard\"", endpoint)
+        view = (ROOT / "app/services/users_list_view.py").read_text(encoding="utf-8")
+        self.assertIn("scoped_users_where", view)
+        self.assertIn("build_users_ops_page", view)
+        self.assertIn("is_explicit_owner_staff", view)
 
     def test_edit_modal_open_hook(self):
         users = (ROOT / "app/web/templates/users.html").read_text(encoding="utf-8")

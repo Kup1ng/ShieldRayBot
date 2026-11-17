@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 from app.db.models import (
@@ -29,6 +26,7 @@ from app.db.models import (
 from app.services.open_psp_checkouts import PSP_CHECKOUT_REUSE_WINDOW
 from app.services.orders import start_method_payment
 from app.services.payment_settlement import CHANNEL_PSP, idem_key_psp, settle_and_approve
+from tests.pgtest import pg_engine
 
 AMOUNT = 50_000
 
@@ -36,7 +34,7 @@ AMOUNT = 50_000
 class OpenPspCheckoutPaymentTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 't.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)

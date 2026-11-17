@@ -6,7 +6,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import MagicMock, patch
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import (
     Base,
@@ -25,6 +25,7 @@ from app.services.admin_counters import (
     with_badge,
 )
 from app.services.numbers import to_fa_digits
+from tests.pgtest import pg_engine
 
 
 class ToFaDigitsTests(unittest.TestCase):
@@ -93,7 +94,7 @@ class KeyboardBadgeTests(unittest.TestCase):
 
 class PendingCountsIsolationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session: AsyncSession = async_sessionmaker(
@@ -191,6 +192,11 @@ class PendingCountsIsolationTests(unittest.IsolatedAsyncioTestCase):
                     pg_username="plat1",
                     pg_user_id=1,
                 ),
+            ]
+        )
+        await self.session.flush()
+        self.session.add_all(
+            [
                 ServiceCancellation(
                     id=1,
                     service_id=1,
@@ -250,6 +256,11 @@ class PendingCountsIsolationTests(unittest.IsolatedAsyncioTestCase):
                     pg_username="s11",
                     pg_user_id=11,
                 ),
+            ]
+        )
+        await self.session.flush()
+        self.session.add_all(
+            [
                 ServiceCancellation(
                     id=11,
                     service_id=11,
@@ -300,6 +311,11 @@ class PendingCountsIsolationTests(unittest.IsolatedAsyncioTestCase):
                     pg_username="s21",
                     pg_user_id=21,
                 ),
+            ]
+        )
+        await self.session.flush()
+        self.session.add_all(
+            [
                 ServiceCancellation(
                     id=21,
                     service_id=21,

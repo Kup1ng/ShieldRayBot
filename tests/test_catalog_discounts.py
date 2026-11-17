@@ -3,13 +3,9 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import os
 import secrets
-import tempfile
 import unittest
 from dataclasses import replace
-from html.parser import HTMLParser
-from urllib.parse import parse_qs, urlsplit
 from datetime import datetime, timedelta, timezone
 from collections.abc import AsyncIterator
 from pathlib import Path
@@ -21,10 +17,8 @@ from alembic.migration import MigrationContext
 from alembic.operations import Operations
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from jinja2 import DictLoader, Environment, FileSystemLoader, ChoiceLoader, select_autoescape
-from sqlalchemy import create_engine, func, inspect, select, text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.schema import CreateSchema, DropSchema
+from sqlalchemy import func, inspect, select, text
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.catalog_discounts import register_catalog_discounts
 from app.api.miniapp_feeds import catalog_plans_payload
@@ -35,7 +29,7 @@ from app.db.models import (
 from app.services.campaigns import campaign_send_delay, process_campaign
 from app.services.catalog_discounts import DiscountInput, create_discount, pause_expired_announcements, stop_discount
 from app.services.catalog_pricing import PriceTarget, active_discounts, displayed_quote, price_html, quote_price, quote_product
-from app.services.formatting import format_expire_short, format_money, format_number
+from app.services.formatting import format_number
 from app.services.gift_codes import expiry_input
 from app.services.orders import create_custom_order, create_order, create_wholesale_order, get_catalog_plan, renew_service_with_plan
 from app.services.service_addons import create_addon_order
@@ -44,40 +38,19 @@ from app.services.checkout_summary import checkout_summary
 from app.services.shop_scope import ShopScopeError
 from app.services.users import _SETTINGS_CACHE, reset_shop_reseller_id, set_shop_reseller_id
 
+from tests.pgtest import pg_engine, pg_sync_engine
+
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
 SHOP = {"role": "reseller", "bot_user_id": 2, "permissions": ["catalog_discounts"]}
 OTHER_SHOP = {**SHOP, "bot_user_id": 3}
 
 
-class ScriptSources(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.sources: list[str] = []
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        source = dict(attrs).get("src")
-        if tag == "script" and source:
-            self.sources.append(source)
-
-
 class CatalogDiscountTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.tmp = tempfile.TemporaryDirectory()
-        test_url = os.environ.get("PGCLOCKBOT_CATALOG_TEST_URL")
-        self.admin_engine = None
-        if test_url:
-            self.schema = "catalog_test_" + secrets.token_hex(8)
-            self.admin_engine = create_async_engine(test_url)
-            async with self.admin_engine.begin() as connection:
-                await connection.execute(CreateSchema(self.schema))
-            self.engine = create_async_engine(test_url, connect_args={"server_settings": {"search_path": self.schema}})
-        else:
-            self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.tmp.name}/discounts.db")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
-            if not test_url:
-                await connection.execute(text("PRAGMA foreign_keys=ON"))
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
         self.session = self.Session()
         self.token = set_shop_reseller_id(None)
@@ -111,8 +84,6 @@ class CatalogDiscountTests(unittest.IsolatedAsyncioTestCase):
         await self.session.flush()
         self.service = UserService(id=1, bot_user_id=1, pg_user_id=10, pg_username="buyer", plan_id=1)
         self.session.add(self.service)
-        if test_url:
-            await self.session.execute(text("SELECT setval(pg_get_serial_sequence('plans', 'id'), (SELECT max(id) FROM plans))"))
         await self.session.commit()
         self.contact = patch("app.services.orders.require_purchase_contact", AsyncMock())
         self.contact.start()
@@ -121,13 +92,8 @@ class CatalogDiscountTests(unittest.IsolatedAsyncioTestCase):
         self.contact.stop()
         await self.session.close()
         await self.engine.dispose()
-        if self.admin_engine:
-            async with self.admin_engine.begin() as connection:
-                await connection.execute(DropSchema(self.schema, cascade=True))
-            await self.admin_engine.dispose()
         reset_shop_reseller_id(self.token)
         _SETTINGS_CACHE.clear()
-        self.tmp.cleanup()
 
     def data(self, **kwargs: object) -> DiscountInput:
         return replace(DiscountInput(
@@ -310,15 +276,10 @@ class CatalogDiscountTests(unittest.IsolatedAsyncioTestCase):
         item = next(item for item in payload["plans"] if item["id"] == 1)
         self.assertEqual((item["price"], item["original_price"]), (80, 100))
         self.assertIsNotNone(item["discount_ends_at"])
-        env = Environment(loader=FileSystemLoader(ROOT / "app/web/templates"), autoescape=select_autoescape())
-        parser = ScriptSources()
-        parser.feed(env.get_template("miniapp.html").render(app_version="test"))
-        core = next(url for url in parser.sources if urlsplit(url).path == "/static/miniapp/app.js")
-        prices = next(url for url in parser.sources if urlsplit(url).path == "/static/catalog_price.js")
-        self.assertEqual(parse_qs(urlsplit(core).query).get("discounts"), ["1"])
-        self.assertLess(parser.sources.index(prices), parser.sources.index(core))
 
-    async def test_management_page_escapes_titles_and_rejects_other_shop_stop(self) -> None:
+    async def test_management_data_keeps_titles_as_data_and_rejects_other_shop_stop(self) -> None:
+        from app.api.panel_catalog_api import register_panel_catalog_api
+
         row = await self.create(SHOP, title="<img src=x onerror=alert(1)>", notify=False)
         app = FastAPI()
         staff = SHOP
@@ -326,27 +287,29 @@ class CatalogDiscountTests(unittest.IsolatedAsyncioTestCase):
             return staff
         async def db() -> AsyncIterator[AsyncSession]:
             yield self.session
-        env = Environment(loader=ChoiceLoader([
-            DictLoader({"base.html": "{% block content %}{% endblock %}"}),
-            FileSystemLoader(ROOT / "app/web/templates"),
-        ]), autoescape=select_autoescape())
-        env.filters["expire"] = format_expire_short
-        env.filters["num"] = format_number
-        env.filters["money"] = format_money
         def render(request: Request, name: str, context: dict) -> HTMLResponse:
-            return HTMLResponse(env.get_template(name).render(request=request, csrf_token="token", **context))
+            raise AssertionError("the discounts page is the React shell now")
         register_catalog_discounts(app, render=render, require_staff=auth, get_db=db)
+        register_panel_catalog_api(
+            app, require_staff=auth, require_admin=auth, require_perm=lambda _p: auth, require_pg_perm=lambda _p: auth, get_db=db,
+        )
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
-            response = await client.get("/catalog-discounts")
+            response = await client.get("/api/panel/catalog-discounts")
             self.assertEqual(response.status_code, 200)
-            self.assertIn("&lt;img", response.text)
-            self.assertNotIn("<img", response.text)
+            self.assertTrue(response.headers["content-type"].startswith("application/json"))
+            body = response.json()
+            # The title is data for the React page, which renders it as text.
+            self.assertEqual([r["title"] for r in body["rows"]], ["<img src=x onerror=alert(1)>"])
+            self.assertEqual(len(body["request_key"]), 32)
             staff = OTHER_SHOP
+            other = (await client.get("/api/panel/catalog-discounts")).json()
+            self.assertEqual(other["rows"], [])
             response = await client.post(f"/catalog-discounts/{row.id}/stop")
             self.assertEqual(response.status_code, 303)
             await self.session.refresh(row)
             self.assertTrue(row.is_active)
             staff = {"role": "reseller", "bot_user_id": 2, "permissions": []}
+            self.assertEqual((await client.get("/api/panel/catalog-discounts")).status_code, 403)
             self.assertEqual((await client.get("/catalog-discounts")).status_code, 403)
 
 
@@ -417,13 +380,8 @@ class CatalogDiscountMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("catalog_discount_migration", ROOT / "alembic/versions/0046_catalog_discounts.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        test_url = os.environ.get("PGCLOCKBOT_CATALOG_TEST_URL")
-        engine = create_engine(test_url.replace("+asyncpg", "+psycopg") if test_url else "sqlite://")
-        schema = "catalog_migration_" + secrets.token_hex(8)
+        engine = pg_sync_engine()
         with engine.begin() as connection:
-            if test_url:
-                connection.execute(CreateSchema(schema))
-                connection.execute(text("SELECT set_config('search_path', :schema, true)"), {"schema": schema})
             for table in ("bot_users", "plans", "plan_categories", "targeted_campaigns"):
                 connection.execute(text(f"CREATE TABLE {table} (id INTEGER PRIMARY KEY)"))
                 connection.execute(text(f"INSERT INTO {table} (id) VALUES (1)"))
@@ -436,6 +394,4 @@ class CatalogDiscountMigrationTests(unittest.TestCase):
                 self.assertEqual(connection.scalar(text("SELECT id FROM plans")), 1)
                 migration.upgrade()
                 self.assertIn("ix_catalog_discounts_shop_active", {item["name"] for item in inspect(connection).get_indexes("catalog_discounts")})
-            if test_url:
-                connection.execute(DropSchema(schema, cascade=True))
         engine.dispose()

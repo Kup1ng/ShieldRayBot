@@ -60,12 +60,18 @@ class NotAdminRedirectTests(unittest.TestCase):
 
 class ResetRevokePermissionTests(unittest.TestCase):
     def test_reset_revoke_not_widened_by_update(self):
-        src = Path("app/api/pg_pages.py").read_text(encoding="utf-8")
-        self.assertIn('can_reset=actions["reset_usage"]', src)
-        self.assertIn('can_revoke=actions["revoke_sub"]', src)
-        self.assertNotIn('can_reset=actions["reset_usage"] or actions["update"]', src)
-        self.assertNotIn('acts["reset_usage"] or acts["update"]', src)
-        self.assertNotIn('acts["revoke_sub"] or acts["update"]', src)
+        """A staff member who may only update users is offered neither reset nor revoke."""
+        from app.services.pg_users_panel import capabilities, serialize_user
+        from app.services.pg_access import staff_user_actions
+
+        staff = {"role": "reseller", "bot_user_id": 2, "pg_admin_username": "shop", "pg_user_actions": {"update": True}}
+        can = capabilities(staff, has_groups=True, has_templates=True)
+        self.assertFalse(can["reset"])
+        self.assertFalse(can["revoke"])
+        self.assertTrue(can["modify"])
+        row = serialize_user({"id": 1, "username": "a", "status": "active"}, actions=staff_user_actions(staff), show_owner=False)
+        self.assertNotIn("reset", row["ops"])
+        self.assertNotIn("revoke", row["ops"])
 
 
 class RenewFallthroughTests(unittest.TestCase):
@@ -173,10 +179,21 @@ class OwnerSetFailureTests(unittest.TestCase):
         self.assertNotIn("مالکیت ست نشد", create_fn)
 
 
-class GroupEditAllowlistTests(unittest.TestCase):
-    def test_edit_group_checks_allowlist(self):
-        src = Path("app/api/pg_pages.py").read_text(encoding="utf-8")
-        self.assertIn("groups_allowed_for_staff(staff, [eid])", src)
+class GroupEditAllowlistTests(unittest.IsolatedAsyncioTestCase):
+    async def test_edit_group_checks_allowlist(self):
+        """Asking for a group outside the allow-list never reads that group from the panel."""
+        from app.services.pg_resources_panel import GROUP_OUT_OF_SCOPE, groups_page
+
+        pg = MagicMock()
+        pg.get_groups = AsyncMock(return_value=[{"id": 1, "name": "ok"}])
+        pg.get_inbounds = AsyncMock(return_value=[])
+        pg.get_group = AsyncMock(return_value={"id": 99, "name": "other"})
+        staff = {"role": "reseller", "bot_user_id": 2, "pg_admin_username": "shop", "pg_access": {"allowed_group_ids": [1]}}
+        with patch("app.services.pg_resources_panel.staff_pg_read_client", AsyncMock(return_value=pg)):
+            body = await groups_page(None, staff, edit="99")
+        self.assertEqual(body["error"], GROUP_OUT_OF_SCOPE)
+        self.assertIsNone(body["edit_group"])
+        pg.get_group.assert_not_awaited()
 
 
 class RsetupRemovedTests(unittest.TestCase):

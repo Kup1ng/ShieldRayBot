@@ -75,27 +75,27 @@ class OutboundSettingTextTests(unittest.TestCase):
         self.assertGreater(kw["entities"][0].offset, 2)
 
     def test_shop_title_raw_preserves_premium_emoji_no_hardcoded_prefix(self):
-        title_body = "کلاک🐸"
+        title_body = "شیلدری🐸"
         ent = MessageEntity(
-            type="custom_emoji", offset=4, length=2, custom_emoji_id="pepe1"
+            type="custom_emoji", offset=6, length=2, custom_emoji_id="pepe1"
         )
         packed = pack_rich_text(title_body, [ent])
         text, kw = outbound_setting_text("بدنه پیام", title_raw=packed)
         self.assertIn("entities", kw)
         self.assertEqual(kw.get("parse_mode"), None)
         self.assertEqual(kw["entities"][0].custom_emoji_id, "pepe1")
-        self.assertEqual(kw["entities"][0].offset, 4)
-        self.assertTrue(text.startswith("کلاک"))
+        self.assertEqual(kw["entities"][0].offset, 6)
+        self.assertTrue(text.startswith("شیلدری"))
 
     def test_plain_shop_title_is_exact_setting(self):
         from app.services.formatting import format_message
 
         text, kw = outbound_setting_text(
             "بدنه پیام",
-            title_raw="کلاک بات",
+            title_raw="شیلدری",
         )
         self.assertEqual(kw, {})
-        self.assertEqual(text, format_message("کلاک بات", "بدنه پیام"))
+        self.assertEqual(text, format_message("شیلدری", "بدنه پیام"))
 
     def test_home_render_has_no_hardcoded_title_emoji(self):
         from pathlib import Path

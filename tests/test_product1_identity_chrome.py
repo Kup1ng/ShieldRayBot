@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 import app.db.models  # noqa: F401
@@ -29,6 +29,7 @@ from app.services.principal_lifecycle import (
     enable_level1_principal,
 )
 from app.services.secret_box import encrypt_secret
+from tests.pgtest import pg_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -272,11 +273,13 @@ class PrincipalPageSourceContracts(unittest.TestCase):
         self.assertNotIn('name="depth"', tpl)
 
     def test_nav_owner_only_and_not_reseller_label(self) -> None:
-        base = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
-        self.assertIn("نمایندگان من", base)
-        self.assertIn('href="/resellers"', base)
-        self.assertNotIn('href="/principals"', base)
-        self.assertIn("ident.can_add_representative", base)
+        from tests.sidebar_view import owner_sidebar, sidebar
+
+        shop = sidebar("reseller", perms=("dashboard",), add_rep=True)["shop"]
+        self.assertIn(("نمایندگان من", "/resellers"), shop)
+        self.assertNotIn("نمایندگان من", [label for label, _ in sidebar("reseller", perms=("dashboard",))["shop"]])
+        every_href = [h for nav in (shop, *owner_sidebar().values()) for _, h in nav]
+        self.assertNotIn("/principals", every_href)
 
     def test_identity_chrome_labels_in_footer(self) -> None:
         base = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
@@ -292,7 +295,7 @@ class PrincipalPageSourceContracts(unittest.TestCase):
 
 class PrincipalManagementHttpTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(

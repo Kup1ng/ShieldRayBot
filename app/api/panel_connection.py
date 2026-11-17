@@ -10,6 +10,8 @@ from app.services.pg_read_resilience import finish_web_read_budget, web_read_bud
 
 # Automatic polling: honours a read pause but cannot start one for everyone.
 BACKGROUND_READ_PATHS = frozenset({"/pg/metrics"})
+# The React panel's data endpoints stand in for the server-rendered pages, so they get the same budget.
+PANEL_DATA_PREFIX = "/api/panel/"
 
 
 def finish_panel_authentication(request: Request) -> None:
@@ -24,7 +26,8 @@ class PanelConnectionMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         path = scope.get("path", "")
-        if scope["type"] != "http" or path.startswith(("/api/", "/static/")):
+        is_other_api = path.startswith("/api/") and not path.startswith(PANEL_DATA_PREFIX)
+        if scope["type"] != "http" or is_other_api or path.startswith("/static/"):
             await self.app(scope, receive, send)
             return
         with web_read_budget(background=path in BACKGROUND_READ_PATHS) as budget:

@@ -3,7 +3,7 @@
 Two separate Telegram behaviors commonly reported as «بک اندروید کار نمی‌کند»:
 
 1. Mini App: OS back only navigates in-app when ``WebApp.BackButton`` is shown
-   (behavior covered by ``tests/miniapp_app.test.cjs``).
+   (behavior covered by ``frontend/src/miniapp/layout/MiniShell.test.tsx``).
 2. Bot chat: with ``ReplyKeyboardMarkup.is_persistent=True``, Android often
    cannot dismiss the custom keyboard, so back never reaches the dialog list.
 """

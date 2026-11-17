@@ -225,11 +225,20 @@ class SchemaLinkFlagTests(unittest.TestCase):
     def test_model_and_migrate(self):
         from app.db.models import ResellerProfile
 
+        import sqlalchemy as sa
+
+        from app.db.alembic_runner import upgrade_head
+        from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, sync_url
+
         self.assertTrue(hasattr(ResellerProfile, "payg_wallet_linked"))
-        session_src = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("payg_wallet_linked", session_src)
-        alem = Path("alembic/versions/0006_payg_wallet_linked.py").read_text(encoding="utf-8")
-        self.assertIn("payg_wallet_linked", alem)
+        schema = ensure_schema(new_schema())
+        upgrade_head(sync_url(schema))
+        engine = pg_sync_engine(schema=schema)
+        try:
+            columns = {c["name"] for c in sa.inspect(engine).get_columns("reseller_profiles")}
+        finally:
+            engine.dispose()
+        self.assertIn("payg_wallet_linked", columns)
 
 
 if __name__ == "__main__":

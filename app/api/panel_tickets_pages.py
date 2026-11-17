@@ -4,59 +4,33 @@ from __future__ import annotations
 
 from urllib.parse import quote
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.spa_pages import spa_response
 from app.db.models import BotUser, Ticket
-from app.services.ticket_scope import staff_ticket_in_scope, ticket_shop_clause
+from app.services.ticket_scope import staff_ticket_in_scope
 from app.services.panel_tickets import (
-    PRIORITY_BADGE,
-    PRIORITY_LABELS,
-    STATUS_BADGE,
-    STATUS_LABELS,
     can_access_panel_tickets,
     create_ticket,
     get_ticket,
-    list_tickets,
-    mark_viewed,
     reply_ticket,
     resolve_ticket_attachment_path,
     save_ticket_attachment,
     set_status,
     sidebar_unread_count,
-    unread_from_tickets,
 )
-from app.services.shop_scope import is_platform_admin, shop_owner_id
+from app.services.redact import user_safe_error
+from app.services.shop_scope import is_platform_admin
+from app.services.tickets_panel import staff_can_manage_bot_tickets
 import logging
 
 logger = logging.getLogger(__name__)
 
-_OK_FLASH = {
-    "created": "تیکت ثبت شد",
-    "replied": "پاسخ ثبت شد",
-    "status": "وضعیت تیکت به‌روز شد",
-    "tg_replied": "پاسخ به کاربر در تلگرام ارسال شد",
-    "tg_closed": "تیکت کاربر بسته شد",
-}
-
-
-def _staff_can_manage_bot_tickets(staff: dict) -> bool:
-    if is_platform_admin(staff):
-        return True
-    return staff.get("role") == "reseller" and "tickets" in (staff.get("permissions") or [])
-
-
 async def _bot_ticket_in_scope(session: AsyncSession, staff: dict, ticket: Ticket) -> bool:
     """Tenant isolation for Telegram Ticket rows."""
     return staff_ticket_in_scope(staff, ticket)
-
-
-def _bot_user_label(user: BotUser | None, user_id: int) -> str:
-    from app.services.formatting import bot_user_panel_label
-
-    return bot_user_panel_label(user, fallback_id=user_id)
 
 
 async def _staff_sender_tg(session: AsyncSession, staff: dict) -> int:
@@ -105,188 +79,11 @@ async def _notify_bot_ticket_staff_reply(
 
 def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db) -> None:
     @app.get("/tickets", response_class=HTMLResponse)
-    async def tickets_page(
-        request: Request,
-        staff: dict = Depends(require_staff),
-        session: AsyncSession = Depends(get_db),
-        view: int | None = None,
-        tg: int | None = None,
-        new: int | None = None,
-    ):
+    async def tickets_page(staff: dict = Depends(require_staff)):
+        # The page is the React app; its data comes from /api/panel/tickets.
         if not can_access_panel_tickets(staff):
             return RedirectResponse("/home", status_code=303)
-
-        from app.services import tickets as bot_tickets
-
-        panel_tickets = await list_tickets(session, staff, limit=150)
-        tg_tickets: list[Ticket] = []
-        tg_users: dict[int, BotUser] = {}
-        show_tg = _staff_can_manage_bot_tickets(staff)
-        if show_tg:
-            if is_platform_admin(staff):
-                tg_tickets = list(
-                    (
-                        await session.execute(
-                            select(Ticket)
-                            .where(ticket_shop_clause(None))
-                            .order_by(Ticket.id.desc())
-                            .limit(100)
-                        )
-                    )
-                    .scalars()
-                    .all()
-                )
-            else:
-                rid = shop_owner_id(staff)
-                if rid:
-                    tg_tickets = list(
-                        (
-                            await session.execute(
-                                select(Ticket)
-                                .where(ticket_shop_clause(rid))
-                                .order_by(Ticket.id.desc())
-                                .limit(100)
-                            )
-                        )
-                        .scalars()
-                        .all()
-                    )
-            uids = {int(t.user_id) for t in tg_tickets if t.user_id}
-            if uids:
-                rows = (
-                    await session.execute(select(BotUser).where(BotUser.id.in_(uids)))
-                ).scalars().all()
-                tg_users = {int(u.id): u for u in rows}
-
-        active_ticket = None
-        if view is not None:
-            active_ticket = await get_ticket(session, staff, int(view))
-            if active_ticket is not None:
-                changed = await mark_viewed(session, staff, active_ticket)
-                if changed:
-                    for row in panel_tickets:
-                        if row.id == active_ticket.id:
-                            row.answered_unread = active_ticket.answered_unread
-                            row.owner_unread = active_ticket.owner_unread
-                            break
-
-        active_tg_ticket = None
-        active_tg_user = None
-        if tg is not None and show_tg:
-            active_tg_ticket = await bot_tickets.get_ticket(session, int(tg))
-            if active_tg_ticket is not None:
-                if not await _bot_ticket_in_scope(session, staff, active_tg_ticket):
-                    active_tg_ticket = None
-                else:
-                    active_tg_user = await session.get(BotUser, int(active_tg_ticket.user_id))
-
-        tickets_unread = unread_from_tickets(panel_tickets, staff)
-        request.state.panel_tickets_unread = tickets_unread
-
-        ok_key = (request.query_params.get("ok") or "").strip()
-        flash_ok = _OK_FLASH.get(ok_key, ok_key or None)
-        if request.query_params.get("saved") == "1" and not flash_ok:
-            flash_ok = "ذخیره شد."
-
-        open_supports = request.query_params.get("supports") in {"1", "true", "yes"}
-        supports_modal_tab = (request.query_params.get("stab") or "contacts").strip()
-        if supports_modal_tab not in {"contacts", "text"}:
-            supports_modal_tab = "contacts"
-
-        can_manage_supports = staff.get("role") == "admin" or (
-            staff.get("role") == "reseller" and "shop_settings" in (staff.get("permissions") or [])
-        )
-
-        tg_rows = [
-            {
-                "ticket": t,
-                "user_id": int(t.user_id),
-                "user_label": _bot_user_label(tg_users.get(int(t.user_id)), int(t.user_id)),
-            }
-            for t in tg_tickets
-        ]
-
-        ctx = {
-            "staff": staff,
-            "panel_tickets": panel_tickets,
-            "tg_tickets": tg_tickets,
-            "tg_rows": tg_rows,
-            "show_tg": show_tg,
-            "active_ticket": active_ticket,
-            "active_tg_ticket": active_tg_ticket,
-            "active_tg_user": active_tg_user,
-            "active_tg_user_label": _bot_user_label(
-                active_tg_user, int(active_tg_ticket.user_id) if active_tg_ticket else 0
-            ),
-            "open_new": bool(new),
-            "status_labels": STATUS_LABELS,
-            "priority_labels": PRIORITY_LABELS,
-            "status_badge": STATUS_BADGE,
-            "priority_badge": PRIORITY_BADGE,
-            "is_owner": is_platform_admin(staff),
-            "can_create": staff.get("role") in {"reseller", "pg_staff"},
-            "flash_ok": flash_ok,
-            "flash_err": request.query_params.get("err"),
-            "tickets_unread": tickets_unread,
-            "can_manage_supports": can_manage_supports,
-            "open_supports_modal": open_supports and can_manage_supports,
-            "supports_modal_tab": supports_modal_tab,
-            "support_contacts": [],
-            "support_contacts_json": "[]",
-            "values": {},
-            "support_text_tab_groups": [],
-            "support_text_groups": {},
-            "supports_save_action": "/supports/save",
-            "supports_delete_action": "/supports/delete",
-            "support_text_action": (
-                "/settings?tab=supports&next="
-                + quote("/tickets?supports=1&stab=text")
-            ),
-        }
-
-        if can_manage_supports:
-            from app.services.button_styles import item_button_style_options
-            from app.services.support_contacts import dump_support_contacts, get_support_contacts
-            from app.services.users import SETTING_GROUPS, TAB_SETTING_GROUPS, get_all_settings
-
-            ctx["item_style_options"] = item_button_style_options(
-                inherit_label="ارث از پشتیبانی"
-            )
-
-            # Owner settings only for real Owner. Missing shop scope → empty, never Owner fallback.
-            if is_platform_admin(staff):
-                ctx["support_contacts"] = await get_support_contacts(session, reseller_id=None)
-                ctx["support_contacts_json"] = dump_support_contacts(ctx["support_contacts"])
-                values = await get_all_settings(session)
-                ctx["values"] = values
-                names = TAB_SETTING_GROUPS.get("supports") or []
-                ctx["support_text_tab_groups"] = names
-                ctx["support_text_groups"] = {
-                    n: SETTING_GROUPS[n] for n in names if n in SETTING_GROUPS
-                }
-            else:
-                rid = shop_owner_id(staff)
-                if rid:
-                    ctx["support_contacts"] = await get_support_contacts(
-                        session, reseller_id=rid
-                    )
-                    ctx["support_contacts_json"] = dump_support_contacts(ctx["support_contacts"])
-                    values = await get_all_settings(session, reseller_id=rid)
-                    ctx["values"] = values
-                    names = TAB_SETTING_GROUPS.get("supports") or []
-                    ctx["support_text_tab_groups"] = names
-                    ctx["support_text_groups"] = {
-                        n: SETTING_GROUPS[n] for n in names if n in SETTING_GROUPS
-                    }
-                    ctx["supports_save_action"] = "/shop-supports/save"
-                    ctx["supports_delete_action"] = "/shop-supports/delete"
-                    ctx["support_text_action"] = (
-                        "/shop-settings?tab=supports&next="
-                        + quote("/tickets?supports=1&stab=text")
-                    )
-                # else: leave empty defaults — fail-closed
-
-        return render(request, "tickets.html", ctx)
+        return spa_response("tickets")
 
     @app.post("/tickets/panel/create")
     async def tickets_panel_create(
@@ -314,8 +111,9 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
             )
             return RedirectResponse(f"/tickets?ok=created&view={ticket.id}", status_code=303)
         except Exception as exc:
+            logger.warning("Ticket action failed", exc_info=True)
             return RedirectResponse(
-                f"/tickets?err={quote(str(exc))}&new=1",
+                f"/tickets?err={quote(user_safe_error(exc))}&new=1",
                 status_code=303,
             )
 
@@ -368,6 +166,7 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
             await reply_ticket(session, staff, ticket_id, body=body, attachment=att)
             return RedirectResponse(f"/tickets?ok=replied&view={ticket_id}", status_code=303)
         except Exception as exc:
+            logger.warning("Ticket action failed", exc_info=True)
             if att and att[0]:
                 path = resolve_ticket_attachment_path(att[0])
                 if path:
@@ -376,7 +175,7 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
                     except OSError:
                         pass
             return RedirectResponse(
-                f"/tickets?err={quote(str(exc))}&view={ticket_id}",
+                f"/tickets?err={quote(user_safe_error(exc))}&view={ticket_id}",
                 status_code=303,
             )
 
@@ -393,8 +192,9 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
             await set_status(session, staff, ticket_id, status=status)
             return RedirectResponse(f"/tickets?ok=status&view={ticket_id}", status_code=303)
         except Exception as exc:
+            logger.warning("Ticket action failed", exc_info=True)
             return RedirectResponse(
-                f"/tickets?err={quote(str(exc))}&view={ticket_id}",
+                f"/tickets?err={quote(user_safe_error(exc))}&view={ticket_id}",
                 status_code=303,
             )
 
@@ -407,7 +207,7 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
     ):
         from app.services import tickets as bot_tickets
 
-        if not _staff_can_manage_bot_tickets(staff):
+        if not staff_can_manage_bot_tickets(staff):
             return RedirectResponse("/tickets?err=" + quote("دسترسی ندارید"), status_code=303)
         text = (body or "").strip()
         if not text:
@@ -424,8 +224,9 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
                 session, ticket, text, sender_tg, is_staff=True
             )
         except Exception as exc:
+            logger.warning("Ticket action failed", exc_info=True)
             return RedirectResponse(
-                f"/tickets?err={quote(str(exc))}&tg={ticket_id}",
+                f"/tickets?err={quote(user_safe_error(exc))}&tg={ticket_id}",
                 status_code=303,
             )
         try:
@@ -450,7 +251,7 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
     ):
         from app.services import tickets as bot_tickets
 
-        if not _staff_can_manage_bot_tickets(staff):
+        if not staff_can_manage_bot_tickets(staff):
             return RedirectResponse("/tickets?err=" + quote("دسترسی ندارید"), status_code=303)
         ticket = await bot_tickets.get_ticket(session, int(ticket_id))
         if not ticket or not await _bot_ticket_in_scope(session, staff, ticket):
@@ -461,8 +262,9 @@ def register_panel_tickets_pages(app: FastAPI, *, render, require_staff, get_db)
                 f"/tickets?ok=tg_closed&tg={ticket_id}", status_code=303
             )
         except Exception as exc:
+            logger.warning("Ticket action failed", exc_info=True)
             return RedirectResponse(
-                f"/tickets?err={quote(str(exc))}&tg={ticket_id}",
+                f"/tickets?err={quote(user_safe_error(exc))}&tg={ticket_id}",
                 status_code=303,
             )
 

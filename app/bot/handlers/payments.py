@@ -12,8 +12,16 @@ from app.services.db_safe import rollback_quiet
 from app.services.delivery import send_delivery_to_user
 from app.services.formatting import format_message
 from app.services.notifications import notify_stars_delivery_failed
-from app.services.orders import approve_payment, reject_payment, stars_amount_for_toman
+from app.services.orders import (
+    DeliveryAttempt,
+    approve_payment,
+    hold_unknown_delivery_for_review,
+    reject_payment,
+    stars_amount_for_toman,
+)
 from app.services.resellers import reseller_can_review_payment
+from app.services.receipt_review import DEFAULT_REJECT_TEXT
+from app.services.support_button import support_markup
 from app.services.users import get_all_settings, get_setting
 from app.services.volume_allocation import is_hard_panel_rejection
 from app.services import bot_feedback_texts as feedback
@@ -64,6 +72,38 @@ async def stars_refund_is_safe(session: AsyncSession, payment: Payment, exc: Bas
         return False
     await session.refresh(order)
     return order.status != OrderStatus.DELIVERED.value and not order.service_mutation_pending
+
+
+async def _hold_stars_for_review(
+    message: Message,
+    session: AsyncSession,
+    payment: Payment,
+    db_user: BotUser,
+    *,
+    charge_id: str,
+    error: Exception,
+) -> None:
+    """Delivery outcome unknown: keep the Stars with the shop and let staff decide."""
+    logger.error(
+        "stars delivery outcome unknown payment=%s charge=%s", payment.id, charge_id, exc_info=error
+    )
+    order = await session.get(Order, payment.order_id) if payment.order_id else None
+    if order is not None:
+        await hold_unknown_delivery_for_review(session, order, error=str(error))
+    with keep_sent():  # the buyer must be able to find this notice again
+        await message.answer(
+            "پرداخت استارز دریافت شد اما نتیجه تحویل سرویس نیاز به بررسی پشتیبانی دارد.\n"
+            "دوباره پرداخت نکنید؛ شناسه پرداخت ثبت شد.",
+            reply_markup=support_markup(),
+        )
+    try:
+        await notify_stars_delivery_failed(
+            message.bot, session, payment, telegram_id=int(db_user.telegram_id),
+            charge_id=charge_id, refunded=False, held=True, error=str(error),
+        )
+    except Exception:
+        # Best-effort staff alert: the order is already listed under failed deliveries.
+        logger.warning("stars hold alert failed payment=%s", payment.id, exc_info=True)
 
 
 @router.pre_checkout_query()
@@ -162,15 +202,24 @@ async def stars_successful_payment(message: Message, session: AsyncSession, db_u
         else:
             await message.answer(
                 f"مبلغ استارز نامعتبر است (انتظار {expected_stars}، دریافت {sp.total_amount}). "
-                "بازگشت خودکار ناموفق بود — با پشتیبانی تماس بگیرید و شناسه پرداخت را بفرستید."
+                "بازگشت خودکار ناموفق بود — با پشتیبانی تماس بگیرید و شناسه پرداخت را بفرستید.",
+                reply_markup=support_markup(),
             )
         return
     payment.receipt_file_id = payment.receipt_file_id or f"stars:{charge_id}"
     payment.status = PaymentStatus.PENDING.value
     await session.commit()
+    attempt = DeliveryAttempt()
     try:
-        order = await approve_payment(session, payment, reviewer_tg=0)
+        order = await approve_payment(session, payment, reviewer_tg=0, attempt=attempt)
     except Exception as e:
+        if not session.is_active:
+            await rollback_quiet(session)
+        if attempt.panel_may_hold_account:
+            await _hold_stars_for_review(
+                message, session, payment, db_user, charge_id=charge_id, error=e
+            )
+            return
         logging.getLogger(__name__).error(
             "stars delivery failed payment=%s charge=%s err=%s",
             payment.id,
@@ -179,8 +228,6 @@ async def stars_successful_payment(message: Message, session: AsyncSession, db_u
             exc_info=True,
         )
         buyer_tg = int(db_user.telegram_id)
-        if not session.is_active:
-            await rollback_quiet(session)
         refund_safe = await stars_refund_is_safe(session, payment, e)
         refunded = refund_safe and await _refund_stars_charge(
             message.bot,
@@ -210,7 +257,8 @@ async def stars_successful_payment(message: Message, session: AsyncSession, db_u
             else:
                 await message.answer(
                     "پرداخت استارز دریافت شد ولی تحویل ناموفق بود.\n"
-                    "بازگشت خودکار ناموفق بود — با پشتیبانی تماس بگیرید؛ شناسه پرداخت ثبت شد."
+                    "بازگشت خودکار ناموفق بود — با پشتیبانی تماس بگیرید؛ شناسه پرداخت ثبت شد.",
+                    reply_markup=support_markup(),
                 )
         try:
             await notify_stars_delivery_failed(
@@ -389,26 +437,17 @@ async def pay_reject(callback: CallbackQuery, session: AsyncSession, db_user: Bo
     if user:
         from app.services.rich_text import outbound_setting_text
 
-        reject_body = ui.get("payment_reject_text") or (
-            "پرداخت شما رد شد. اگر اشتباهی رخ داده با پشتیبانی در تماس باشید."
-        )
+        reject_body = ui.get("payment_reject_text") or DEFAULT_REJECT_TEXT
         text, send_kw = outbound_setting_text(
             reject_body, title="❌ پرداخت رد شد"
         )
         try:
-            from app.bot.menu_nav import buyer_main_reply_keyboard
-
-            main_kb, _ = await buyer_main_reply_keyboard(
-                session,
-                user,
-                is_reseller_bot=False,
-                reseller_owner_id=None,
-            )
+            # An inline button under the notice; the buyer's main keyboard stays as it is.
             with keep_sent():  # a notice or review item, never a temporary panel
                 await callback.bot.send_message(
                     user.telegram_id,
                     text,
-                    reply_markup=main_kb,
+                    reply_markup=support_markup(),
                     **{"parse_mode": "HTML", **send_kw},
                 )
         except Exception:

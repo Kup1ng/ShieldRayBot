@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select
 
@@ -167,10 +165,11 @@ class SettingScreenTests(RoutesHarness):
         return await self.client.request(method, path, headers=headers, data=data)
 
     async def test_the_owner_sees_the_switch_and_can_save_it(self):
-        page = await self.request("GET", "/finance?tab=orders&settings=payment")
+        page = await self.request("GET", "/api/panel/finance/settings")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("s_payment_cards_random", page.text)
-        self.assertIn("نمایش کارت تصادفی", page.text)
+        fields = {f["key"]: f for g in page.json()["groups"]["payment"] for f in g["fields"]}
+        self.assertEqual(fields["payment_cards_random"]["kind"], "toggle")
+        self.assertEqual(fields["payment_cards_random"]["label"], "نمایش کارت تصادفی")
         saved = await self.request("POST", "/settings?tab=payment", {"s_payment_cards_random": "1"})
         self.assertEqual(saved.status_code, 303)
         from sqlalchemy.ext.asyncio import async_sessionmaker

@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 from urllib.parse import parse_qs, urlsplit
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -38,15 +36,21 @@ class ServiceShopReviewPageTests(RoutesHarness):
             service = await session.get(UserService, REVIEW_SVC)
             return service.shop_needs_review, service.shop_id
 
-    async def test_the_owner_sees_the_waiting_service_and_its_name_is_escaped(self):
-        response = await self.request(OWNER_SESSION, "GET", "/service-shop-review")
+    async def test_the_owner_sees_the_waiting_service_and_its_name_is_returned_as_data(self):
+        response = await self.request(OWNER_SESSION, "GET", "/api/panel/service-shop-review")
         self.assertEqual(response.status_code, 200)
-        self.assertIn(f"#{REVIEW_SVC}", response.text)
-        self.assertNotIn(HOSTILE_NAME, response.text)
-        self.assertIn("&lt;script&gt;", response.text)
+        rows = response.json()["rows"]
+        self.assertEqual([row["service_id"] for row in rows], [REVIEW_SVC])
+        # The React page escapes text on insertion; the endpoint hands it over untouched.
+        self.assertEqual(rows[0]["pg_username"], HOSTILE_NAME)
+        self.assertEqual([shop["id"] for shop in response.json()["shops"]], [SHOP_ID])
 
     async def test_a_shop_owner_is_turned_away_from_the_page_and_the_assignment(self):
-        for method, path in (("GET", "/service-shop-review"), ("POST", f"/service-shop-review/{REVIEW_SVC}/assign")):
+        for method, path in (
+            ("GET", "/service-shop-review"),
+            ("GET", "/api/panel/service-shop-review"),
+            ("POST", f"/service-shop-review/{REVIEW_SVC}/assign"),
+        ):
             response = await self.request(SHOP_SESSION, method, path, shop="platform")
             self.assertEqual(response.status_code, 303, path)
             self.assertNotIn("/service-shop-review", response.headers["location"], path)
@@ -56,8 +60,8 @@ class ServiceShopReviewPageTests(RoutesHarness):
         response = await self.request(OWNER_SESSION, "POST", f"/service-shop-review/{REVIEW_SVC}/assign", shop=str(SHOP_ID))
         self.assertIn("ok", parse_qs(urlsplit(response.headers["location"]).query))
         self.assertEqual(await self.review_state(), (False, SHOP_ID))
-        page = await self.request(OWNER_SESSION, "GET", "/service-shop-review")
-        self.assertNotIn(f"#{REVIEW_SVC}", page.text)
+        page = await self.request(OWNER_SESSION, "GET", "/api/panel/service-shop-review")
+        self.assertEqual(page.json()["rows"], [])
 
     async def test_an_invalid_choice_changes_nothing(self):
         for choice in ("", "abc", "-3", "0", "999"):

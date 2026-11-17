@@ -12,63 +12,41 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.datastructures import UploadFile
 
-from app.config import DATA_DIR
-from app.db.models import ResellerProfile
 from app.api.safe_next import safe_internal_next
+from app.api.shop_settings_panel import NO_SCOPE_MESSAGE, entry_redirect, load_profile, normalize_tab
+from app.api.spa_pages import spa_response
+from app.config import DATA_DIR
 from app.services.bbc_settlement import bbc_enable_error
-from app.services.resellers import (
-    RESELLER_SETTINGS_TABS,
-    SHOP_SETTINGS_DOMAIN_POST_TABS,
-    SHOP_SETTINGS_DOMAIN_REDIRECTS,
-    complete_reseller_setup,
-    get_reseller_profile,
-)
-from app.api.guide_media_pages import SHOP_BASE, guides_media_view
 from app.services.chat_cleanup_config import chat_cleanup_payload
 from app.services.connection_guides import prune_guide_media, serialize_submitted_guides
-from app.services.secret_box import reveal_bot_token
 from app.services.miniapp_shop import (
     SHOP_SWITCH,
     set_shop_miniapp,
-    shop_miniapp_available,
-    shop_miniapp_blocker,
-    shop_miniapp_url,
     switch_value,
 )
 from app.services.reseller_bots import schedule_shop_menu_sync
-from app.services.settings_button_labels import PLATFORM_ONLY_BTN_KEYS
-from app.services.panel_brand import load_own_values
-from app.services.settings_tab_groups import group_settings_tabs, tabs_with_message_variables
-from app.services.rich_text import merge_rich_settings_on_save, prepare_settings_values_for_web
+from app.services.resellers import (
+    RESELLER_SETTINGS_TABS,
+    SHOP_SETTINGS_DOMAIN_POST_TABS,
+    complete_reseller_setup,
+    get_reseller_profile,
+)
+from app.services.rich_text import merge_rich_settings_on_save
 from app.services.screen_titles import SCREEN_TEXT_TAB, platform_only_screen_text_keys, validate_screen_text_settings
+from app.services.secret_box import reveal_bot_token
+from app.services.settings_button_labels import PLATFORM_ONLY_BTN_KEYS
 from app.services.users import (
     IMAGE_KEYS,
+    PLATFORM_ONLY_SETTING_KEYS,
     RESETTABLE_SETTINGS_TABS,
     SECRET_KEYS,
-    TAB_SETTING_GROUPS,
     TOGGLE_KEYS,
-    SETTING_GROUPS,
     default_values_for_keys,
     get_all_settings,
-    get_setting,
     keys_for_tab,
     set_settings_bulk,
     should_keep_secret_value,
 )
-
-
-
-async def _miniapp_switch_context(session: AsyncSession, profile: ResellerProfile | None) -> dict:
-    """The shop's Mini App switch: whether it may be turned on, whether it is, and its address."""
-    if profile is None:
-        return {"miniapp_available": False, "miniapp_blocker": "", "miniapp_on": False, "miniapp_url": ""}
-    on_now = (await get_setting(session, SHOP_SWITCH, "0", reseller_id=int(profile.user_id))) == "1"
-    return {
-        "miniapp_available": await shop_miniapp_available(session, profile),
-        "miniapp_blocker": await shop_miniapp_blocker(session, profile),
-        "miniapp_on": on_now,
-        "miniapp_url": shop_miniapp_url(profile.miniapp_key or ""),
-    }
 
 
 logger = logging.getLogger(__name__)
@@ -89,73 +67,6 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
             url += f"&msg={quote(msg)}"
         return RedirectResponse(url, status_code=303)
 
-    def _menu_tab_context(values: dict) -> dict:
-        from app.bot.keyboards import DEFAULT_ACTIVE_MENU_ORDER, DEFAULT_MENU_ORDER
-
-        order_raw = values.get("menu_order") or ",".join(DEFAULT_ACTIVE_MENU_ORDER)
-        order = [p.strip() for p in order_raw.split(",") if p.strip()]
-        if "referral" in order and "loyalty" not in order:
-            order = ["loyalty" if k == "referral" else k for k in order]
-        order = [k for k in order if k != "referral"]
-        order = [k for k in order if k in DEFAULT_MENU_ORDER and k != "reseller_apply"]
-        if "shop" not in order:
-            order.insert(0, "shop")
-        catalog_meta = {
-            "connection_status": {"label": "وضعیت اتصال", "required": False},
-            "shop": {"label": "خرید سرویس", "required": True},
-            "services": {"label": "سرویس‌های من", "required": False},
-            "wallet": {"label": "کیف پول", "required": False},
-            "support": {"label": "پشتیبانی", "required": False},
-            "loyalty": {"label": "باشگاه مشتریان", "required": False},
-        }
-
-        items = []
-        for key in order:
-            meta = catalog_meta.get(key)
-            if not meta:
-                continue
-            items.append(
-                {
-                    "key": key,
-                    "label": meta["label"],
-                    "required": meta["required"],
-                }
-            )
-        pool = []
-        for key, meta in catalog_meta.items():
-            if key not in order and key != "shop":
-                pool.append(
-                    {
-                        "key": key,
-                        "label": meta["label"],
-                        "required": False,
-                    }
-                )
-        return {"items": items, "pool": pool, "order_csv": ",".join(order)}
-
-    async def _bot_token_status(token: str) -> dict:
-        token = (token or "").strip()
-        if not token:
-            return {"ok": False, "error": "توکن تنظیم نشده"}
-        try:
-            import httpx
-
-            async with httpx.AsyncClient(timeout=8.0) as client:
-                resp = await client.get(f"https://api.telegram.org/bot{token}/getMe")
-                data = resp.json()
-            if data.get("ok") and isinstance(data.get("result"), dict):
-                me = data["result"]
-                return {
-                    "ok": True,
-                    "username": me.get("username"),
-                    "id": me.get("id"),
-                    "name": me.get("first_name"),
-                }
-            return {"ok": False, "error": data.get("description") or "توکن نامعتبر"}
-        except Exception as exc:
-            from app.services.redact import redact
-            return {"ok": False, "error": f"عدم اتصال به تلگرام: {redact(exc)}"}
-
     def _rid(staff: dict) -> int | None:
         """Server-side shop tenant only (session → shop_owner_id). Never form/query."""
         from app.services.shop_scope import shop_owner_id
@@ -170,188 +81,21 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
 
     def _deny_scope() -> RedirectResponse:
         return RedirectResponse(
-            "/dashboard?err=" + quote("محدوده فروشگاه مشخص نیست — به داده ادمین اصلی دسترسی ندارید"),
+            "/dashboard?err=" + quote(NO_SCOPE_MESSAGE),
             status_code=303,
         )
-
-    async def _load_profile(session: AsyncSession, user_id: int) -> ResellerProfile | None:
-        from sqlalchemy import select
-
-        result = await session.execute(
-            select(ResellerProfile).where(ResellerProfile.user_id == user_id)
-        )
-        return result.scalar_one_or_none()
 
     @app.get("/shop-settings", response_class=HTMLResponse)
     async def shop_settings_page(
         request: Request,
         staff: dict = Depends(shop_dep),
-        session: AsyncSession = Depends(get_db),
     ):
-        # Scope from authenticated session only — not role=="reseller" alone.
-        if _is_owner_settings_actor(staff):
-            return RedirectResponse("/settings", status_code=303)
-        rid = _rid(staff)
-        if not rid:
-            return _deny_scope()
-
-        tab = (request.query_params.get("tab") or "welcome").strip()
-        if tab == "security":
-            return RedirectResponse("/security", status_code=303)
-        if tab in SHOP_SETTINGS_DOMAIN_REDIRECTS:
-            dest = SHOP_SETTINGS_DOMAIN_REDIRECTS[tab]
-            from urllib.parse import urlencode
-
-            extra = {}
-            for k in ("ok", "err", "saved", "msg"):
-                if request.query_params.get(k):
-                    extra[k] = request.query_params.get(k)
-            if extra:
-                sep = "&" if "?" in dest else "?"
-                dest = dest + sep + urlencode(extra)
-            return RedirectResponse(dest, status_code=303)
-        if tab not in allowed_tabs:
-            tab = "welcome"
-
-        values = await get_all_settings(session, reseller_id=rid)
-        # Texts edited in the bot may be packed with premium emoji; fields show their plain text.
-        values = prepare_settings_values_for_web(values)
-        if tab == "guides":
-            from app.services.connection_guides import (
-                default_connection_guides,
-                parse_connection_guides,
-                serialize_connection_guides,
-            )
-
-            if not parse_connection_guides(values.get("connection_guides")):
-                values["connection_guides"] = serialize_connection_guides(
-                    default_connection_guides()
-                )
-        values["show_reseller_apply"] = "0"
-        if tab == "colors":
-            from app.services.payment_destinations import enrich_payment_settings
-
-            values = enrich_payment_settings(values)
-        tab_groups = TAB_SETTING_GROUPS.get(tab, [])
-        # Hide platform-only fields from reseller menu tab
-        groups = {name: SETTING_GROUPS[name] for name in tab_groups if name in SETTING_GROUPS}
-        if tab == "service_import":
-            groups.pop("مسیرها و ادمین‌های مجاز", None)
-        if tab == "menu":
-            for name, fields in list(groups.items()):
-                groups[name] = [f for f in fields if f[0] != "show_reseller_apply"]
-        if tab == "buttons":
-            # Shop bots don't need platform-admin / apply button labels
-            groups = {
-                name: kept for name, fields in groups.items() if (kept := [f for f in fields if f[0] not in PLATFORM_ONLY_BTN_KEYS])
-            }
-        if tab == SCREEN_TEXT_TAB:
-            # A shop edits its customer and reseller menus only.
-            hidden = platform_only_screen_text_keys()
-            groups = {name: kept for name, fields in groups.items() if (kept := [f for f in fields if f[0] not in hidden])}
-
-        profile = await _load_profile(session, rid)
-        ctx: dict = {
-            "staff": staff,
-            "values": values,
-            "groups": groups,
-            "tab_groups": list(groups.keys()),
-            "tabs": RESELLER_SETTINGS_TABS,
-            "tab_nav": group_settings_tabs(tabs_with_message_variables(RESELLER_SETTINGS_TABS, staff), tab),
-            "tab": tab,
-            "saved": request.query_params.get("saved") == "1",
-            "saved_msg": request.query_params.get("msg") or "",
-            "shop_mode": True,
-            "settings_base": "/shop-settings",
-            "reset_tabs": RESETTABLE_SETTINGS_TABS,
-            "profile": profile,
-        }
-        # Single flash above page title (base.html)
-        if request.query_params.get("saved") == "1":
-            ctx["flash_ok"] = request.query_params.get("msg") or "ذخیره شد."
-        if request.query_params.get("err"):
-            ctx["flash_err"] = request.query_params.get("err")
-
-        if tab == "menu":
-            ctx.update(_menu_tab_context(values))
-        elif tab in {"terms", "limits", "guides"}:
-            from app.services.button_styles import STYLE_OPTIONS
-
-            ctx["style_options"] = STYLE_OPTIONS
-        elif tab == "colors":
-            from app.services.button_styles import STYLE_OPTIONS, colors_page_grouped_sections
-
-            ctx["colors_page_sections"] = colors_page_grouped_sections(for_reseller=True)
-            ctx["style_options"] = STYLE_OPTIONS
-        elif tab == "bot":
-            token = (reveal_bot_token(profile.bot_token) if profile else "") or ""
-            ctx["bot_status"] = await _bot_token_status(token)
-            ctx["bot_token_masked"] = ("••••" + token[-6:]) if len(token) > 8 else ("••••" if token else "")
-            ctx["bot_username"] = (profile.bot_username if profile else "") or ""
-        elif tab == "brand":
-            ctx["brand_values"] = await load_own_values(session, rid)
-            ctx["brand_form_action"] = "/panel-brand"
-        elif tab == "miniapp":
-            ctx.update(await _miniapp_switch_context(session, profile))
-        elif tab == "links":
-            from app.services.ux20 import build_magic_links_context
-
-            ctx.update(await build_magic_links_context(session, staff))
-        elif tab == "appearance":
-            from app.services.bot_appearance import load_appearance_context
-
-            token = (reveal_bot_token(profile.bot_token) if profile else "") or ""
-            uname = (profile.bot_username if profile else "") or ""
-            ctx["bot_username"] = uname
-            ctx.update(
-                await load_appearance_context(
-                    session,
-                    token=token,
-                    reseller_id=rid,
-                    fallback_username=uname,
-                )
-            )
-        elif tab == "notifications":
-            from app.services.authz import resolve_shop_permissions_from_profile
-            from app.services.notifications import (
-                get_shop_notify_prefs,
-                shop_notify_catalog,
-            )
-
-            perms = list(staff.get("permissions") or []) or list(
-                resolve_shop_permissions_from_profile(profile) or []
-            )
-            ctx["notify_items"] = shop_notify_catalog(perms)
-            ctx["notify_prefs"] = await get_shop_notify_prefs(session, rid)
-            # Ops/capacity keys are Owner-only — keep shop notifications = user alerts.
-            groups = {
-                name: fields
-                for name, fields in groups.items()
-                if name == "هشدار سرویس کاربر"
-            }
-            ctx["groups"] = groups
-            ctx["tab_groups"] = list(groups.keys())
-        elif tab == "daily_report":
-            from app.services.daily_report import (
-                ACTOR_SHOP,
-                DEFAULT_REPORT_TEMPLATE,
-                metric_groups_for_ui,
-                parse_metric_keys,
-            )
-
-            actor = ACTOR_SHOP
-            ctx["daily_report_actor"] = actor
-            ctx["daily_report_metric_groups"] = metric_groups_for_ui(actor)
-            ctx["daily_report_enabled_metrics"] = parse_metric_keys(
-                values.get("admin_daily_report_metrics"), actor=actor
-            )
-            if not (values.get("admin_daily_report_template") or "").strip():
-                values["admin_daily_report_template"] = DEFAULT_REPORT_TEMPLATE
-        elif tab == "guides":
-            ctx["guides_media"] = await guides_media_view(session, SHOP_BASE, reseller_id=rid)
-            ctx["guides_media_base"] = SHOP_BASE
-
-        return render(request, "shop_settings.html", ctx)
+        # The page is the React app; its data comes from /api/panel/shop-settings. Scope comes from the
+        # authenticated session only (not role == "reseller" alone), and moved tabs still redirect.
+        moved = entry_redirect(staff, normalize_tab(request.query_params.get("tab")), request.query_params)
+        if moved:
+            return RedirectResponse(moved, status_code=303)
+        return spa_response("shop-settings")
 
     @app.post("/shop-settings")
     async def shop_settings_save(
@@ -370,7 +114,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
 
         form = await request.form()
         # Ignore any client-supplied reseller_id — authority is session scope only.
-        profile = await _load_profile(session, rid)
+        profile = await load_profile(session, rid)
         if not profile:
             return RedirectResponse("/logout", status_code=303)
 
@@ -446,7 +190,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         from app.services.service_import_config import PLATFORM_ONLY_KEYS
 
         # Subscription paths and extra panel admins describe the one panel: Owner only.
-        known = keys_for_tab(tab) - PLATFORM_ONLY_KEYS - PLATFORM_ONLY_BTN_KEYS
+        known = keys_for_tab(tab) - PLATFORM_ONLY_KEYS - PLATFORM_ONLY_BTN_KEYS - PLATFORM_ONLY_SETTING_KEYS
         if tab == "menu":
             known = known | {"menu_order"}
             known.discard("show_reseller_apply")
@@ -574,35 +318,6 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
             await prune_guide_media(session, reseller_id=rid)
         return _redirect_after_save(request, f"/shop-settings?tab={tab}")
 
-    @app.post("/shop-settings/cancel-pending-orders")
-    async def shop_cancel_pending_orders(
-        request: Request,
-        staff: dict = Depends(shop_dep),
-        session: AsyncSession = Depends(get_db),
-    ):
-        if _is_owner_settings_actor(staff):
-            return RedirectResponse("/finance?tab=orders&settings=cleanup", status_code=303)
-        rid = _rid(staff)
-        if not rid:
-            return _deny_scope()
-        from app.services.orders import cancel_stale_pending_for_settings
-
-        fallback = "/finance?tab=orders&settings=cleanup"
-        try:
-            n = await cancel_stale_pending_for_settings(
-                session, reseller_id=int(rid), force=True
-            )
-        except Exception:
-            logger.exception("manual pending order cancel failed shop=%s", rid)
-            dest = _safe_next(request, fallback)
-            sep = "&" if "?" in dest else "?"
-            return RedirectResponse(
-                f"{dest}{sep}err={quote('لغو سفارش‌ها ناموفق بود. لاگ سرور را بررسی کنید.')}",
-                status_code=303,
-            )
-        msg = f"{n} سفارش معلق/تأییدنشده لغو شد" if n else "سفارش معلقی برای لغو نبود"
-        return _redirect_after_save(request, fallback, msg=msg)
-
     @app.post("/shop-notifications")
     async def shop_notifications_save(
         request: Request,
@@ -615,7 +330,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         rid = _rid(staff)
         if not rid:
             return _deny_scope()
-        profile = await _load_profile(session, rid)
+        profile = await load_profile(session, rid)
         if not profile:
             return RedirectResponse("/logout", status_code=303)
 
@@ -709,7 +424,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         session: AsyncSession = Depends(get_db),
     ):
         if _is_owner_settings_actor(staff):
-            return RedirectResponse("/tickets?supports=1", status_code=303)
+            return RedirectResponse("/tickets?supports=1&stab=contacts", status_code=303)
         from app.services.support_contacts import contacts_from_form_json, save_support_contacts
 
         rid = _rid(staff)
@@ -721,11 +436,11 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
             contacts, err = contacts_from_form_json(str(raw))
             if err:
                 return RedirectResponse(
-                    f"/tickets?supports=1&err={quote(err)}",
+                    f"/tickets?supports=1&stab=contacts&err={quote(err)}",
                     status_code=303,
                 )
             await save_support_contacts(session, contacts or [], reseller_id=rid)
-            return RedirectResponse("/tickets?supports=1&saved=1", status_code=303)
+            return RedirectResponse("/tickets?supports=1&stab=contacts&saved=1", status_code=303)
 
         from app.services.button_styles import parse_item_button_style_form
         from app.services.support_contacts import upsert_support_contact
@@ -753,10 +468,10 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         )
         if err:
             return RedirectResponse(
-                f"/tickets?supports=1&err={quote(err)}",
+                f"/tickets?supports=1&stab=contacts&err={quote(err)}",
                 status_code=303,
             )
-        return RedirectResponse("/tickets?supports=1&saved=1", status_code=303)
+        return RedirectResponse("/tickets?supports=1&stab=contacts&saved=1", status_code=303)
 
     @app.post("/shop-supports/delete")
     async def shop_supports_delete(
@@ -765,7 +480,7 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         session: AsyncSession = Depends(get_db),
     ):
         if _is_owner_settings_actor(staff):
-            return RedirectResponse("/tickets?supports=1", status_code=303)
+            return RedirectResponse("/tickets?supports=1&stab=contacts", status_code=303)
         from app.services.support_contacts import delete_support_contact
 
         rid = _rid(staff)
@@ -775,4 +490,4 @@ def register_shop_settings(app, *, render, require_staff, get_db, require_shop_s
         contact_id = str(form.get("id") or "").strip()
         if contact_id:
             await delete_support_contact(session, contact_id, reseller_id=rid)
-        return RedirectResponse("/tickets?supports=1&saved=1", status_code=303)
+        return RedirectResponse("/tickets?supports=1&stab=contacts&saved=1", status_code=303)

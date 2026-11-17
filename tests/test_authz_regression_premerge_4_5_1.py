@@ -207,19 +207,26 @@ class RoleMatrixAuthz(unittest.TestCase):
         self.assertFalse(staff_user_actions(staff)["create"])
 
     def test_ui_create_flags_require_matching_server_helpers(self):
-        for flag, needle in [
-            ("can_create=", 'staff_pg_action(staff, "hosts", "create")'),
-            ("can_update=", 'staff_pg_action(staff, "hosts", "update")'),
-            ("can_create=", 'staff_pg_action(staff, "templates", "create")'),
-            ("can_update=", 'staff_pg_action(staff, "templates", "update")'),
-            ("can_delete=", 'staff_pg_action(staff, "templates", "delete")'),
-            ("can_create=", 'staff_pg_action(staff, "groups", "create")'),
-            ("can_update=", 'staff_pg_action(staff, "groups", "update")'),
-            ("can_delete=", 'staff_pg_action(staff, "groups", "delete")'),
-        ]:
-            self.assertIn(needle, PG_PAGES, msg=f"missing server gate for {needle}")
-            # flag name appears in render kwargs near the gate (same file)
-            self.assertIn(flag, PG_PAGES)
+        """The write flags the React pages receive are exactly the staff member's PasarGuard actions."""
+        from app.services.pg_resources_panel import _can
+
+        staff = {
+            "role": "pg_staff",
+            "pg_admin_username": "s1",
+            "pg_actions": {
+                "hosts": {"create": True, "update": False, "delete": False},
+                "templates": {"create": False, "update": True, "delete": True},
+                "groups": {"create": True, "update": True, "delete": False},
+            },
+        }
+        for resource in ("hosts", "templates", "groups"):
+            self.assertEqual(
+                _can(staff, resource),
+                {action: staff_pg_action(staff, resource, action) for action in ("create", "update", "delete")},
+                msg=resource,
+            )
+        self.assertEqual(_can(staff, "hosts"), {"create": True, "update": False, "delete": False})
+        self.assertEqual(_can(staff, "nodes"), {"create": False, "update": False, "delete": False})
 
 
 class StaffPgCredentialMatrix(unittest.IsolatedAsyncioTestCase):

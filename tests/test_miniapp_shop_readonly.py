@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.miniapp_codes import register_miniapp_codes
 from app.api.miniapp_feeds import register_miniapp_feeds
@@ -33,6 +33,7 @@ from app.services.secret_box import seal_bot_token
 from app.services.users import clear_settings_cache, set_setting
 from app.services.wallet import credit_wallet
 from tests.test_miniapp_shop_scope import MAIN_TOKEN, OTHER_SHOP_TOKEN, SHOP_TOKEN, signed
+from tests.pgtest import pg_engine
 
 SHOP, OTHER_SHOP = 5, 6
 KEY, OTHER_KEY = new_shop_key(), new_shop_key()
@@ -51,7 +52,7 @@ class ShopFixture(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         clear_settings_cache()
         _recent_sends.clear()
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -87,7 +88,13 @@ class ShopFixture(unittest.IsolatedAsyncioTestCase):
         clear_settings_cache()
         settings = SimpleNamespace(miniapp_enabled=True, bot_token=MAIN_TOKEN, currency="تومان",
                                    miniapp_url="https://panel.example.com/miniapp/")
+        # Staff notices about a shop's sales go to this mock instead of Telegram.
+        self.shop_notify_bot = AsyncMock()
         self.patches = [
+            patch(
+                "app.services.reseller_bots.open_notify_bot_for_reseller",
+                AsyncMock(return_value=(self.shop_notify_bot, False)),
+            ),
             patch("app.services.miniapp_auth.get_settings", return_value=settings),
             patch("app.api.miniapp_pages.get_settings", return_value=settings),
             patch("app.services.miniapp_shop.get_settings", return_value=settings),
@@ -168,10 +175,16 @@ class ShopReadOnlyTests(ShopFixture):
         self.assertEqual(sender.await_args.kwargs["shop_id"], SHOP)
 
     async def test_topup_support_club_and_service_changes_stay_closed(self) -> None:
-        for path in ("/api/mini/service/101/automation", "/api/mini/service/101/cancellation", "/api/mini/ops"):
+        for path in ("/api/mini/service/101/automation", "/api/mini/service/101/cancellation"):
             with self.subTest(path=path):
                 response = await self.shop_get(path)
                 self.assertEqual((response.status_code, response.json()["detail"]), (404, ROUTE_UNAVAILABLE))
+
+    async def test_ops_is_open_but_customers_are_refused(self) -> None:
+        from app.services.miniapp_shop import SHOP_OWNER_ONLY
+
+        response = await self.shop_get("/api/mini/ops")
+        self.assertEqual((response.status_code, response.json()["detail"]), (403, SHOP_OWNER_ONLY))
 
     async def test_platform_view_is_unchanged(self) -> None:
         headers = {"X-Telegram-Init-Data": signed(MAIN_TOKEN, CUSTOMER)}

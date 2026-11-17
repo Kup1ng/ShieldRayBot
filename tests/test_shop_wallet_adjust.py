@@ -14,7 +14,7 @@ import httpx
 import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 import app.services.shop_wallet_adjust as adjust_module
 from app.services.shop_wallet_adjust import (
@@ -24,6 +24,7 @@ from app.services.shop_wallet_adjust import (
     shop_wallet_form_context,
     wallet_adjust_shop,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SHOP_A = 81
@@ -89,9 +90,7 @@ class WalletDbHarness(unittest.IsolatedAsyncioTestCase):
         from app.db.models import BotUser, BotUserShop, ResellerProfile
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'wallet.db'}", connect_args={"timeout": 15}
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -291,7 +290,7 @@ class ShopWalletMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("wallet_days", ROOT / "alembic/versions/0079_shop_wallet_adjust_days.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             migration.upgrade()
             migration.upgrade()

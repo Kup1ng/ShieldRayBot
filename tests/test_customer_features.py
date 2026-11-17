@@ -24,6 +24,8 @@ from app.services.campaigns import audience_query, campaign_progress, change_cam
 from app.services.service_cancellations import approve_cancellation, cancellation_status, reject_cancellation, request_cancellation
 from app.services.service_renewals import assert_service_quota_available
 from app.services.users import _SETTINGS_CACHE, reset_shop_reseller_id, set_shop_reseller_id
+from app.services.numbers import to_fa_digits
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
@@ -63,7 +65,7 @@ class CustomerFeaturesTests(unittest.IsolatedAsyncioTestCase):
                 await conn.execute(text(f'CREATE SCHEMA "{self.schema}"'))
             self.engine = create_async_engine(pg_url, connect_args={"server_settings": {"search_path": self.schema}})
         else:
-            self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'features.db'}")
+            self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -427,6 +429,7 @@ class CustomerFeaturesTests(unittest.IsolatedAsyncioTestCase):
         async def auth():
             return staff
         env = Environment(loader=FileSystemLoader(str(ROOT / "app/web/templates")), autoescape=select_autoescape())
+        env.filters["fa"] = to_fa_digits
         def render(request, template, data):
             # The standalone route harness verifies content and escaping without panel globals.
             source = (ROOT / "app/web/templates/customer_features.html").read_text().replace('{% extends "base.html" %}', '')
@@ -451,12 +454,15 @@ class CustomerFeaturesTests(unittest.IsolatedAsyncioTestCase):
             redirect = await client.get("/service-cancellations", follow_redirects=False)
             self.assertEqual(redirect.status_code, 303)
             self.assertIn("/finance?tab=cancellations", redirect.headers.get("location", ""))
-            self.assertEqual((await client.get("/campaigns")).status_code, 200)
+            with patch("app.api.customer_features.spa_response", lambda page: HTMLResponse(f"shell:{page}")):
+                shell = await client.get("/campaigns")
+            self.assertEqual((shell.status_code, shell.text), (200, "shell:campaigns"))
         from app.services.service_cancellations import list_cancellation_requests
         rows, _ = await list_cancellation_requests(self.session, 2, limit=50)
         self.assertTrue(any(r.id == row["id"] for r, _ in rows))
         self.assertTrue(all(uname != "mine" for _, uname in rows) or any(uname == "shop-mine" for _, uname in rows))
         env = Environment(loader=FileSystemLoader(str(ROOT / "app/web/templates")), autoescape=select_autoescape())
+        env.filters["fa"] = to_fa_digits
         html = env.get_template("_finance_cancellations.html").render(
             cancel_requests=rows,
             cancel_labels={"pending": "در انتظار بررسی", "processing": "…", "review": "…", "approved": "…", "rejected": "…", "withdrawn": "…"},
@@ -503,7 +509,7 @@ class CustomerFeatureMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("customer_migration", ROOT / "alembic/versions/0039_customer_features.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
             conn.execute(text("CREATE TABLE user_services (id INTEGER PRIMARY KEY, pg_username TEXT)"))

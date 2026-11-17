@@ -15,10 +15,11 @@ import httpx
 import sqlalchemy as sa
 from fastapi import FastAPI
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.services.gift_codes import GIFT_CODES_PERMISSION
 from app.services.resellers import DEFAULT_FEATURE_PERMS, FEATURE_PERMS, parse_perms
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 SHOP_A = 41
@@ -41,11 +42,19 @@ class GiftCodeRouteTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'gifts.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
         self.staff: dict = {}
+        from app.db.models import BotUser
+
+        async with self.Session() as session:
+            session.add_all(
+                BotUser(id=shop_id, telegram_id=1000 + shop_id, referral_code=f"shop{shop_id}", role="reseller")
+                for shop_id in (SHOP_A, SHOP_B)
+            )
+            await session.commit()
 
         async def get_db():
             async with self.Session() as session:
@@ -165,7 +174,7 @@ class GiftCodesMigrationTests(unittest.TestCase):
         from alembic.operations import Operations
 
         migration = _load_migration()
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             self._setup(conn)
             with Operations.context(MigrationContext.configure(conn)):
@@ -195,7 +204,7 @@ class GiftCodesMigrationTests(unittest.TestCase):
         from alembic.operations import Operations
 
         migration = _load_migration()
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn, Operations.context(MigrationContext.configure(conn)):
             migration.upgrade()
             migration.downgrade()

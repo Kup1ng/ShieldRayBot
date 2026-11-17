@@ -1,18 +1,18 @@
 """Staff search by subscription link: shop scope, no secret leak, result buttons and the typed step."""
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram.exceptions import TelegramBadRequest
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot.handlers import admin
 from app.bot.handlers import subscription_lookup as bot
 from app.db.models import Base, BotUser, Plan, ShopWallet, UserService
 from app.services import bot_feedback_texts as feedback
 from app.services.subscription_lookup import find_service_by_link, link_token
+from tests.pgtest import pg_engine
 
 PLATFORM_TOKEN = "PlatformTokenAbcdef0123456789ABCDEF-_xyz"
 SHOP_TOKEN = "ShopTwoTokenAbcdef0123456789ABCDEF-_xyzq"
@@ -24,7 +24,7 @@ URL = "https://sub.example.com/sub/{}"
 class LookupCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'lookup.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -77,8 +77,10 @@ class LookupServiceTests(LookupCase):
 
 
 class ResultCardTests(LookupCase):
-    async def card(self, raw, shop_id):
-        return await bot.staff_lookup(self.session, raw, shop_id=shop_id)
+    async def card(self, raw, shop_id, *, may_manage_services: bool = True):
+        return await bot.staff_lookup(
+            self.session, raw, shop_id=shop_id, may_manage_services=may_manage_services
+        )
 
     def buttons(self, markup):
         return [b.callback_data for row in markup.inline_keyboard for b in row]
@@ -91,7 +93,12 @@ class ResultCardTests(LookupCase):
         self.assertNotIn(SHOP_TOKEN, text)
         self.assertIn("300", text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "").replace("٬", ""))
         self.assertNotIn("900", text.translate(str.maketrans("۰۱۲۳۴۵۶۷۸۹", "0123456789")).replace(",", "").replace("٬", ""))
-        self.assertEqual(self.buttons(markup), ["res:user:4", bot.ASK_CALLBACK, bot.SHOP_BACK])
+        self.assertEqual(
+            self.buttons(markup),
+            ["res:user:4", "res:svc:4:11", bot.ASK_CALLBACK, bot.SHOP_BACK],
+        )
+        _, no_manage = await self.card(URL.format(SHOP_TOKEN), 2, may_manage_services=False)
+        self.assertEqual(self.buttons(no_manage), ["res:user:4", bot.ASK_CALLBACK, bot.SHOP_BACK])
 
     async def test_platform_card_offers_service_management_only_for_platform_customers(self):
         _, markup = await self.card(URL.format(PLATFORM_TOKEN), None)
@@ -113,7 +120,8 @@ class TypedStepTests(LookupCase):
         message.text = text
         state = AsyncMock()
         user = SimpleNamespace(id=9, telegram_id=777)
-        with patch.object(bot, "shop_scope", AsyncMock(return_value=scope)), \
+        ctx = (scope, object(), True) if scope is not None else (None, None, False)
+        with patch.object(bot, "shop_staff_context", AsyncMock(return_value=ctx)), \
                 patch.object(bot, "finish_text_step", AsyncMock()) as finish:
             await bot.receive_link(message, state, self.session, user, is_reseller_bot=False, reseller_owner_id=None)
         return message, state, finish

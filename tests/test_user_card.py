@@ -1,26 +1,23 @@
-"""The users-list user card shows one shop's view of a customer and nothing from another shop."""
+"""The users-list user card (JSON of the React panel) shows one shop's view of a customer and nothing from another shop."""
 
 from __future__ import annotations
 
 import unittest
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-from jinja2 import Environment, FileSystemLoader, select_autoescape
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from fastapi import FastAPI, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app.api.user_pages import register_user_pages
+from app.api.panel_users_api import register_panel_users_api
 from app.db.models import Base, BotUser, BotUserShop, Order, Plan, ShopWallet, UserService
-from app.services.formatting import format_money, format_number
+from app.services.authz import authz_from_staff, can_shop
 from app.services.user_card import build_user_card
 from app.services.users_ops import expire_tone
+from tests.pgtest import pg_engine
 
-ROOT = Path(__file__).resolve().parents[1]
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
 SHOP_A, SHOP_B = 10, 20
 HOSTILE_NAME = '<script>alert("x")</script>'
@@ -32,7 +29,7 @@ def shop_staff(shop_id: int) -> dict[str, Any]:
 
 class UserCardTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -75,14 +72,18 @@ class UserCardTests(unittest.IsolatedAsyncioTestCase):
         async def require_staff() -> dict[str, Any]:
             return self.staff
 
-        env = Environment(loader=FileSystemLoader(ROOT / "app/web/templates"), autoescape=select_autoescape())
-        env.filters["num"] = format_number
-        env.filters["money"] = format_money
+        def require_perm(perm: str):
+            async def dependency() -> dict[str, Any]:
+                if not can_shop(authz_from_staff(self.staff), perm):
+                    raise HTTPException(403)
+                return self.staff
 
-        def render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
-            return HTMLResponse(env.get_template(name).render(**context, csrf_token="fake-csrf"))
+            return dependency
 
-        register_user_pages(self.app, render=render, require_admin=require_staff, get_db=get_db)
+        register_panel_users_api(
+            self.app, require_staff=require_staff, require_admin=require_staff, require_perm=require_perm,
+            require_pg_perm=require_perm, get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
@@ -91,43 +92,45 @@ class UserCardTests(unittest.IsolatedAsyncioTestCase):
         await self.engine.dispose()
 
     async def test_shop_sees_only_its_own_purse_orders_and_services(self) -> None:
-        response = await self.client.get("/users/11/card")
+        response = await self.client.get("/api/panel/users/11/card")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("shop_a_service", response.text)
+        card = response.json()
+        self.assertEqual([s["pg_username"] for s in card["services"]], ["shop_a_service"])
         self.assertNotIn("platform_service", response.text)
-        self.assertIn(">80<", response.text, "the shop purse, not the platform balance")
-        self.assertIn(">100<", response.text, "only this shop's paid orders count")
+        self.assertEqual(card["wallet_balance"], 80, "the shop purse, not the platform balance")
+        self.assertEqual(card["paid_total"], 100, "only this shop's paid orders count")
+        self.assertEqual(card["paid_count"], 1, "an order still awaiting approval is not paid")
         self.assertNotIn("900", response.text)
-        self.assertNotIn(">140<", response.text, "an order still awaiting approval is not paid")
 
     async def test_another_shop_cannot_open_the_card(self) -> None:
         self.staff = shop_staff(SHOP_B)
-        response = await self.client.get("/users/11/card")
+        response = await self.client.get("/api/panel/users/11/card")
         self.assertEqual(response.status_code, 403)
         self.assertNotIn("shop_a_service", response.text)
         self.assertNotIn("9011", response.text)
 
     async def test_an_unknown_user_is_not_found(self) -> None:
-        response = await self.client.get("/users/999/card")
+        response = await self.client.get("/api/panel/users/999/card")
         self.assertEqual(response.status_code, 404)
 
-    async def test_customer_text_is_escaped(self) -> None:
-        response = await self.client.get("/users/11/card")
-        self.assertNotIn(HOSTILE_NAME, response.text)
-        self.assertIn("&lt;script&gt;", response.text)
+    async def test_customer_text_travels_only_as_json_data(self) -> None:
+        response = await self.client.get("/api/panel/users/11/card")
+        self.assertTrue(response.headers["content-type"].startswith("application/json"))
+        self.assertEqual(response.json()["user"]["name"], HOSTILE_NAME, "returned verbatim; React escapes it on render")
 
-    async def test_a_latin_name_keeps_the_header_right_to_left(self) -> None:
+    async def test_a_latin_name_is_returned_plain_for_the_page_to_isolate(self) -> None:
         self.staff = OWNER.copy()
-        response = await self.client.get("/users/1/card")
-        self.assertIn("<strong><bdi>Platform customer</bdi></strong>", response.text)
-        self.assertNotIn('<strong dir="auto">', response.text)
+        response = await self.client.get("/api/panel/users/1/card")
+        self.assertEqual(response.json()["user"]["name"], "Platform customer")
+        self.assertNotIn("<", response.text)
 
     async def test_owner_sees_the_platform_purse_and_services(self) -> None:
         self.staff = OWNER.copy()
-        response = await self.client.get("/users/1/card")
+        response = await self.client.get("/api/panel/users/1/card")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("owner_service", response.text)
-        self.assertIn(">70<", response.text)
+        card = response.json()
+        self.assertEqual([s["pg_username"] for s in card["services"]], ["owner_service"])
+        self.assertEqual(card["wallet_balance"], 70)
 
     async def test_the_risk_tag_needs_the_right_to_read_private_marks(self) -> None:
         user = await self.session.get(BotUser, 11)

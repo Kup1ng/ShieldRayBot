@@ -140,7 +140,10 @@ async def start_discounted_checkout(
     stamp = claim_code_attempt(user_id)
     try:
         await _assert_open_checkout_room(session, user_id, shop_id)
-        order = await create_order(session, user_id=int(user_id), plan_id=int(plan_id), expected_price=expected_price)
+        order = await create_order(
+            session, user_id=int(user_id), plan_id=int(plan_id), expected_price=expected_price,
+            apply_automatic_discount=False,
+        )
     except BaseException:
         release_code_attempt(user_id, stamp)
         raise

@@ -8,17 +8,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy import event, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
-
-
-def _enable_sqlite_fk(dbapi_conn, _connection_record):
-    cur = dbapi_conn.cursor()
-    cur.execute("PRAGMA foreign_keys=ON")
-    cur.close()
 
 
 class SourceContractTests(unittest.TestCase):
@@ -69,8 +64,8 @@ class SourceContractTests(unittest.TestCase):
         src = (ROOT / "app/services/ux20.py").read_text(encoding="utf-8")
         self.assertIn("def shop_bundle_allowed_setting_keys", src)
         self.assertIn("async def _validate_import_plan", src)
-        self.assertIn("template_allowed_for_staff", src)
-        self.assertIn("groups_allowed_for_staff", src)
+        self.assertIn("plan_template_denial", src)
+        self.assertIn("plan_groups_denial", src)
         self.assertIn("assert_user_plan_within_limits", src)
         fn = src.split("async def import_shop_bundle", 1)[1].split(
             "\ndef capacity_used_pct", 1
@@ -113,9 +108,7 @@ class WalletIsolationRepairTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "repair.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-        event.listen(self.engine.sync_engine, "connect", _enable_sqlite_fk)
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -308,8 +301,7 @@ class ImportShopBundleAllowlistTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "import.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -381,9 +373,7 @@ class BulkOrderPaymentsPermTests(unittest.IsolatedAsyncioTestCase):
         from app.services.table_bulk import bulk_order_action
 
         tmp = tempfile.TemporaryDirectory()
-        engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(tmp.name) / 'bulk.db'}"
-        )
+        engine = pg_engine()
         from app.db import Base
         import app.db.models  # noqa: F401
 

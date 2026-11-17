@@ -5,15 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from fastapi import Depends, Request
+from fastapi import Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.api.spa_pages import spa_response
 from app.services import bot_overview as overview
 from app.services.dashboard_trend import empty_trend, sales_trend
 from app.services.db_safe import rollback_quiet
-from app.services.host_gauges import empty_host_gauges, gauges_json, local_host_gauges
-from app.services.shop_scope import empty_shop_stats
+from app.services.host_gauges import gauges_json, local_host_gauges
 from app.services.ux20 import count_stuck_paid_orders
 
 logger = logging.getLogger(__name__)
@@ -21,14 +21,14 @@ logger = logging.getLogger(__name__)
 TREND_DAYS = 7
 
 
-async def _local_host() -> dict:
+async def local_host() -> dict:
     host = await asyncio.to_thread(local_host_gauges, wait_cpu=0.0)
     if host.get("cpu_percent") is None:
         host = await asyncio.to_thread(local_host_gauges, wait_cpu=0.12)
     return host
 
 
-async def _figures(session: AsyncSession, viewer: overview.Viewer, period: str) -> dict:
+async def shop_figures(session: AsyncSession, viewer: overview.Viewer, period: str) -> dict:
     """Everything the page draws for one shop; a failed part shows empty, never an error page."""
     totals = await overview.shop_totals(session, viewer)
     try:
@@ -55,38 +55,15 @@ async def _figures(session: AsyncSession, viewer: overview.Viewer, period: str) 
 
 
 def register_bot_overview_pages(app, *, render, require_perm, require_admin, get_db) -> None:
+    # ``render`` stays in the signature shared by every page registration; the React page needs none.
+    del render, get_db
+
     @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard(
-        request: Request,
-        staff: dict = Depends(require_perm("dashboard")),
-        session: AsyncSession = Depends(get_db),
-    ):
-        viewer = overview.viewer_of(staff)
-        period = overview.parse_period(request.query_params.get("period"))
-        ctx = {
-            "staff": staff,
-            "viewer": viewer,
-            "period": period,
-            "period_labels": overview.PERIOD_LABELS,
-            "compare_label": overview.COMPARE_LABELS[period],
-            "host_gauges": None,
-            "bot_setup_needed": False,
-            "stats": empty_shop_stats(),
-        }
-        if viewer.has_shop and await overview.shop_needs_bot(session, viewer):
-            ctx["bot_setup_needed"] = True
-            return render(request, "dashboard.html", ctx)
-        if viewer.has_shop:
-            ctx.update(await _figures(session, viewer, period))
-        if viewer.has_shop and viewer.shop_id is None:
-            try:
-                ctx["host_gauges"] = await asyncio.to_thread(local_host_gauges, wait_cpu=0.0)
-            except Exception:
-                logger.warning("bot host gauges unavailable", exc_info=True)
-                ctx["host_gauges"] = empty_host_gauges()
-        return render(request, "dashboard.html", ctx)
+    async def dashboard(staff: dict = Depends(require_perm("dashboard"))):
+        """The React bot overview; its figures come from /api/panel/dashboard (same permission there)."""
+        return spa_response("dashboard")
 
     @app.get("/dashboard/metrics")
     async def dashboard_host_metrics_json(staff: dict = Depends(require_admin)):
         """CPU/RAM of the bot's own server: the platform owner only (``require_admin``)."""
-        return JSONResponse(gauges_json(await _local_host()), headers={"Cache-Control": "private, no-store"})
+        return JSONResponse(gauges_json(await local_host()), headers={"Cache-Control": "private, no-store"})

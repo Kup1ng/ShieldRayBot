@@ -232,7 +232,7 @@ class OnHoldDisplayLabelTests(unittest.TestCase):
         self.assertNotIn("نامحدود", text)
 
     def test_ui_sources_not_map_null_days_to_unlimited(self):
-        # Mini App label: tests/miniapp_app.test.cjs (on_hold never reads «نامحدود»).
+        # Mini App label: frontend/src/miniapp/screens/services/ServicesScreen.test.tsx (on_hold never reads «نامحدود»).
         html = (ROOT / "app/web/templates/_user_edit_body.html").read_text(
             encoding="utf-8"
         )
@@ -244,7 +244,8 @@ class OnHoldDisplayLabelTests(unittest.TestCase):
         svc_src = (ROOT / "app/bot/handlers/services.py").read_text(encoding="utf-8")
         self.assertIn("fetch_live_service_info", svc_src)
         self.assertIn("service_card(sub_info)", svc_src)
-        pg_src = (ROOT / "app/api/pg_pages.py").read_text(encoding="utf-8")
+        # The /pg/users list data moved from pg_pages.py to the React page's service.
+        pg_src = (ROOT / "app/services/pg_users_panel.py").read_text(encoding="utf-8")
         self.assertIn("pg_expire_fields", pg_src)
 
 

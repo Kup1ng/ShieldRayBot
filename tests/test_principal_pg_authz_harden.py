@@ -7,8 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 import app.db.models  # noqa: F401
@@ -20,7 +19,7 @@ from app.services.org_principals import (
 )
 from app.services.pasarguard import PasarGuardError, get_pg_for_principal
 from app.services.pg_access import (
-    _ROLE_CACHE,
+    clear_platform_pg_capability_cache,
     enrich_staff_pg_from_role,
     resolve_reseller_pg_features,
     staff_has_pg_admins_create,
@@ -30,6 +29,7 @@ from app.services.principal_child_provisioning import has_pg_admin_create_capabi
 from app.services.principal_lifecycle import _safe_pg_role_name
 from app.services.principal_provisioning import owner_has_pg_admin_create_capability
 from app.services.secret_box import encrypt_secret
+from tests.pgtest import pg_engine
 
 
 _PG_A = "SiblingA12!@xx"
@@ -38,20 +38,16 @@ _PG_B = "SiblingB34!@yy"
 
 class PrincipalPgAuthzHardenTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine(
-            "sqlite+aiosqlite://",
-            connect_args={"check_same_thread": False},
-            poolclass=StaticPool,
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
             self.engine, expire_on_commit=False, class_=AsyncSession
         )
-        _ROLE_CACHE.clear()
+        clear_platform_pg_capability_cache()
 
     async def asyncTearDown(self) -> None:
-        _ROLE_CACHE.clear()
+        clear_platform_pg_capability_cache()
         await self.engine.dispose()
 
     async def _siblings(self, session: AsyncSession) -> tuple[OrgPrincipal, OrgPrincipal]:
@@ -246,7 +242,7 @@ class ResellerPlansStaffCtxTests(unittest.IsolatedAsyncioTestCase):
                 side_effect=AssertionError("reseller L1 must not use Owner get_pg()"),
             ),
         ):
-            _ROLE_CACHE.clear()
+            clear_platform_pg_capability_cache()
             staff = await _staff_ctx(profile, MagicMock())
         self.assertEqual(staff["role"], "reseller")
         self.assertEqual(staff["bot_user_id"], 9)

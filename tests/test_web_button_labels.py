@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.db.models import ResellerSetting, Setting
 from app.services.settings_button_labels import PLATFORM_ONLY_BTN_KEYS, appearance_button_subs, shop_button_subs
 from app.services.users import BUTTON_LABEL_GROUPS_MORE, clear_settings_cache
+from tests.settings_json import settings_fields, settings_url
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
 
 
@@ -39,25 +40,29 @@ class WebButtonLabelTests(RoutesHarness):
             )
 
     async def test_the_owner_edits_every_label_the_bot_can_edit(self) -> None:
-        page = await self.request(OWNER_SESSION, "GET", "/settings?tab=buttons")
+        page = await self.request(OWNER_SESSION, "GET", settings_url("buttons"))
         self.assertEqual(page.status_code, 200)
+        keys = set(settings_fields(page.json()))
         for key in _bot_label_keys(include_platform=True):
             with self.subTest(key=key):
-                self.assertIn(f'name="s_{key}"', page.text)
-        self.assertNotIn('name="s_btn_miniapp"', page.text)
+                self.assertIn(key, keys)
+        self.assertNotIn("btn_miniapp", keys)
         saved = await self.request(OWNER_SESSION, "POST", "/settings?tab=buttons", {"s_btn_adm_plans_add": "➕ پلن تازه"})
         self.assertIn("saved=1", saved.headers["location"])
         self.assertEqual(await self.stored("btn_adm_plans_add"), "➕ پلن تازه")
 
     async def test_a_shop_sees_and_saves_only_its_own_labels(self) -> None:
-        page = await self.request(SHOP_SESSION, "GET", "/shop-settings?tab=buttons")
+        page = await self.request(SHOP_SESSION, "GET", "/api/panel/shop-settings?tab=buttons")
         self.assertEqual(page.status_code, 200)
-        self.assertIn('name="s_btn_res_plans"', page.text)
+        sections = page.json()["sections"]
+        keys = {field["key"] for section in sections for field in section["fields"]}
+        self.assertIn("btn_res_plans", keys)
         for key in PLATFORM_ONLY_BTN_KEYS:
-            self.assertNotIn(f'name="s_{key}"', page.text, key)
+            self.assertNotIn(key, keys, key)
+        titles = {section["title"] for section in sections}
         for title in BUTTON_LABEL_GROUPS_MORE:
             if title.startswith("دکمه‌های ادمین"):
-                self.assertNotIn(f"<h2>{title}</h2>", page.text)
+                self.assertNotIn(title, titles)
         await self.request(SHOP_SESSION, "POST", "/shop-settings?tab=buttons", {
             "s_btn_res_plans": "💎 پلن‌های من", "s_btn_adm_plans_add": "نفوذ",
         })

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+
 from aiogram import F, Router
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -14,12 +16,13 @@ from app.bot.list_pages import page_number
 from app.bot.tg_utils import safe_edit_text
 from app.db.models import BotUser, Plan, ResellerProfile
 from app.services.plans_catalog import (
-    groups_allowed_for_staff,
     load_pg_plan_options,
     parse_plan_days,
     parse_plan_gb,
     parse_plan_price,
-    template_allowed_for_staff,
+    plan_groups_denial,
+    plan_template_denial,
+    role_requires_template,
 )
 from app.services.resellers import has_bot_perm
 from app.services import bot_feedback_texts as feedback
@@ -103,6 +106,7 @@ async def _plans_kb(
 
 def _plan_item_kb(plan: Plan) -> InlineKeyboardMarkup:
     """One plan's actions; «بازگشت» returns to the plans screen."""
+    carry = bool(getattr(plan, "carry_remaining_quota", True))
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -111,6 +115,12 @@ def _plan_item_kb(plan: Plan) -> InlineKeyboardMarkup:
                     callback_data=f"res:plan:tog:{plan.id}",
                 ),
                 InlineKeyboardButton(text="🗑 حذف", callback_data=f"res:plan:del:{plan.id}"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=("✅ " if carry else "⬜️ ") + "انتقال مانده در تمدید",
+                    callback_data=f"res:plan:carry:{plan.id}",
+                )
             ],
             [
                 InlineKeyboardButton(
@@ -140,11 +150,13 @@ def _plan_text(plan: Plan, *, category_name: str | None = None) -> str:
         else (f"گروه {plan.pg_group_ids}" if plan.pg_group_ids else "—")
     )
     cat = category_name or "—"
+    carry = bool(getattr(plan, "carry_remaining_quota", True))
     return (
-        f"💎 <b>{plan.name}</b>\n"
+        f"💎 <b>{html.escape(plan.name)}</b>\n"
         f"قیمت: {plan.price:,} تومان\n"
         f"مدت: {plan.duration_days} روز · حجم: {gb}\n"
         f"برچسب دسته: {cat}\n"
+        f"مانده در تمدید: {'منتقل می‌شود' if carry else 'منتقل نمی‌شود'}\n"
         f"پاسارگارد: {src}\n"
         f"وضعیت: {'فعال' if plan.is_active else 'خاموش'}"
     )
@@ -282,6 +294,38 @@ async def res_plan_toggle(callback: CallbackQuery, session: AsyncSession, db_use
         await callback.answer(feedback.NOT_FOUND, show_alert=True)
         return
     plan.is_active = not plan.is_active
+    await session.commit()
+    await callback.answer(feedback.SAVED)
+    if callback.message:
+        await safe_edit_text(
+            callback.message,
+            await _plan_text_for(session, plan),
+            reply_markup=_plan_item_kb(plan),
+        )
+
+
+@router.callback_query(F.data.startswith("res:plan:carry:"))
+async def res_plan_carry_toggle(
+    callback: CallbackQuery,
+    session: AsyncSession,
+    db_user: BotUser,
+    is_reseller_bot: bool = False,
+    reseller_owner_id: int | None = None,
+):
+    owner_id, profile = await _actor(
+        session, db_user, is_reseller_bot=is_reseller_bot, reseller_owner_id=reseller_owner_id
+    )
+    if not owner_id or not profile:
+        await callback.answer(feedback.NOT_RESELLER, show_alert=True)
+        return
+    if not has_bot_perm(profile, "plans"):
+        await callback.answer(feedback.NO_ACCESS, show_alert=True)
+        return
+    plan = await session.get(Plan, int(callback.data.rsplit(":", 1)[-1]))
+    if not plan or plan.owner_reseller_id != owner_id or plan.is_trial:
+        await callback.answer(feedback.NOT_FOUND, show_alert=True)
+        return
+    plan.carry_remaining_quota = not bool(getattr(plan, "carry_remaining_quota", True))
     await session.commit()
     await callback.answer(feedback.SAVED)
     if callback.message:
@@ -559,7 +603,7 @@ async def _reseller_continue_pg_mode(
     templates, groups, pg_error = await load_pg_plan_options(staff, session=session)
     await state.update_data(templates=templates, groups=groups, owner_id=owner_id)
     rows: list[list[InlineKeyboardButton]] = []
-    if groups:
+    if groups and not role_requires_template(staff):
         rows.append(
             [InlineKeyboardButton(text="📦 انتخاب گروه پاسارگارد", callback_data="res:plan:mode:groups")]
         )
@@ -729,8 +773,9 @@ async def res_plan_save_groups(callback: CallbackQuery, state: FSMContext, sessi
     data = await state.get_data()
     selected = [int(x) for x in (data.get("selected_groups") or [])]
     staff = await _staff_ctx(profile, session)
-    if not selected or not groups_allowed_for_staff(staff, selected):
-        await callback.answer("حداقل یک گروه مجاز انتخاب کنید", show_alert=True)
+    groups_denial = plan_groups_denial(staff, selected) if selected else "حداقل یک گروه مجاز انتخاب کنید"
+    if groups_denial:
+        await callback.answer(groups_denial, show_alert=True)
         return
     cat_raw = data.get("category_id")
     category_id = int(cat_raw) if cat_raw not in (None, "", 0, "0") else None
@@ -753,7 +798,7 @@ async def res_plan_save_groups(callback: CallbackQuery, state: FSMContext, sessi
     if callback.message:
         await safe_edit_text(
             callback.message,
-            f"✅ پلن «{plan.name}» ساخته شد.\n" + await _plan_text_for(session, plan),
+            f"✅ پلن «{html.escape(plan.name)}» ساخته شد.\n" + await _plan_text_for(session, plan),
             reply_markup=await _plans_kb(session, plans, reseller_id=owner_id),
         )
 
@@ -795,8 +840,9 @@ async def res_plan_save_tpl(callback: CallbackQuery, state: FSMContext, session:
         return
     tid = int(callback.data.split(":")[-1])
     staff = await _staff_ctx(profile, session)
-    if not template_allowed_for_staff(staff, tid):
-        await callback.answer("به این تمپلیت دسترسی ندارید", show_alert=True)
+    template_denial = plan_template_denial(staff, tid)
+    if template_denial:
+        await callback.answer(template_denial, show_alert=True)
         return
     data = await state.get_data()
     cat_raw = data.get("category_id")
@@ -820,7 +866,7 @@ async def res_plan_save_tpl(callback: CallbackQuery, state: FSMContext, session:
     if callback.message:
         await safe_edit_text(
             callback.message,
-            f"✅ پلن «{plan.name}» ساخته شد.\n" + await _plan_text_for(session, plan),
+            f"✅ پلن «{html.escape(plan.name)}» ساخته شد.\n" + await _plan_text_for(session, plan),
             reply_markup=await _plans_kb(session, plans, reseller_id=owner_id),
         )
 

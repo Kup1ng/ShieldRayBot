@@ -3,7 +3,8 @@
 Phase 0 added ``from app.db.models import Payment`` inside the delivery branch of
 ``finance_page``. That made ``Payment`` a function-local name for the whole
 handler, so orders/payments tabs raised UnboundLocalError on ``select(Payment)``
-whenever there was at least one order/payment row to load (HTTP 500).
+whenever there was at least one order/payment row to load (HTTP 500). The tabs'
+data now comes from ``app.services.finance_panel`` through the JSON endpoints.
 """
 
 from __future__ import annotations
@@ -15,7 +16,8 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,16 +32,22 @@ class FinancePaymentUnboundSourceGuards(unittest.TestCase):
 
         self.assertIs(finance_pages.Payment, Payment)
         start = src.index("def register_finance_pages")
-        # Only the finance_page body matters (through legacy redirects).
-        body = src[start : src.index("def _legacy_finance_redirect", start)]
+        # Only the page registration matters (through the legacy redirects, when present).
+        end = src.find("def _legacy_finance_redirect", start)
+        body = src[start : end if end != -1 else len(src)]
         self.assertNotIn("from app.db.models import Payment", body)
+        # The list data lives in the service: the same rule applies to every function there.
+        import app.services.finance_panel as finance_panel
+
+        self.assertIs(finance_panel.Payment, Payment)
+        panel_src = (ROOT / "app/services/finance_panel.py").read_text(encoding="utf-8")
+        self.assertNotIn("    from app.db.models import", panel_src)
 
 
 class FinanceOrdersPaymentsLiveTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory(prefix="finance-unbound-")
-        db_path = Path(self._tmpdir.name) / "t.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         from app.db.models import Base
 
         async with self.engine.begin() as conn:
@@ -119,8 +127,7 @@ class FinanceOrdersPaymentsLiveTests(unittest.IsolatedAsyncioTestCase):
         self._tmpdir.cleanup()
 
     def _app(self) -> FastAPI:
-        from app.api.app import render
-        from app.api.finance_pages import register_finance_pages
+        from app.api.panel_finance_api import register_panel_finance_api
 
         staff = {
             "role": "admin",
@@ -147,20 +154,21 @@ class FinanceOrdersPaymentsLiveTests(unittest.IsolatedAsyncioTestCase):
             async with self.Session() as session:
                 yield session
 
-        register_finance_pages(
-            app, render=render, require_staff=require_staff, get_db=get_db
+        register_panel_finance_api(
+            app,
+            require_staff=require_staff,
+            require_admin=require_staff,
+            require_perm=lambda _perm: require_staff,
+            require_pg_perm=lambda _perm: require_staff,
+            get_db=get_db,
         )
         return app
 
     async def test_orders_and_payments_tabs_ok_with_rows(self) -> None:
         transport = httpx.ASGITransport(app=self._app())
         async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
-            for path in (
-                "/finance?tab=orders",
-                "/finance?tab=payments",
-                "/finance?tab=delivery",
-                "/finance?tab=reports",
-            ):
+            for tab in ("orders", "payments", "delivery", "reports"):
+                path = f"/api/panel/finance/{tab}"
                 resp = await client.get(path, follow_redirects=True)
                 self.assertEqual(
                     resp.status_code,
@@ -168,6 +176,10 @@ class FinanceOrdersPaymentsLiveTests(unittest.IsolatedAsyncioTestCase):
                     msg=f"{path} -> {resp.status_code}: {resp.text[:240]}",
                 )
                 self.assertNotIn("UnboundLocalError", resp.text)
+            orders = (await client.get("/api/panel/finance/orders")).json()
+            self.assertEqual(len(orders["rows"]), 1)
+            payments = (await client.get("/api/panel/finance/payments")).json()
+            self.assertEqual(len(payments["rows"]), 1)
 
 
 if __name__ == "__main__":

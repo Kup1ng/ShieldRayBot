@@ -306,19 +306,6 @@ def _embed_mock_token(checkout_url: str, token: str) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(q), parts.fragment))
 
 
-async def _break_read_snapshot(session: AsyncSession) -> None:
-    """End the current txn so peer commits become visible (needed on SQLite).
-
-    SQLite DEFERRED transactions keep a read snapshot for the whole txn; without
-    ending it, a loser waiting on a concurrent winner never sees AWAITING+url.
-    ``commit()`` persists any prior caller dirty state (SAVEPOINT already
-    protected the failed insert) rather than wiping it with rollback.
-    """
-    bind = session.get_bind()
-    if bind is not None and getattr(bind.dialect, "name", "") == "sqlite":
-        await session.commit()
-
-
 async def _await_open_settlement(
     session: AsyncSession,
     *,
@@ -331,7 +318,6 @@ async def _await_open_settlement(
 ) -> PaymentSettlement | None:
     """Poll for the winner row after a lost insert race (same DB, other session)."""
     for _ in range(max(1, attempts)):
-        await _break_read_snapshot(session)
         raced = await _get_by_idem(session, idem) or await _get_open_for_payment_channel(
             session, payment_id=payment_id, channel=channel
         )
@@ -350,7 +336,6 @@ async def _await_open_settlement(
         elif raced.status in _OPEN_STATUSES or raced.status == SettlementStatus.AWAITING.value:
             return raced
         await asyncio.sleep(delay_s)
-    await _break_read_snapshot(session)
     raced = await _get_by_idem(session, idem) or await _get_open_for_payment_channel(
         session, payment_id=payment_id, channel=channel
     )
@@ -385,7 +370,6 @@ async def _insert_settlement_race_safe(
         idem = settlement.idempotency_key
         payment_id = int(settlement.payment_id)
         channel = str(settlement.channel)
-        await _break_read_snapshot(session)
         raced = await _get_by_idem(session, idem)
         if raced is None:
             raced = await _get_open_for_payment_channel(
@@ -756,7 +740,6 @@ async def _wait_for_peer_settle(
     sid = int(settlement.id)
     pid = int(payment.id)
     for _ in range(80):
-        await _break_read_snapshot(session)
         # expire_on_commit=False keeps stale identity — force DB reload.
         settlement = (
             await session.execute(
@@ -779,7 +762,6 @@ async def _wait_for_peer_settle(
             await session.commit()
             return payment
         await asyncio.sleep(0.05)
-    await _break_read_snapshot(session)
     settlement = (
         await session.execute(
             select(PaymentSettlement)

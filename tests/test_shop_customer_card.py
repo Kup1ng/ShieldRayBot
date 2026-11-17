@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from app.db.models import Plan, UserService
 from app.services.customer_service_lines import SERVICE_LINE_LIMIT, service_lines
+from tests.pgtest import pg_engine
 
 
 def _service(service_id: int, name: str, status: str | None, *, cancelled: bool = False, plan: str | None = None) -> UserService:
@@ -27,6 +28,7 @@ class ServiceLinesTests(unittest.TestCase):
         self.assertIn("۳۰ روزه", lines[0])
         self.assertIn("فعال", lines[0])
         self.assertIn("حجم", lines[0])
+        self.assertIn("روز", lines[0])  # remaining days from stored datetime expire
         self.assertIn("old", lines[1])
         self.assertIn("منقضی", lines[1])
 
@@ -55,13 +57,13 @@ class CustomerCardHandlerTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_card_lists_only_this_shops_services_of_the_customer(self) -> None:
         from unittest.mock import AsyncMock, MagicMock, patch
 
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.bot.handlers import reseller as handler
         from app.db import Base
         from app.db.models import BotUser, ResellerProfile, Role
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)

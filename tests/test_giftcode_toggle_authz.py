@@ -15,10 +15,10 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 
 def _find_route(app: FastAPI, path: str, method: str):
@@ -36,8 +36,7 @@ class GiftCodeToggleAuthzTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "gifts.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -136,9 +135,11 @@ class GiftCodeToggleAuthzTests(unittest.IsolatedAsyncioTestCase):
             self.assertFalse(code.is_active)
 
     async def test_staff_with_shop_permission_can_toggle_own_code(self):
-        from app.db.models import ChargeCode
+        from app.db.models import BotUser, ChargeCode
 
         async with self.Session() as session:
+            session.add(BotUser(id=42, telegram_id=42, referral_code="shop42", role="reseller"))
+            await session.commit()
             row = ChargeCode(
                 code="SHOP50",
                 amount=50000,

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from app.bot import keyboards as kb
 from app.bot import menu_nav as nav
@@ -41,7 +39,17 @@ class MarketingHubKeyboardTests(unittest.TestCase):
     def test_hub_lists_its_leaves_and_returns_home(self):
         self.assertEqual(
             _callbacks(admin_marketing_hub_keyboard({})),
-            ["nv:adm:loy", "nv:adm:broadcast", "nv:adm:gc", "nv:adm:cmp", "nv:adm:home"],
+            [
+                "nv:adm:loy",
+                "nv:adm:broadcast",
+                "nv:adm:gc",
+                "nv:adm:cmp",
+                "nv:adm:cb",
+                "dsc:l",
+                "fnl:v",
+                "tru:l:all:0",
+                "nv:adm:home",
+            ],
         )
 
     def test_club_and_broadcast_left_their_old_hubs(self):

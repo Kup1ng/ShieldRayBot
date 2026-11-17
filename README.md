@@ -1,10 +1,10 @@
-# 🕐 PGClockBot
+# 🕐 ShieldRay
 
-![PGClockBot preview](preview.png)
+![ShieldRay preview](preview.png)
 
 فروش اشتراک، نمایندگی، کیف پول و عملیات پاسارگارد؛ رابط ربات فارسی، پنل وب روی پورت `9000`.
 
-**نسخه پایدار `0.5.0`** روی شاخهٔ `main` — نصب پیش‌فرض همین کانال است. شاخهٔ `dev` برای پیش‌نسخه‌های آزمایشی است.
+**نسخه پایدار `0.6.1`** روی شاخهٔ `main` — نصب پیش‌فرض همین کانال است. شاخهٔ `dev` برای پیش‌نسخه‌های آزمایشی است.
 
 ---
 
@@ -53,7 +53,7 @@
 bash <(curl -fsSL https://raw.githubusercontent.com/Mrclocks/PGClockBot/main/get.sh)
 ```
 
-نصب پیش‌فرض از **`main` (پایدار 0.5)** است. برای کانال توسعه:
+نصب پیش‌فرض از **`main` (پایدار 0.6)** است. برای کانال توسعه:
 
 ```bash
 PGCLOCK_CHANNEL=dev bash <(curl -fsSL https://raw.githubusercontent.com/Mrclocks/PGClockBot/dev/get.sh)

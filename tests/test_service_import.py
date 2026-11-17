@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -10,12 +9,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import BotUser, ResellerProfile, ServiceImportAttempt, UserService, Order, OrderStatus
 from app.services import service_import as si
@@ -29,6 +27,7 @@ from app.services.service_import import (
     is_external_service,
     parse_subscription_token,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 PLATFORM_ADMIN = "platformadmin"
 SHOP_ADMIN = "shopadmin"
@@ -91,7 +90,7 @@ class ImportCase(unittest.IsolatedAsyncioTestCase):
         si.clear_identity_cache()
         self.addCleanup(si.clear_identity_cache)
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'i.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -369,7 +368,7 @@ class MigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("import_migration", root / "alembic/versions/0051_service_import.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
             conn.execute(sa.text("CREATE TABLE user_services (id INTEGER PRIMARY KEY, pg_user_id INTEGER, remark TEXT)"))
@@ -381,7 +380,7 @@ class MigrationTests(unittest.TestCase):
                 self.assertIn("service_import_attempts", insp.get_table_names())
                 self.assertIn("uq_user_services_imported_pg_user", {i["name"] for i in insp.get_indexes("user_services")})
                 conn.execute(sa.text("INSERT INTO user_services VALUES (4, 5, 'imported')"))
-                with self.assertRaises(sa.exc.IntegrityError):
+                with self.assertRaises(sa.exc.IntegrityError), conn.begin_nested():
                     conn.execute(sa.text("INSERT INTO user_services VALUES (5, 5, 'imported')"))
                 migration.downgrade()
                 self.assertNotIn("service_import_attempts", sa.inspect(conn).get_table_names())

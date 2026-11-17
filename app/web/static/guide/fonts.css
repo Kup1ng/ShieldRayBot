@@ -1,9 +1,8 @@
-/* Vazirmatn OFL — self-hosted variable font (no Google Fonts round-trip). */
+/* YekanBakh variable font, self-hosted (same-origin only). */
 @font-face {
-  font-family: "Vazirmatn";
-  src: url("fonts/Vazirmatn-Variable.woff2") format("woff2-variations"),
-       url("fonts/Vazirmatn-Variable.woff2") format("woff2 supports variations");
-  font-weight: 100 900;
+  font-family: "YekanBakh";
+  src: url("fonts/YekanBakh-VF.woff2") format("woff2");
+  font-weight: 100 950;
   font-style: normal;
   font-display: swap;
 }

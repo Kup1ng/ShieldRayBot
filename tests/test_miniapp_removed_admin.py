@@ -8,12 +8,13 @@ from unittest.mock import patch
 
 import httpx
 from fastapi import Depends, FastAPI, Request
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db.models import Base, BotUser, ResellerProfile
 from app.services.miniapp_auth import load_mini_user, resolve_mini_persona
 from app.services.users import clear_settings_cache
 from tests.test_miniapp_init_data_window import TOKEN, signed
+from tests.pgtest import pg_engine
 
 FORMER_ADMIN = 7001
 FORMER_ADMIN_RESELLER = 7002
@@ -23,7 +24,7 @@ CURRENT_ADMIN = 7003
 class RemovedAdminMiniAppTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         clear_settings_cache()
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

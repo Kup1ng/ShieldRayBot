@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select, update
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import PgAdminSubscription, ResellerPlan, ResellerProfile
@@ -25,6 +22,7 @@ from app.services.reseller_capacity_view import (
 )
 from app.services.resellers import ensure_current_capacity_reseller_plan
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
+from tests.pgtest import pg_engine
 
 GB = 1024**3
 
@@ -67,7 +65,7 @@ class ViewTests(unittest.TestCase):
 class SyncTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'v.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -105,7 +103,8 @@ class SyncTests(unittest.IsolatedAsyncioTestCase):
     async def test_the_base_follows_the_live_limits_and_purchased_extras_are_kept(self):
         await self.add_sub(self.cc_id, base=(0, 0), extra=(20, 5))
         self.assertEqual(await self.sync(AsyncMock(return_value=(500, 50))), (500, 50))
-        self.assertEqual(await self.stored(), (500, 50, 20, 5))
+        # Live already includes extras; base stores only the residual so the sales ceiling is 500.
+        self.assertEqual(await self.stored(), (480, 45, 20, 5))
 
     async def test_a_panel_that_cannot_be_read_changes_nothing(self):
         await self.add_sub(self.cc_id, base=(10, 2))
@@ -139,11 +138,14 @@ class ScreenTests(RoutesHarness):
 
     async def test_the_edit_screen_shows_users_unlimited_and_the_sync_button(self):
         overview = {"ready": True, "traffic": {"limit": 500 * GB}, "users": {"limit": 50}}
-        with patch("app.services.pg_overview.build_reseller_pg_overview", AsyncMock(return_value=overview)):
-            response = await self.call_form(OWNER_SESSION, "GET", "/resellers/5/edit?fragment=1")
+        with patch("app.services.reseller_panel_edit.build_reseller_pg_overview", AsyncMock(return_value=overview)):
+            response = await self.call_form(OWNER_SESSION, "GET", "/api/panel/resellers/5/edit")
         self.assertEqual(response.status_code, 200)
-        for needle in ("کاربران کل", "نامحدود", "/resellers/5/subscription/sync", "500 گیگ", "یکی نیست"):
-            self.assertIn(needle, response.text)
+        capacity = response.json()["pg_subscription"]
+        self.assertEqual(capacity["total_users_text"], "نامحدود")
+        self.assertEqual(capacity["live_gb_text"], "500 گیگ")
+        self.assertTrue(capacity["can_sync"], "the sync button is offered for «ظرفیت فعلی» shops")
+        self.assertTrue(capacity["differs"], "the recorded capacity differs from the live limit")
 
     async def test_the_owner_syncs_and_a_shop_cannot(self):
         with patch("app.services.reseller_capacity_view.read_live_pg_admin_capacity", AsyncMock(return_value=(500, 50))):

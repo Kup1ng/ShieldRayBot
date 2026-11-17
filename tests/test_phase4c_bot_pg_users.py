@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tests.reason_support import ReasonedState
 from app.db import Base
 import app.db.models  # noqa: F401
 from app.db.models import BotUser, ResellerProfile, Role
@@ -26,6 +27,7 @@ from app.services.org_principals import (
 )
 from app.services.pg_access import map_pg_role_to_features
 from app.services.platform_identity import is_explicit_owner_staff
+from tests.pgtest import pg_engine
 
 
 def _pg_user(uid: int, owner: str | None) -> dict:
@@ -126,7 +128,7 @@ def _fake_pg(users: dict[int, dict]):
 
 class Phase4CBotPgUsersTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -637,13 +639,13 @@ class Phase4CBotPgUsersTests(unittest.IsolatedAsyncioTestCase):
 
             cb_r = SimpleNamespace(data="adm:pg:reset:101", answer=AsyncMock(), message=None)
             with self._enter(patches):
-                await mod.pg_reset(cb_r, db_user=fx.ua, session=session)
+                await mod.pg_reset(cb_r, db_user=fx.ua, session=session, state=ReasonedState(cb_r.data))
             fake_pg.reset_user_by_id.assert_awaited_once_with(101)
 
             cb_f = SimpleNamespace(data="adm:pg:reset:102", answer=AsyncMock(), message=None)
             fake_pg.reset_user_by_id.reset_mock()
             with self._enter(patches):
-                await mod.pg_reset(cb_f, db_user=fx.ua, session=session)
+                await mod.pg_reset(cb_f, db_user=fx.ua, session=session, state=ReasonedState(cb_f.data))
             fake_pg.reset_user_by_id.assert_not_called()
 
 

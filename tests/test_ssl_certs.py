@@ -91,7 +91,9 @@ class SslUiWiredTests(unittest.TestCase):
         self.assertTrue(Path("app/services/ssl_certs.py").is_file())
         src = Path("app/api/app.py").read_text(encoding="utf-8")
         self.assertIn("/settings/ssl/progress", src)
-        self.assertIn("PANEL_SETTINGS", src)
+        # The settings page frame (React) routes the panel tabs, ssl among them.
+        settings_frame = Path("app/services/settings_panel.py").read_text(encoding="utf-8")
+        self.assertIn("PANEL_SETTINGS", settings_frame)
         self.assertIn("start_issue_job", src)
         self.assertIn("enable_https", src)
         main = Path("app/main.py").read_text(encoding="utf-8")

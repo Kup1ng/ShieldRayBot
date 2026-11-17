@@ -99,11 +99,6 @@ class PerfHardeningSourceTests(unittest.TestCase):
         self.assertIn("max_instances=1", src)
         self.assertIn("coalesce=True", src)
 
-    def test_sqlite_foreign_keys_enabled(self):
-        src = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("PRAGMA foreign_keys=ON", src)
-        self.assertIn("_ensure_indexes", src)
-
     def test_discount_reserved_at_create(self):
         src = Path("app/services/orders.py").read_text(encoding="utf-8")
         self.assertIn("_reserve_discount_code", src)

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy import event, func, select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy import func, select, text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import (
@@ -23,12 +22,7 @@ from app.db.models import (
 )
 from app.services.user_purge import purge_user_references
 from app.services.users import delete_bot_user
-
-
-def _enable_sqlite_fk(dbapi_conn, _record) -> None:
-    cursor = dbapi_conn.cursor()
-    cursor.execute("PRAGMA foreign_keys=ON")
-    cursor.close()
+from tests.pgtest import pg_engine
 
 
 def _user(telegram_id: int) -> BotUser:
@@ -44,9 +38,7 @@ def _user(telegram_id: int) -> BotUser:
 class UserPurgeSchemaSweepTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "purge.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-        event.listen(self.engine.sync_engine, "connect", _enable_sqlite_fk)
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

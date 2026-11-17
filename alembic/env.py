@@ -14,7 +14,9 @@ from app.db.engine_url import to_sync_url
 import app.db.models  # noqa: F401
 
 config = context.config
-if config.config_file_name is not None:
+# Only the alembic CLI configures logging. Run from the app (alembic_runner), fileConfig
+# would disable every logger already created and replace the app's own log setup.
+if config.config_file_name is not None and config.attributes.get("configure_logging", True):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
@@ -63,7 +65,6 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
-        render_as_batch=url.startswith("sqlite"),
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -83,7 +84,6 @@ def run_migrations_online() -> None:
             connection=connection,
             target_metadata=target_metadata,
             compare_type=True,
-            render_as_batch=connection.dialect.name == "sqlite",
         )
         with context.begin_transaction():
             context.run_migrations()

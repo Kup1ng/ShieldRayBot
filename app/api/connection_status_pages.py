@@ -9,23 +9,21 @@ from typing import Annotated, Literal
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Form, HTTPException
 from fastapi.responses import RedirectResponse, Response
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import get_settings
-from app.services.authz import authz_from_staff
-from app.services.connection_monitor_access import MonitorAccess, require_monitor_owner
+from app.api.spa_pages import spa_response
+from app.services.connection_monitor_access import MonitorAccess
+from app.services.connection_status_panel import owner_monitor_access
 from app.services.connection_monitor_actions import MonitorTargetEdit, select_monitor_config, update_monitor_target
-from app.services.connection_monitor_admin import monitor_config_choices, set_monitor_enabled
+from app.services.connection_monitor_admin import set_monitor_enabled
 from app.services.connection_monitor_errors import monitor_error_message
 from app.services.connection_monitor_preferences import delete_monitor_target, pause_monitor_target
 from app.services.connection_monitor_queue import queue_manual_check
 from app.services.connection_monitor_settings import set_monitor_account
-from app.services.connection_monitor_views import monitor_admin_page
-from app.services.connection_status_texts import PLAIN_STATUS_LABELS, REASON_LABELS, connection_check_time
 from app.services.db_safe import rollback_quiet
 from app.services.pasarguard import PasarGuardError
 
@@ -33,7 +31,6 @@ from app.services.pasarguard import PasarGuardError
 logger = logging.getLogger(__name__)
 STATUS_PATH = "/connection-status"
 EXPECTED_ERRORS = (ValueError, PasarGuardError, httpx.HTTPError, SQLAlchemyError)
-BoundedId = Annotated[int, Query(ge=0, le=2147483647)]
 
 
 async def _action_result(session: AsyncSession, operation: Awaitable[object]) -> RedirectResponse:
@@ -48,34 +45,15 @@ async def _action_result(session: AsyncSession, operation: Awaitable[object]) ->
 
 def register_connection_status_pages(app: FastAPI, *, render: Callable, require_staff: Callable, get_db: Callable) -> None:
     async def require_access(staff: dict = Depends(require_staff), session: AsyncSession = Depends(get_db)) -> MonitorAccess:
-        access = MonitorAccess(authz_from_staff(staff), True)
         try:
-            await require_monitor_owner(session, access)
+            return await owner_monitor_access(session, staff)
         except ValueError:
             raise HTTPException(403, "دسترسی به تنظیمات اتصال ندارید.") from None
-        await session.commit()
-        return access
 
     @app.get(STATUS_PATH)
-    async def connection_page(request: Request, after: BoundedId = 0, host_after: BoundedId = 0,
-                              access: MonitorAccess = Depends(require_access), staff: dict = Depends(require_staff),
-                              session: AsyncSession = Depends(get_db)) -> Response:
-        page = await monitor_admin_page(session, access, now=datetime.now(timezone.utc), after_id=after)
-        hosts, host_error = None, None
-        if request.query_params.get("hosts") == "1":
-            try:
-                hosts = await monitor_config_choices(session, access, offset=host_after)
-            except EXPECTED_ERRORS as exc:
-                await rollback_quiet(session)
-                logger.warning("Connection host list failed type=%s reason=%s", type(exc).__name__, getattr(exc, "code", "catalog_failed"))
-                host_error = monitor_error_message(exc)
-        deployment = get_settings()
-        return render(request, "connection_status.html", {
-            "staff": staff, "page": page, "hosts": hosts, "host_error": host_error,
-            "status_labels": PLAIN_STATUS_LABELS, "reason_labels": REASON_LABELS,
-            "checked_time": connection_check_time,
-            "binary_configured": bool(deployment.connection_monitor_xray_path and deployment.connection_monitor_xray_sha256),
-        })
+    async def connection_page(access: MonitorAccess = Depends(require_access)) -> Response:
+        # The page is the React app; its data comes from /api/panel/connection-status.
+        return spa_response("connection-status")
 
     @app.post(STATUS_PATH + "/account")
     async def connection_account(username: Annotated[str, Form()],

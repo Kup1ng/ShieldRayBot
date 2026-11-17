@@ -13,12 +13,13 @@ import ssl
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from app.cli.context import (
     CliContext,
     SERVICE_NAME,
     database_url,
+    database_url_problem,
     env_get,
     service_unit_installed,
     systemctl,
@@ -113,6 +114,48 @@ def _owner_identity_status() -> tuple[str, str, str]:
     if has_admin_ids:
         return "WARN", "ADMIN_IDS is set but the Web Owner password is empty", "finish the setup wizard to set the panel login"
     return "WARN", "neither the Web Owner password nor ADMIN_IDS is configured yet", "run the setup wizard"
+
+
+def _check_database(ctx: CliContext, add: Callable[..., None]) -> None:
+    """PostgreSQL connectivity and the Alembic revision; a SQLite or empty URL is a FAIL."""
+    url = database_url(ctx.root)
+    problem = database_url_problem(url)
+    if problem:
+        add("database", "FAIL", problem, fix="set a postgresql+asyncpg:// DATABASE_URL in .env")
+        return
+    try:
+        from app.db.engine_url import parse_engine, to_sync_url
+        from sqlalchemy import create_engine, text
+
+        info_eng = parse_engine(url)
+        eng = create_engine(to_sync_url(url))
+        try:
+            with eng.connect() as conn:
+                conn.execute(text("SELECT 1"))
+            add("database", "OK", info_eng.dialect)
+        finally:
+            eng.dispose()
+        from app.db.alembic_runner import current_revision, heads
+
+        rev = current_revision(url)
+        head_list: list[str] = []
+        try:
+            head_list = list(heads() or [])
+        except Exception:
+            head_list = []
+        if not rev:
+            add("alembic", "FAIL", "empty revision", fix="pgclock migrate")
+        elif head_list and str(rev) not in {str(h) for h in head_list}:
+            add(
+                "alembic",
+                "WARN",
+                f"at {rev}, heads={','.join(str(h) for h in head_list)}",
+                fix="pgclock migrate",
+            )
+        else:
+            add("alembic", "OK", f"revision {rev}")
+    except Exception as e:
+        add("database", "FAIL", str(e)[:200], fix="check DATABASE_URL / Postgres")
 
 
 def cmd_doctor(ctx: CliContext) -> int:
@@ -228,41 +271,7 @@ def cmd_doctor(ctx: CliContext) -> int:
     else:
         add("cert", "OK", "n/a (https not serving)")
 
-    # Database + alembic
-    url = database_url(ctx.root)
-    try:
-        from app.db.engine_url import parse_engine, to_sync_url
-        from sqlalchemy import create_engine, text
-
-        info_eng = parse_engine(url)
-        eng = create_engine(to_sync_url(url))
-        try:
-            with eng.connect() as conn:
-                conn.execute(text("SELECT 1"))
-            add("database", "OK", info_eng.dialect)
-        finally:
-            eng.dispose()
-        from app.db.alembic_runner import current_revision, heads
-
-        rev = current_revision(url)
-        head_list: list[str] = []
-        try:
-            head_list = list(heads() or [])
-        except Exception:
-            head_list = []
-        if not rev:
-            add("alembic", "FAIL", "empty revision", fix="pgclock migrate")
-        elif head_list and str(rev) not in {str(h) for h in head_list}:
-            add(
-                "alembic",
-                "WARN",
-                f"at {rev}, heads={','.join(str(h) for h in head_list)}",
-                fix="pgclock migrate",
-            )
-        else:
-            add("alembic", "OK", f"revision {rev}")
-    except Exception as e:
-        add("database", "FAIL", str(e)[:200], fix="check DATABASE_URL / Postgres")
+    _check_database(ctx, add)
 
     # Bot getMe — never print token
     if bot_token:

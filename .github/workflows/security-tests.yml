@@ -17,6 +17,24 @@ on:
 jobs:
   security-tests:
     runs-on: ubuntu-latest
+    # The tests run on PostgreSQL only: tests/conftest.py creates a throwaway database per run.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        # Docker's default 64 MB /dev/shm is too small for PostgreSQL's parallel queries and crashes the server.
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+          --shm-size 256m
+    env:
+      PGCLOCK_TEST_DATABASE_URL: postgresql+asyncpg://postgres:postgres@127.0.0.1:5432/postgres
     steps:
       - uses: actions/checkout@v4
 
@@ -50,7 +68,8 @@ jobs:
 
       - name: Compile every module and import the app
         env:
-          DATABASE_URL: "sqlite+aiosqlite:///:memory:"
+          # Importing only: nothing connects to it.
+          DATABASE_URL: "postgresql+asyncpg://ci@127.0.0.1:9/ci"
         run: |
           python -m compileall -q app alembic scripts run.py
           python -c "import app.main, app.bot, app.api.app"

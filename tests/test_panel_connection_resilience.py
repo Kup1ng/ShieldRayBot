@@ -18,7 +18,7 @@ import httpx
 from fastapi import Depends, FastAPI, Request
 from fastapi.responses import HTMLResponse
 from itsdangerous import URLSafeTimedSerializer
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.panel_connection import PanelConnectionMiddleware, finish_panel_authentication
 from app.config import Settings
@@ -28,6 +28,7 @@ from app.services.pasarguard import PasarGuardClient, PasarGuardError
 from app.services.pg_access import resolve_acl_from_client
 from app.services.pg_staff_access import enforce_pg_admin_web_gate
 from app.services.ux20 import check_pg_connection
+from tests.pgtest import pg_engine
 
 
 class PanelReadTests(unittest.IsolatedAsyncioTestCase):
@@ -388,7 +389,7 @@ class PanelReadTests(unittest.IsolatedAsyncioTestCase):
             raise httpx.ConnectError("offline", request=request)
 
         pg = await self.make_client(offline)
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         sessions = async_sessionmaker(engine, expire_on_commit=False)
         async with engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
@@ -414,18 +415,19 @@ class PanelReadTests(unittest.IsolatedAsyncioTestCase):
                 app = api.create_api_app()
                 async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as browser:
                     browser.cookies.set("session", cookie)
-                    home = await browser.get("/home")
+                    home = await browser.get("/api/panel/home/widgets")
                     self.assertEqual(home.status_code, 200)
-                    self.assertIn('id="home-dash"', home.text)
-                    self.assertIn("وضعیت اتصال", home.text)
-                    self.assertIn("اطلاعات پاسارگارد در دسترس نیست", home.text)
-                    self.assertIn('id="panel-widget-status"', home.text)
-                    self.assertNotRegex(home.text, r'<div[^>]*id="home-dash"[^>]*>\s*</div>')
-                    denied = await browser.get("/pg/body")
-                    self.assertEqual(denied.status_code, 303)
-                    self.assertEqual(denied.headers["location"], "/home")
+                    widgets = home.json()
+                    self.assertEqual(widgets["variant"], "owner")
+                    self.assertEqual(widgets["notice"], {"kind": "unavailable", "minutes": 0})
+                    self.assertIn("pg", [tile["id"] for tile in widgets["tiles"]])
+                    self.assertNotIn("panel.test", home.text)
+                    for denied_path in ("/pg", "/api/panel/pg/widgets"):
+                        denied = await browser.get(denied_path)
+                        self.assertEqual(denied.status_code, 303, denied_path)
+                        self.assertEqual(denied.headers["location"], "/home", denied_path)
                     browser.cookies.clear()
-                    self.assertEqual((await browser.get("/home/body")).status_code, 303)
+                    self.assertEqual((await browser.get("/api/panel/home/widgets")).status_code, 303)
                     password_threads = []
 
                     def verify(username: str, password: str) -> bool:
@@ -457,7 +459,8 @@ class PanelReadTests(unittest.IsolatedAsyncioTestCase):
                     invalid = await browser.get("/home")
                     self.assertEqual(invalid.status_code, 303)
                     self.assertEqual(invalid.headers["location"], "/login")
-            self.assertEqual(calls, ["/api/admin"])
+            # The dashboard probes the panel, but an outage never reaches past the sign-in call.
+            self.assertEqual(set(calls), {"/api/admin"})
         finally:
             clear_platform_pg_capability_cache()
             await engine.dispose()

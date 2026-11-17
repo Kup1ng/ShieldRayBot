@@ -9,11 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram.exceptions import TelegramForbiddenError
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, UserService
 from app.services import first_use_nudge as nudge
 from app.services.users import _SETTINGS_CACHE, SETTING_GROUPS, clear_settings_cache, set_setting
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 UNUSED = {"status": "active", "used_traffic": 0}
@@ -35,7 +36,7 @@ class FakePanel:
 class NudgeCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'nudge.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -194,7 +195,7 @@ class FirstUseMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("first_use_migration", ROOT / "alembic/versions/0074_first_use_nudge.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE user_services (id INTEGER PRIMARY KEY, pg_username TEXT, created_at TIMESTAMP)"))
             conn.execute(text("INSERT INTO user_services VALUES (1, 'old-service', '2026-01-01 00:00:00')"))

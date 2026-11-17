@@ -46,9 +46,11 @@ class HomeDegradedNoFakeDisconnect(unittest.TestCase):
         self.assertIn("unchecked", src)
         # Old band-aid that painted Bot/PG as قطع
         self.assertNotIn('"error": "بارگذاری ناقص"', src)
-        # Body fragment / full page render stays outside data try (diagnosable 500s).
-        self.assertIn("_render_home_result", src)
-        self.assertIn("home_dashboard_body", src)
+        # Serialization stays outside the data try (a bug is a diagnosable 500, never fake «قطع» tiles).
+        api = (ROOT / "app/api/panel_home_api.py").read_text(encoding="utf-8")
+        widgets = api[api.find("async def panel_home_widgets") : api.find("async def panel_dashboard")]
+        self.assertIn("degraded_home_context(staff)", widgets)
+        self.assertGreater(widgets.find("home_widgets_payload("), widgets.find("except Exception:"))
 
     def test_templates_handle_unchecked_conn(self):
         # Markup lives in dash body partials (home.html only includes them).
@@ -74,9 +76,12 @@ class RestoreStatusContract(unittest.TestCase):
         self.assertIn("restore=1", src)
 
     def test_settings_resolves_stale_and_clears_on_ok(self):
-        src = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
-        self.assertIn("resolve_stale_restore_status", src)
-        self.assertIn("clear_idle_restore_status", src)
+        # The backup tab is a React view: its data resolves a stale restore, and it clears a
+        # finished restore through POST /backup/clear.
+        system = (ROOT / "app/services/panel_system.py").read_text(encoding="utf-8")
+        self.assertIn("resolve_stale_restore_status", system)
+        backup_routes = (ROOT / "app/api/backup_pages.py").read_text(encoding="utf-8")
+        self.assertIn("clear_idle_restore_status", backup_routes)
 
     def test_validate_failure_finishes_status(self):
         """Early validate failure must not leave state=running forever."""

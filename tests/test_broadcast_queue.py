@@ -11,7 +11,7 @@ import httpx
 from aiogram.exceptions import TelegramForbiddenError, TelegramRetryAfter
 from fastapi import FastAPI
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.broadcast_queue_pages import register_broadcast_queue_pages
 from app.db.models import Base, BotUser, BroadcastLog
@@ -26,6 +26,7 @@ from app.services.broadcast_queue import (
     queue_broadcast,
     run_broadcast_worker,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORM_USERS = (1, 2, 3, 4, 5)  # telegram ids 1001..1005; the shop owner (9020) is a reseller-role platform customer too
@@ -51,7 +52,7 @@ class FakeBot:
 class QueueCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'broadcast.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -226,38 +227,29 @@ class LegacyInlineSendTests(QueueCase):
         self.assertEqual(self.bot.sent, sent_once)
 
 
-class HistoryTemplateTests(unittest.TestCase):
-    def render(self, rows):
-        from types import SimpleNamespace as NS
+class HistoryPayloadTests(QueueCase):
+    async def history(self, *rows):
+        from app.services.marketing_panel import broadcast_history
 
-        from app.api.app import templates
-        from app.services.broadcast import AUDIENCE_LABELS
-        from app.services.broadcast_queue import STATUS_LABELS
+        self.session.add_all(rows)
+        await self.session.commit()
+        return {row["id"]: row for row in await broadcast_history(self.session)}
 
-        request = NS(url=NS(path="/broadcast"), query_params={}, state=NS(), cookies={}, headers={})
-        return templates.env.get_template("broadcast.html").render(
-            request=request, staff={"role": "admin"}, history=rows, audience_labels=AUDIENCE_LABELS,
-            status_labels=STATUS_LABELS, flash_ok=None, flash_err=None, csp_nonce="n", csrf_token="TOK",
-        )
+    def row(self, status, text="hello"):
+        return BroadcastLog(status=status, audience="all", text=text, total=10, ok_count=3, fail_count=1,
+                            review_count=2, created_by="owner")
 
-    def row(self, row_id, status, text="hello"):
-        from types import SimpleNamespace as NS
+    async def test_an_active_send_can_be_stopped_and_only_a_finished_one_can_be_deleted(self):
+        rows = await self.history(self.row("running"), self.row("done"), self.row("queued"))
+        active = sorted(row["status"] for row in rows.values() if row["is_active"])
+        finished = sorted(row["status"] for row in rows.values() if not row["is_active"])
+        self.assertEqual(active, ["queued", "running"])
+        self.assertEqual(finished, ["done"])
+        self.assertTrue(all(row["review_count"] == 2 for row in rows.values()))
 
-        return NS(id=row_id, status=status, audience="all", text=text, total=10, ok_count=3, fail_count=1,
-                  review_count=2, created_by="owner", created_at="2026-01-01 10:00:00")
-
-    def test_an_active_send_can_be_stopped_and_only_a_finished_one_can_be_deleted(self):
-        html = self.render([self.row(1, "running"), self.row(2, "done"), self.row(3, "queued")])
-        self.assertIn('action="/broadcast/history/1/cancel"', html)
-        self.assertIn('action="/broadcast/history/3/cancel"', html)
-        self.assertNotIn('action="/broadcast/history/1/delete"', html)
-        self.assertIn('action="/broadcast/history/2/delete"', html)
-        self.assertNotIn('action="/broadcast/history/2/cancel"', html)
-        self.assertIn("نامشخص", html)
-
-    def test_message_text_is_escaped(self):
-        html = self.render([self.row(1, "done", text="<script>alert(1)</script>")])
-        self.assertNotIn("<script>alert(1)</script>", html)
+    async def test_message_text_is_plain_data_for_the_page_to_escape(self):
+        rows = await self.history(self.row("done", text="<script>alert(1)</script>"))
+        self.assertEqual(next(iter(rows.values()))["text_snippet"], "<script>alert(1)</script>")
 
 
 class CancelRouteTests(QueueCase):
@@ -295,7 +287,7 @@ class BroadcastMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("broadcast_migration", ROOT / "alembic/versions/0073_broadcast_queue.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE broadcast_logs (id INTEGER PRIMARY KEY, audience TEXT, text TEXT, total INTEGER, ok_count INTEGER, fail_count INTEGER)"))
             conn.execute(text("INSERT INTO broadcast_logs VALUES (1, 'all', 'old message', 10, 9, 1)"))

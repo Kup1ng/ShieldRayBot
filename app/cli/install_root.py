@@ -40,7 +40,7 @@ def read_marker() -> Path | None:
 
 
 def resolve_install_root(*, explicit: str | None = None) -> Path:
-    """Find the PGClockBot install directory.
+    """Find the ShieldRay install directory.
 
     Order:
     1. --root / PGCLOCK_HOME / PGCLOCK_ROOT
@@ -83,7 +83,7 @@ def resolve_install_root(*, explicit: str | None = None) -> Path:
             return path
 
     raise InstallRootError(
-        "Could not locate PGClockBot install root. "
+        "Could not locate ShieldRay install root. "
         "Set PGCLOCK_HOME, or reinstall the global CLI "
         "(sudo bash scripts/install_global_cli.sh)."
     )

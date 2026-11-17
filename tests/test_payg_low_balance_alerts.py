@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.db.models  # noqa: F401
 from app.db import Base
@@ -33,6 +33,7 @@ from app.services.org_principals import (
     ensure_owner_principal,
 )
 from app.services.resellers import make_reseller
+from tests.pgtest import pg_engine, pg_sync_engine
 
 PLATFORM_ADMIN_ID = 9001
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "alembic/versions/0048_payg_low_balance_level.py"
@@ -50,7 +51,7 @@ class WarnBandTests(unittest.TestCase):
 
 class PaygAlertsDatabaseTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -157,6 +158,7 @@ class PaygAlertsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[0][1:3], ([7008], "reseller"))
         self.assertEqual(sent[1][1], [PLATFORM_ADMIN_ID])
         self.assertIn("plat", sent[1][2])
+        self.assertEqual(self.markups, ["nv:res:ra:res_billing", f"adm:resellers:view:{profile.user_id}"])
 
     async def test_sub_reseller_warning_goes_to_its_parent_not_to_siblings(self) -> None:
         async with self.Session() as session:
@@ -189,13 +191,17 @@ class PaygAlertsDatabaseTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sent[1][1], [7010])
         self.assertNotIn(7011, sent[1][1])
         self.assertNotIn(PLATFORM_ADMIN_ID, sent[1][1])
+        self.assertEqual(self.markups[1], None)
 
     async def _capture_notifications(
         self, session: AsyncSession, profile: ResellerProfile
     ) -> list[tuple[int | None, list[int], str]]:
         sent: list[tuple[int | None, list[int], str]] = []
 
-        async def fake_send(_session, shop_user_id, chat_ids, text) -> None:
+        self.markups = []
+
+        async def fake_send(_session, shop_user_id, chat_ids, text, *, markup=None) -> None:
+            self.markups.append(None if markup is None else markup.inline_keyboard[0][0].callback_data)
             kind = "reseller" if shop_user_id == profile.user_id else "owner"
             sent.append((shop_user_id, list(chat_ids), text if kind == "owner" else "reseller"))
 
@@ -213,7 +219,7 @@ class LowBalanceLevelMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("low_balance_level_migration", MIGRATION_PATH)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE reseller_profiles (id INTEGER PRIMARY KEY, user_id INTEGER)"))
             conn.execute(sa.text("INSERT INTO reseller_profiles VALUES (1, 42)"))

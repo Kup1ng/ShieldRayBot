@@ -1,15 +1,16 @@
-"""Full data backup / restore for PGClockBot (DB, uploads, credentials, env).
+"""Full data backup / restore for ShieldRay (DB, uploads, credentials, env).
 
 Archive format (ZIP):
   manifest.json
-  data/bot.db                  (SQLite engine)
-  data/postgres.dump           (PostgreSQL engine — pg_dump -Fc)
+  data/postgres.dump           (pg_dump -Fc)
   data/web_admin.json          (if present)
   data/uploads/**              (if present)
   data/setup_complete.flag     (if present)
   env/.env                     (optional; included by default for full restore)
 
-Manifest includes db_engine: sqlite | postgresql. Restore refuses engine mismatch.
+The manifest keeps ``db_engine`` (always ``postgresql`` for new backups) so older readers still
+work. An old archive that holds ``data/bot.db`` is still listed but is refused for restore: it
+has to be moved with ``pgclock migrate --from-sqlite`` first.
 """
 
 from __future__ import annotations
@@ -17,10 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import os
-import re
 import shutil
-import sqlite3
 import tempfile
 import threading
 import zipfile
@@ -32,7 +30,6 @@ from uuid import uuid4
 
 from app.config import DATA_DIR, ROOT_DIR, get_settings
 from app.db.alembic_runner import alembic_config, current_revision
-from app.db.engine_url import parse_engine
 from app.services.backup_env import (
     UNREADABLE_SECRETS_WARNING,
     env_value,
@@ -74,8 +71,10 @@ _RESTORE_THREAD: threading.Thread | None = None
 _STATUS_LOCK = threading.RLock()
 AWAITING_RESTART_TIMEOUT_SEC = 12 * 60
 STALE_RUNNING_TIMEOUT_SEC = 20 * 60
-SQLITE_DB_MEMBER = "data/bot.db"
+# Old SQLite archives are still recognised (listed, refused for restore), never created.
+LEGACY_SQLITE_DB_MEMBER = "data/bot.db"
 POSTGRES_DUMP_MEMBER = "data/postgres.dump"
+DB_ENGINE = "postgresql"
 
 # RLock: restore creates a safety backup while already holding the lock.
 _lock = threading.RLock()
@@ -89,33 +88,6 @@ def _utcnow_stamp() -> str:
     return datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
 
 
-def sqlite_db_path() -> Path:
-    """Resolve on-disk SQLite path from DATABASE_URL (best-effort)."""
-    url = (get_settings().database_url or "").strip()
-    if "sqlite" in url:
-        try:
-            info = parse_engine(url)
-            if info.sqlite_path:
-                return info.sqlite_path
-        except Exception:
-            log.debug("sqlite_db_path: ignored failure", exc_info=True)
-        m = re.search(r":///(.+)$", url)
-        if m:
-            raw = m.group(1)
-            if raw.startswith("/"):
-                return Path(raw)
-            return (ROOT_DIR / raw).resolve()
-    return DATA_DIR / "bot.db"
-
-
-def current_db_engine() -> str:
-    """Return 'sqlite' or 'postgresql' for the configured DATABASE_URL."""
-    try:
-        return parse_engine(get_settings().database_url).dialect
-    except Exception:
-        return "sqlite"
-
-
 def _sha256_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
     h = hashlib.sha256()
     with path.open("rb") as f:
@@ -127,30 +99,15 @@ def _sha256_file(path: Path, *, chunk: int = 1024 * 1024) -> str:
     return h.hexdigest()
 
 
-def _safe_copy_sqlite(src: Path, dest: Path) -> None:
-    """Online-safe SQLite backup using the backup API."""
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    if dest.exists():
-        dest.unlink()
-    if not src.exists():
-        raise FileNotFoundError(f"دیتابیس یافت نشد: {src}")
-    src_conn = sqlite3.connect(str(src))
-    try:
-        dst_conn = sqlite3.connect(str(dest))
-        try:
-            src_conn.backup(dst_conn)
-            dst_conn.commit()
-        finally:
-            dst_conn.close()
-    finally:
-        src_conn.close()
-
-
 NEWER_BACKUP_MESSAGE = (
     "این بکاپ با نسخهٔ جدیدتر پنل ({version}) ساخته شده است. "
     "اول پنل را به همان نسخه یا جدیدتر به‌روز کنید و بعد ریستور کنید."
 )
 RESTORE_FAILED_MESSAGE = "ریستور انجام نشد؛ جزئیات در لاگ سرور ثبت شد."
+SQLITE_BACKUP_MESSAGE = (
+    "این بکاپ قدیمیِ SQLite است و روی PostgreSQL ریستور نمی‌شود. "
+    "اول آن را با «pgclock migrate --from-sqlite» به PostgreSQL منتقل کنید."
+)
 
 
 class BackupRestoreRefused(ValueError):
@@ -174,6 +131,17 @@ def _revision_known(revision: str) -> bool:
         return ScriptDirectory.from_config(alembic_config()).get_revision(revision) is not None
     except CommandError:
         return False
+
+
+def is_sqlite_archive(manifest: dict[str, Any]) -> bool:
+    """True for an old archive that holds a SQLite database instead of a pg_dump."""
+    return str(manifest.get("db_engine") or "").strip().lower() == "sqlite"
+
+
+def ensure_backup_is_postgresql(manifest: dict[str, Any]) -> None:
+    """Refuse an old SQLite archive before anything on this server is touched."""
+    if is_sqlite_archive(manifest):
+        raise BackupRestoreRefused(SQLITE_BACKUP_MESSAGE)
 
 
 def ensure_backup_not_newer(manifest: dict[str, Any]) -> None:
@@ -217,6 +185,7 @@ def list_backups() -> list[dict[str, Any]]:
                     "mtime": datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
                     "created_at": meta.get("created_at") or datetime.fromtimestamp(st.st_mtime, timezone.utc).isoformat(),
                     "app_version": meta.get("app_version") or "—",
+                    "db_engine": str(meta.get("db_engine") or ""),
                     "include_env": bool(meta.get("include_env")),
                     "files": meta.get("files") or [],
                     "sha256": meta.get("archive_sha256") or "",
@@ -295,7 +264,7 @@ def validate_backup_archive(zip_path: Path) -> tuple[bool, str, dict[str, Any] |
             if not isinstance(manifest, dict) or manifest.get("magic") != MAGIC:
                 return False, "فرمت بکاپ نامعتبر است", None
             db_engine = str(manifest.get("db_engine") or "").strip().lower()
-            has_sqlite = SQLITE_DB_MEMBER in names
+            has_sqlite = LEGACY_SQLITE_DB_MEMBER in names
             has_pg = POSTGRES_DUMP_MEMBER in names
             if not has_sqlite and not has_pg:
                 return False, "دیتابیس داخل بکاپ نیست", None
@@ -339,7 +308,7 @@ def create_backup(
     include_env: bool = False,
     created_by: str = "panel",
 ) -> dict[str, Any]:
-    """Create a full backup ZIP under data/backups/. Thread-safe. Engine-aware.
+    """Create a full backup ZIP under data/backups/. Thread-safe.
 
     Phase 2 default: ``include_env=False`` (no tokens/secrets in the archive).
     Callers that need ``.env`` (safety-before-restore, baseline, explicit admin
@@ -351,7 +320,6 @@ def create_backup(
         stamp = _utcnow_stamp()
         backup_id = f"{stamp}-{uuid4().hex[:8]}"
         out_path = BACKUP_DIR / f"{BACKUP_PREFIX}{backup_id}.zip"
-        db_engine = current_db_engine()
 
         with tempfile.TemporaryDirectory(prefix="pgclock-bak-") as tmp:
             tmp_root = Path(tmp)
@@ -359,30 +327,15 @@ def create_backup(
             data_tmp.mkdir(parents=True, exist_ok=True)
 
             files_meta: list[dict[str, Any]] = []
-            db_member = SQLITE_DB_MEMBER
-
-            if db_engine == "postgresql":
-                dump_copy = data_tmp / "postgres.dump"
-                dump_database(dump_copy)
-                db_member = POSTGRES_DUMP_MEMBER
-                files_meta.append(
-                    {
-                        "path": POSTGRES_DUMP_MEMBER,
-                        "sha256": _sha256_file(dump_copy),
-                        "size": dump_copy.stat().st_size,
-                    }
-                )
-            else:
-                db_src = sqlite_db_path()
-                db_copy = data_tmp / "bot.db"
-                _safe_copy_sqlite(db_src, db_copy)
-                files_meta.append(
-                    {
-                        "path": SQLITE_DB_MEMBER,
-                        "sha256": _sha256_file(db_copy),
-                        "size": db_copy.stat().st_size,
-                    }
-                )
+            dump_copy = data_tmp / "postgres.dump"
+            dump_database(dump_copy)
+            files_meta.append(
+                {
+                    "path": POSTGRES_DUMP_MEMBER,
+                    "sha256": _sha256_file(dump_copy),
+                    "size": dump_copy.stat().st_size,
+                }
+            )
 
             # web_admin.json
             auth = DATA_DIR / "web_admin.json"
@@ -455,8 +408,8 @@ def create_backup(
                 "created_by": created_by,
                 "note": (note or "").strip()[:200],
                 "include_env": include_env_ok,
-                "db_engine": db_engine,
-                "db_path": db_member,
+                "db_engine": DB_ENGINE,
+                "db_path": POSTGRES_DUMP_MEMBER,
                 # Lets a restore refuse an archive from a newer schema than this code knows.
                 "alembic_revision": _schema_revision(),
                 "files": files_meta,
@@ -504,7 +457,7 @@ def create_backup(
             "created_at": manifest["created_at"],
             "file_count": manifest["file_count"],
             "note": manifest["note"],
-            "db_engine": db_engine,
+            "db_engine": DB_ENGINE,
         }
 
 
@@ -796,20 +749,6 @@ def _do_restore_thread(
         _finish_restore_error(e)
 
 
-def _drop_stale_sqlite_journal(db_path: Path) -> None:
-    """Remove the WAL and shared-memory files of the database that was just replaced.
-
-    They belong to the old file; a new connection would replay the old WAL into the restored
-    database. Connections still open keep their unlinked copies until the restart.
-    """
-    for suffix in ("-wal", "-shm"):
-        stale = db_path.with_name(db_path.name + suffix)
-        try:
-            stale.unlink(missing_ok=True)
-        except OSError:
-            log.warning("restore: could not remove %s", stale, exc_info=True)
-
-
 def start_restore_async(
     zip_path: Path,
     *,
@@ -919,23 +858,17 @@ def _prepare_archive(source_copy: Path, extract_root: Path, manifest: dict[str, 
             if name.startswith("/") or ".." in Path(name).parts:
                 raise BackupRestoreRefused("مسیر نامعتبر داخل بکاپ")
         zf.extractall(extract_root)
-    extracted_db = extract_root / "data" / "bot.db"
     extracted_pg = extract_root / "data" / "postgres.dump"
     archive_engine = str(manifest.get("db_engine") or "").strip().lower()
     if not archive_engine:
-        archive_engine = "postgresql" if extracted_pg.is_file() and not extracted_db.is_file() else "sqlite"
-    live_engine = current_db_engine()
-    if archive_engine != live_engine:
-        raise BackupRestoreRefused(
-            f"بکاپ مربوط به موتور {archive_engine} است ولی DATABASE_URL فعلی {live_engine} است. "
-            "قبل از ریستور DATABASE_URL را هم‌خوان کنید."
-        )
-    if archive_engine == "sqlite" and not extracted_db.is_file():
-        raise BackupRestoreRefused("bot.db در بکاپ نیست")
-    if archive_engine == "postgresql":
-        if not extracted_pg.is_file():
-            raise BackupRestoreRefused("postgres.dump در بکاپ نیست")
-        check_dump_readable(extracted_pg)
+        archive_engine = DB_ENGINE if extracted_pg.is_file() else "sqlite"
+    if archive_engine == "sqlite":
+        raise BackupRestoreRefused(SQLITE_BACKUP_MESSAGE)
+    if archive_engine != DB_ENGINE:
+        raise BackupRestoreRefused("موتور دیتابیس این بکاپ پشتیبانی نمی‌شود")
+    if not extracted_pg.is_file():
+        raise BackupRestoreRefused("postgres.dump در بکاپ نیست")
+    check_dump_readable(extracted_pg)
     return archive_engine
 
 
@@ -954,6 +887,7 @@ def restore_backup(
     ok, err, manifest = validate_backup_archive(zip_path)
     if ok and manifest:
         try:
+            ensure_backup_is_postgresql(manifest)
             ensure_backup_not_newer(manifest)
         except BackupRestoreRefused as exc:
             ok, err = False, str(exc)
@@ -983,7 +917,6 @@ def restore_backup(
                 # any live data is touched, so a bad archive changes nothing.
                 tmp_root = tmp_root / "extract"
                 archive_engine = _prepare_archive(source_copy, tmp_root, manifest)
-                extracted_db = tmp_root / "data" / "bot.db"
                 extracted_pg = tmp_root / "data" / "postgres.dump"
 
                 if safety_backup:
@@ -1007,20 +940,7 @@ def restore_backup(
                     db_engine=archive_engine,
                 )
                 DATA_DIR.mkdir(parents=True, exist_ok=True)
-                if archive_engine == "postgresql":
-                    restore_database(extracted_pg)
-                else:
-                    live_db = sqlite_db_path()
-                    live_db.parent.mkdir(parents=True, exist_ok=True)
-                    # Replace DB via temp then rename (atomic on same FS)
-                    tmp_db = live_db.with_suffix(".db.restoring")
-                    shutil.copy2(extracted_db, tmp_db)
-                    os.replace(tmp_db, live_db)
-                    _drop_stale_sqlite_journal(live_db)
-                    try:
-                        live_db.chmod(0o600)
-                    except OSError:
-                        pass
+                restore_database(extracted_pg)
 
                 # web_admin.json
                 auth_src = tmp_root / "data" / "web_admin.json"

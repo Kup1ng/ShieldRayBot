@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from app.cli.context import CliContext, database_url, require_confirm
+from app.cli.context import CliContext, require_confirm, require_postgresql_url
 from app.cli.output import CliError, header, info, kv, ok, warn
 
 
@@ -29,7 +29,7 @@ def cmd_migrate(
             skip_schema=skip_schema,
         )
 
-    url = database_url(ctx.root)
+    url = require_postgresql_url(ctx.root)
     kv("database_url", _redact(url))
     from app.db.alembic_runner import current_revision, upgrade_head
 

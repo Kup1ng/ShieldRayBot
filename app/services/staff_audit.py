@@ -20,6 +20,8 @@ from app.services.shop_scope import is_platform_admin, shop_owner_id
 
 DISPLAY_ZONE = ZoneInfo("Asia/Tehran")
 PAGE_SIZE = 50
+# Ids are bounded by the column range; anything else is ignored rather than trusted.
+MAX_ID = 2**31 - 1
 REASON_MAX = 255
 LABEL_MAX = 128
 
@@ -29,10 +31,12 @@ SHOP_OWNER_ROLES = frozenset({"reseller", "principal"})
 ACTOR_PLATFORM_OWNER = "platform_owner"
 ACTOR_SHOP_OWNER = "shop_owner"
 ACTOR_STAFF = "staff"
+ACTOR_SYSTEM = "system"
 ACTOR_LABELS = {
     ACTOR_PLATFORM_OWNER: "مدیر پلتفرم",
     ACTOR_SHOP_OWNER: "صاحب فروشگاه",
     ACTOR_STAFF: "کارمند",
+    ACTOR_SYSTEM: "سیستم",
 }
 
 # Fixed in code: a record's action is always one of these.
@@ -46,11 +50,26 @@ ACTION_LABELS = {
     "points_debit": "کسر دستی امتیاز",
     "customer_block": "مسدود کردن مشتری در فروشگاه",
     "customer_unblock": "رفع مسدودی مشتری در فروشگاه",
+    "pg_user_disable": "غیرفعال‌سازی کاربر پاسارگارد",
+    "pg_user_enable": "فعال‌سازی کاربر پاسارگارد",
+    "pg_user_reset_usage": "ریست مصرف کاربر پاسارگارد",
+    "pg_user_revoke_sub": "ابطال اشتراک کاربر پاسارگارد",
+    "pg_user_delete": "حذف کاربر پاسارگارد",
+    "service_renew": "تمدید دستی سرویس",
+    "service_extend": "تغییر مانده سرویس",
+    "service_delete": "حذف سرویس",
+    "customer_delete": "حذف مشتری",
+    "service_auto_delete": "حذف خودکار سرویس",
+    "service_cleanup_exempt": "معاف‌کردن سرویس از پاکسازی",
+    "service_cleanup_unexempt": "برگرداندن سرویس به پاکسازی",
+    "service_cleanup_hold": "تمدید مهلت حذف سرویس",
 }
 
 TARGET_LABELS = {
     "gift_code": "کد هدیه",
     "customer": "مشتری",
+    "pg_user": "کاربر پاسارگارد",
+    "service": "سرویس",
 }
 
 
@@ -135,6 +154,15 @@ def staff_audit_scope(staff: dict) -> int | None:
     if shop_id is None:
         raise PermissionError("حساب شما به فروشگاه متصل نیست")
     return shop_id
+
+
+def parse_before_id(raw: str | None) -> int | None:
+    """The ``before`` cursor of a page request, or ``None`` when it is missing or not a valid id."""
+    # isdigit() also accepts digits such as "²" that int() refuses.
+    if not raw or not (raw.isascii() and raw.isdigit()):
+        return None
+    value = int(raw)
+    return value if 0 < value <= MAX_ID else None
 
 
 async def list_staff_actions(

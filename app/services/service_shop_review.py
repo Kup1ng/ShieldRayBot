@@ -94,3 +94,20 @@ async def list_assignable_shops(session: AsyncSession) -> list[tuple[int, str]]:
         .order_by(BotUser.id)
     )
     return [(int(uid), (name or username or f"#{uid}")) for uid, name, username in rows]
+
+
+async def review_payload(session: AsyncSession) -> dict[str, list[dict[str, object]]]:
+    """The review queue and the shops that can take a service, as the React page shows them."""
+    return {
+        "rows": [
+            {
+                "service_id": row.service_id,
+                "customer_id": row.customer_id,
+                "pg_username": row.pg_username,
+                "attributed_shop": row.attributed_shop,
+                "order_shops": row.order_shops,
+            }
+            for row in await list_services_under_review(session)
+        ],
+        "shops": [{"id": shop_id, "label": label} for shop_id, label in await list_assignable_shops(session)],
+    }

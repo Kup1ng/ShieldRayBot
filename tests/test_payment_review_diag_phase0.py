@@ -6,14 +6,15 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 
 class PaymentReviewDiagTests(unittest.IsolatedAsyncioTestCase):
     async def _session(self):
         from app.db.models import Base
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -279,10 +280,10 @@ class PayrevHandlerWiringTests(unittest.TestCase):
         self.assertIn("diagnose_payment_review", actions)
 
     def test_finance_delivery_surfaces_diag(self):
-        pages = Path("app/api/finance_pages.py").read_text(encoding="utf-8")
+        pages = Path("app/services/finance_panel.py").read_text(encoding="utf-8")
         tpl = Path("app/web/templates/finance.html").read_text(encoding="utf-8")
         self.assertIn("diagnose_order_delivery", pages)
-        self.assertIn("delivery_diag_by_order", pages)
+        self.assertIn('"diag": _diag_payload(diag)', pages)
         self.assertIn("delivery_diag_by_order", tpl)
         self.assertIn("تشخیص", tpl)
 

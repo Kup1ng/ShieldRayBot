@@ -229,7 +229,7 @@ class UiAndDocsContracts(unittest.TestCase):
         self.assertIn("identity-help", tpl)
 
     def test_security_route_passes_help(self):
-        src = _read("app/api/security.py")
+        src = _read("app/api/panel_home_api.py")
         self.assertIn("identity_help_fa", src)
         self.assertIn("identity_help", src)
 

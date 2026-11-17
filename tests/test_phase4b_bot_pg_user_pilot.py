@@ -8,8 +8,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from tests.reason_support import ReasonedState
 from app.db import Base
 import app.db.models  # noqa: F401
 from app.db.models import BotUser, ResellerProfile, Role
@@ -26,6 +27,7 @@ from app.services.org_principals import (
 from app.services.pg_access import map_pg_role_to_features
 from app.services.pg_user_scope import pg_user_in_staff_scope
 from app.services.platform_identity import is_explicit_owner_staff
+from tests.pgtest import pg_engine
 
 
 def _pg_user(uid: int, owner: str) -> dict:
@@ -86,7 +88,7 @@ def _fake_pg(users: dict[int, dict]):
 
 class Phase4BBotPgUserPilotTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -586,7 +588,7 @@ class Phase4BBotPgUserPilotTests(unittest.IsolatedAsyncioTestCase):
             )
             patches = self._l1_patches(USERS_VIEW_UPDATE, fake_pg)
             with self._enter(patches):
-                await mod.pg_dis(cb, db_user=fx.ua, session=session)
+                await mod.pg_dis(cb, db_user=fx.ua, session=session, state=ReasonedState(cb.data))
             fake_pg.set_disabled_by_id.assert_awaited_once_with(101, True)
 
             cb_b = SimpleNamespace(
@@ -596,7 +598,7 @@ class Phase4BBotPgUserPilotTests(unittest.IsolatedAsyncioTestCase):
             )
             fake_pg.set_disabled_by_id.reset_mock()
             with self._enter(patches):
-                await mod.pg_dis(cb_b, db_user=fx.ua, session=session)
+                await mod.pg_dis(cb_b, db_user=fx.ua, session=session, state=ReasonedState(cb_b.data))
             fake_pg.set_disabled_by_id.assert_not_called()
 
     async def test_handler_detail_read(self) -> None:

@@ -1,4 +1,4 @@
-"""Validate pinned Xray startup with synthetic PGClockBot routes and no relay traffic."""
+"""Validate pinned Xray startup with synthetic ShieldRay routes and no relay traffic."""
 
 from __future__ import annotations
 
@@ -56,7 +56,7 @@ def main() -> int:
         endpoints = tuple(endpoint for plan in plans for endpoint in plan.endpoints)
         result = asyncio.run(validate_core(XrayBinary(args.binary, args.sha256), endpoints))
     except (ValueError, OSError, TimeoutError):
-        print("PGClockBot synthetic core validation failed.", file=sys.stderr)
+        print("ShieldRay synthetic core validation failed.", file=sys.stderr)
         return 1
     print(json.dumps(asdict(result), sort_keys=True))
     return 0

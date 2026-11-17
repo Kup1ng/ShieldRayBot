@@ -49,11 +49,19 @@ class PlansPgErrorSanitizeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PlansSoftFailSanitizeTests(unittest.TestCase):
-    def test_plans_page_does_not_embed_exception_object(self):
-        src = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
-        fn = src[src.find("async def plans_page") : src.find("async def plans_create")]
-        self.assertIn("reseller_plans_err", fn)
-        self.assertNotIn("reseller_plans_err = str(e)", fn)
+    def test_plans_data_does_not_embed_exception_text(self):
+        import asyncio
+        from unittest.mock import AsyncMock, patch
+
+        from app.services import panel_catalog_plans
+
+        failure = RuntimeError("SECRET-DB-DETAIL")
+        with patch("app.services.resellers.list_reseller_plans", AsyncMock(side_effect=failure)), patch(
+            "app.services.resellers.ensure_current_capacity_reseller_plan", AsyncMock()
+        ):
+            _plans, error = asyncio.run(panel_catalog_plans._reseller_plan_section(AsyncMock()))
+        self.assertEqual(error, panel_catalog_plans.RESELLER_PLANS_LOAD_ERROR)
+        self.assertNotIn("SECRET-DB-DETAIL", error)
         html = (ROOT / "app/web/templates/plans.html").read_text(encoding="utf-8")
         # Template must not interpolate raw exception via double-wrap
         self.assertNotIn("({{ reseller_plans_err }})", html)

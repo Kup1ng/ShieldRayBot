@@ -1,16 +1,16 @@
 """Staff search of customers by name, @username or id: shop scope, bounds and wildcard safety."""
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot.handlers import admin
 from app.bot.handlers import subscription_lookup as bot
 from app.db.models import Base, BotUser
 from app.services.user_search import search_bot_users
+from tests.pgtest import pg_engine
 
 
 def buttons(markup) -> list[str]:
@@ -24,7 +24,7 @@ def labels(markup) -> list[str]:
 class SearchCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'search.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -112,7 +112,9 @@ class TypedStepTests(SearchCase):
         message = AsyncMock()
         message.text = text
         user = SimpleNamespace(id=9, telegram_id=777)
-        with patch.object(bot, "shop_scope", AsyncMock(return_value=2)), patch.object(bot, "finish_text_step", AsyncMock()) as finish:
+        with patch.object(
+            bot, "shop_staff_context", AsyncMock(return_value=(2, object(), True))
+        ), patch.object(bot, "finish_text_step", AsyncMock()) as finish:
             await bot.receive_link(message, AsyncMock(), self.session, user, is_reseller_bot=False, reseller_owner_id=None)
         return message, finish
 

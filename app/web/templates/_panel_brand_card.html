@@ -3,7 +3,7 @@
    effect, with fallbacks), shop_mode (true for a shop). The scope is never sent from here: the server derives it. #}
 {% set own = brand_values or {} %}
 {% set own_color = own.get('color', '') %}
-{% set fallback_name = 'نام پلتفرم' if shop_mode else 'MrClockBot' %}
+{% set fallback_name = 'نام پلتفرم' if shop_mode else 'ShieldRay' %}
 <form method="post" action="{{ brand_form_action }}" enctype="multipart/form-data" class="settings-form" id="panel-brand-form" data-panel-brand-form>
   {% if csrf_token %}<input type="hidden" name="csrf_token" value="{{ csrf_token }}" />{% endif %}
   <div class="card settings-card">
@@ -85,4 +85,4 @@
     <button class="btn" type="submit">ذخیره برند</button>
   </div>
 </form>
-<script src="/static/panel-brand-form.js?v={{ app_version }}"{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %} defer></script>
+<script src="/static/panel-brand-form.js?v={{ asset_v('panel-brand-form.js') if asset_v is defined else app_version }}"{% if csp_nonce %} nonce="{{ csp_nonce }}"{% endif %} defer></script>

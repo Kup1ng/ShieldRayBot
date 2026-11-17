@@ -11,15 +11,15 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("WEB_SECRET", "x" * 48)
 
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.services import backup_schedule as schedule
 from app.services import backup_telegram as tg
 from app.services.users import get_setting, set_setting
+from tests.pgtest import pg_engine
 
 AT_THREE = datetime(2026, 11, 2, 3, 5, tzinfo=timezone.utc)
 
@@ -27,7 +27,7 @@ AT_THREE = datetime(2026, 11, 2, 3, 5, tzinfo=timezone.utc)
 class _Case(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 't.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -131,6 +131,15 @@ class DeliveryNoticeTests(_Case):
         async with self.Session() as session:
             delivered = await tg.notify_backup_problem(session, "x")
         self.assertEqual(delivered, 1)
+        markup = self.bot.send_message.await_args.kwargs["reply_markup"]
+        self.assertEqual([b.callback_data for row in markup.inline_keyboard for b in row], ["nto:nv:adm:backup"])
+
+    async def test_problem_notice_to_a_separate_backup_bot_has_no_panel_button(self) -> None:
+        destination = tg.Destination("token", [5], custom=True)
+        with patch.object(tg, "resolve_destination", AsyncMock(return_value=destination)):
+            async with self.Session() as session:
+                await tg.notify_backup_problem(session, "x")
+        self.assertIsNone(self.bot.send_message.await_args.kwargs["reply_markup"])
 
 
 class BotUploadLimitTests(unittest.IsolatedAsyncioTestCase):

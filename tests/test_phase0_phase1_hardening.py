@@ -35,15 +35,16 @@ class SoftInjectAclTests(unittest.TestCase):
 
 class OwnerChromeSourceTests(unittest.TestCase):
     def test_base_html_gates_owner_nav_on_is_owner(self):
-        html = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
-        self.assertIn("is_owner", html)
-        self.assertIn("{% if is_owner %}", html)
-        users_idx = html.find('href="/users"')
-        self.assertGreater(users_idx, 0)
-        window = html[max(0, users_idx - 120) : users_idx]
-        self.assertIn("is_owner", window)
-        self.assertNotIn("is_reseller or 'tickets' in perms", html)
-        self.assertNotIn("'shop_settings' in perms or is_reseller", html)
+        from tests.sidebar_view import labels, sidebar
+
+        # A sticky role=admin without the Owner identity gets no Owner entries.
+        admin = sidebar("admin")
+        for owner_only in ("تنظیمات سیستم", "کاربران ربات", "تنظیمات ربات", "تست اتصال سرویس"):
+            self.assertNotIn(owner_only, labels(admin["system"]) + labels(admin["shop"]))
+        # Being a reseller alone does not unlock support or shop settings.
+        reseller = labels(sidebar("reseller", perms=("dashboard",))["shop"])
+        self.assertNotIn("پشتیبانی", reseller)
+        self.assertNotIn("تنظیمات فروشگاه", reseller)
 
     def test_render_injects_is_owner(self):
         src = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
@@ -88,16 +89,10 @@ class TrialReleaseSourceTests(unittest.TestCase):
         src = (ROOT / "app/services/orders.py").read_text(encoding="utf-8")
         self.assertIn("def _trial_shop_key_for_order", src)
         self.assertIn("async def _release_trial_claim_for_order", src)
-        stale = src[
-            src.find("async def cancel_stale_pending_orders") : src.find(
-                "async def cancel_stale_pending_for_settings"
-            )
-        ]
-        # The stale cancel releases holds through the shared helper (also used by the purge).
-        self.assertIn("release_unpaid_order_holds", stale)
-        holds = src[src.find("async def release_unpaid_order_holds") : src.find("async def cancel_stale_pending_orders")]
+        holds = src[src.find("async def release_unpaid_order_holds") : src.find("async def attach_receipt")]
         self.assertIn("_release_trial_claim_for_order", holds)
-        self.assertNotIn('note.startswith("trial:")', stale)
+        purge = (ROOT / "app/services/order_purge.py").read_text(encoding="utf-8")
+        self.assertIn("release_unpaid_order_holds", purge)
         self.assertIn(
             "_release_trial_claim_for_order",
             src[src.find("async def cancel_order") :],
@@ -146,9 +141,11 @@ class SchedulerShopScopeSourceTests(unittest.TestCase):
 
 class BotTokenRedactSourceTests(unittest.TestCase):
     def test_bot_status_uses_redact(self):
-        app_src = (ROOT / "app/api/app.py").read_text(encoding="utf-8")
-        self.assertIn("redact(exc)", app_src)
-        shop_src = (ROOT / "app/api/shop_settings.py").read_text(encoding="utf-8")
+        # The Owner's bot tab moved to app/services/settings_panel.py, which shows only the fixed
+        # Persian reason; tests/test_panel_settings_api.py proves a raw error carrying the token
+        # never reaches the page (test_an_offline_bot_shows_the_reason_and_a_webhook_mode_shows_its_address).
+        # The shop's bot status moved with the shop settings data (React page).
+        shop_src = (ROOT / "app/api/shop_settings_panel.py").read_text(encoding="utf-8")
         self.assertIn("redact(exc)", shop_src)
 
 

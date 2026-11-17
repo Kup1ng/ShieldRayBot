@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -249,7 +247,7 @@ class RouteTests(StuckCase):
         return await self.client.post(path, headers=headers, data={})
 
     async def test_the_refund_route_refunds_tells_the_customer_once_and_reports(self):
-        with patch("app.api.delivery_failure_pages.notify_payer", AsyncMock(return_value=True)) as notify:
+        with patch("app.services.stuck_order_resolution.notify_payer", AsyncMock(return_value=True)) as notify:
             response = await self.post(OWNER_SESSION, "/orders/10/refund-stuck-order")
             again = await self.post(OWNER_SESSION, "/orders/10/refund-stuck-order")
         self.assertIn("ok=", response.headers["location"])
@@ -280,15 +278,18 @@ class RouteTests(StuckCase):
 
     async def test_the_list_offers_the_close_actions_for_a_stuck_order_only(self):
         cookie = f"session={self.signer.dumps(OWNER_SESSION)}; csrf=token"
-        page = await self.client.get("/finance?tab=delivery", headers={"cookie": cookie})
+        page = await self.client.get("/api/panel/finance/delivery", headers={"cookie": cookie})
         self.assertEqual(page.status_code, 200)
-        for path in ("refund-stuck-order", "mark-delivered-manually", "close-stuck-order"):
-            self.assertIn(f"/orders/10/{path}", page.text)
-            self.assertNotIn(f"/orders/13/{path}", page.text)
+        rows = {row["order_id"]: row for row in page.json()["rows"]}
+        # The close actions (refund, manual delivery, close) belong to stuck orders only.
+        self.assertNotIn(13, rows, "a delivered order without a failure is not in the queue")
+        self.assertTrue(rows[10]["stuck"])
+        self.assertTrue(rows[10]["stuck_reason"]["can_refund"])
+        self.assertTrue(rows[14]["stuck"])
+        self.assertIn("دیگر وجود ندارد", rows[14]["stuck_reason"]["reason"])
         # A renewal that may already be applied is offered no refund, only the other two.
-        self.assertNotIn("/orders/16/refund-stuck-order", page.text)
-        self.assertIn("/orders/16/close-stuck-order", page.text)
-        self.assertIn("دیگر وجود ندارد", page.text)
+        self.assertTrue(rows[16]["stuck"])
+        self.assertFalse(rows[16]["stuck_reason"]["can_refund"])
 
     async def test_the_close_route_closes_the_order(self):
         response = await self.post(OWNER_SESSION, "/orders/14/close-stuck-order")

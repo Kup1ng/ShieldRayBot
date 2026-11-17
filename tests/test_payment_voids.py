@@ -10,7 +10,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi import FastAPI
 from sqlalchemy import func, select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.payment_void_pages import register_payment_void_pages
 from app.db.models import (
@@ -26,6 +26,7 @@ from app.db.models import (
     WalletTransaction,
 )
 from app.services.payment_voids import void_approved_payment
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active", "permissions": ["payment_void"]}
@@ -51,7 +52,7 @@ class FakePanel:
 class VoidCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'void.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -358,7 +359,7 @@ class PaymentVoidMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("void_migration", ROOT / "alembic/versions/0072_payment_voids.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
             conn.execute(text("CREATE TABLE payments (id INTEGER PRIMARY KEY, status TEXT)"))

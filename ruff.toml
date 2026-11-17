@@ -1,4 +1,4 @@
-# Lint configuration for PGClockBot.
+# Lint configuration for ShieldRay.
 #
 # The codebase predates this file, so `ruff check app` reports many existing
 # findings. Do not try to clear them in a feature change. Instead run

@@ -3,14 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import os
-import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
@@ -25,8 +22,10 @@ from app.services.service_import_requests import approve_request, list_requests,
 from app.services.service_import_store import MAX_OPEN_PER_USER
 from app.services.users import clear_settings_cache, set_settings_bulk
 from tests.test_service_import import ImportCase
+from tests.settings_json import settings_fields, settings_url
 from tests.test_service_import_settings_tab import TabHarness
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION
+from tests.pgtest import pg_sync_engine
 
 APPROVAL = {"service_import_enabled": "1", "service_import_mode": "approval"}
 
@@ -318,10 +317,10 @@ class EndpointTests(TabHarness):
         principal = {"role": "principal", "org_principal_id": 2, "org_depth": 1}
         self.assertEqual((await self.call(principal, "GET", "/service-import/requests")).status_code, 303)
 
-    async def test_the_tab_shows_the_mode_and_the_requests_card(self):
-        owner = await self.call(OWNER_SESSION, "GET", "/settings?tab=service_import")
-        self.assertIn("s_service_import_mode", owner.text)
-        self.assertIn('id="si-requests"', owner.text)
+    async def test_the_tab_offers_the_mode_and_the_requests_endpoint_answers_the_owner(self):
+        owner = await self.call(OWNER_SESSION, "GET", settings_url("service_import"))
+        self.assertIn("service_import_mode", settings_fields(owner.json()))
+        self.assertEqual((await self.call(OWNER_SESSION, "GET", "/service-import/requests")).status_code, 200)
 
 
 class MigrationTests(unittest.TestCase):
@@ -332,13 +331,12 @@ class MigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("requests_migration", path)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        with tempfile.TemporaryDirectory() as tmp:
-            engine = sa.create_engine(f"sqlite:///{Path(tmp) / 'm.db'}")
-            with engine.begin() as conn:
-                conn.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
-                conn.execute(sa.text("INSERT INTO bot_users (id) VALUES (1)"))
-                with Operations.context(MigrationContext.configure(conn)):
-                    fn(module, conn)
+        engine = pg_sync_engine()
+        with engine.begin() as conn:
+            conn.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY)"))
+            conn.execute(sa.text("INSERT INTO bot_users (id) VALUES (1)"))
+            with Operations.context(MigrationContext.configure(conn)):
+                fn(module, conn)
 
     def test_upgrade_is_idempotent_and_downgrade_removes_the_table(self):
         def check(module, conn):
@@ -351,7 +349,8 @@ class MigrationTests(unittest.TestCase):
                 "INSERT INTO service_import_requests (bot_user_id, panel_user_id, panel_username, expires_at) "
                 "VALUES (1, 5, 'u', '2030-01-01')"
             ))
-            with self.assertRaises(sa.exc.IntegrityError):
+            # A savepoint keeps the rejected duplicate from aborting the surrounding transaction.
+            with self.assertRaises(sa.exc.IntegrityError), conn.begin_nested():
                 conn.execute(sa.text(
                     "INSERT INTO service_import_requests (bot_user_id, panel_user_id, panel_username, expires_at) "
                     "VALUES (1, 5, 'u', '2030-01-01')"

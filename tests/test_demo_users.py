@@ -16,8 +16,9 @@ from alembic.operations import Operations
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from jinja2 import Environment, FileSystemLoader, select_autoescape
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.api.panel_users_api import register_panel_users_api
 from app.api.user_pages import register_user_pages
 from app.db.models import (
     Base, BotUser, DeliveryFailure, FunnelEvent, LoyaltyReward, Order, Payment, Plan,
@@ -32,6 +33,8 @@ from app.services.loyalty import overview_metrics
 from app.services.subordinate_report import SubordinateShop, collect_subordinate_stats
 from app.services.ux20 import funnel_summary
 from app.services.shop_scope import ShopScopeError
+from app.services.numbers import to_fa_digits
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNER = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_status": "active"}
@@ -46,7 +49,7 @@ def shop_staff(shop_id: int, *, has_permission: bool = True) -> dict[str, Any]:
 
 class DemoUserTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as connection:
             await connection.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -98,11 +101,19 @@ class DemoUserTests(unittest.IsolatedAsyncioTestCase):
         self.env = Environment(loader=FileSystemLoader(ROOT / "app/web/templates"), autoescape=select_autoescape())
         self.env.filters["num"] = format_number
         self.env.filters["money"] = format_money
+        self.env.filters["fa"] = to_fa_digits
 
         def render(request: Request, name: str, context: dict[str, Any]) -> HTMLResponse:
             return HTMLResponse(self.env.get_template(name).render(**context, csrf_token="fake-csrf"))
 
+        def require_perm(perm: str):
+            return require_staff
+
         register_user_pages(self.app, render=render, require_admin=require_staff, get_db=get_db)
+        register_panel_users_api(
+            self.app, require_staff=require_staff, require_admin=require_staff, require_perm=require_perm,
+            require_pg_perm=require_perm, get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
@@ -125,6 +136,22 @@ class DemoUserTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(report["ops"]["pending_receipts"], 2)
 
     async def test_daily_reports_and_dashboards_use_same_non_demo_revenue(self) -> None:
+        from app.services.daily_report import previous_tehran_day_bounds
+
+        start, end, _ = previous_tehran_day_bounds(self.now)
+        mid = start + (end - start) / 2
+        # Daily digest covers the previous Tehran day; move non-demo activity into that window.
+        for user_id in self.customers:
+            if user_id in self.demo_ids:
+                continue
+            order = await self.session.get(Order, user_id * 10)
+            service = await self.session.get(UserService, user_id)
+            assert order is not None and service is not None
+            order.created_at = mid
+            order.updated_at = mid
+            service.created_at = mid
+        await self.session.commit()
+
         for shop_id in (None, 10, 20):
             summary = await _scoped_totals(self.session, reseller_id=shop_id)
             self.assertEqual(summary["orders_total"], 2)
@@ -208,7 +235,7 @@ class DemoUserTests(unittest.IsolatedAsyncioTestCase):
                 RewardRedemption(user_id=user_id, reward_id=reward_of[shop_id], reward_type="wallet_credit", reward_value=100, points_spent=10, status="completed", idempotency_key=f"reward{user_id}"),
             ])
         for user_id in (11, 12):
-            await self.session.execute(sa.update(BotUser).where(BotUser.id == user_id).values(referred_by_id=10))
+            await self.session.execute(sa.update(BotUser).where(BotUser.id == user_id).values(referred_by_id=10, referral_shop_id=10))
             self.session.add(ReferralEvent(referrer_id=10, referred_id=user_id, qualification_state="qualified", event_key="purchase", idempotency_key=f"ref{user_id}"))
         await self.session.commit()
         summary = await overview_metrics(self.session, reseller_id=10)
@@ -291,20 +318,25 @@ class DemoUserTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("&err=", response.headers["location"])
             self.assertFalse((await self.session.get(BotUser, user_id)).is_demo)
 
-    async def test_edit_form_shows_state_csrf_and_escapes_customer_text(self) -> None:
-        with patch("app.services.bot_user_admin.list_service_snapshots", AsyncMock(return_value=[])), patch("app.services.bot_user_admin.list_wallet_txs", AsyncMock(return_value=[])), patch("app.services.plans_catalog.list_catalog_plans", AsyncMock(return_value=[])):
-            response = await self.client.get("/users/2/edit?fragment=1")
+    async def test_edit_data_shows_state_and_permission_and_returns_customer_text_as_data(self) -> None:
+        patches = (
+            patch("app.services.user_edit_view.list_service_snapshots", AsyncMock(return_value=[])),
+            patch("app.services.user_edit_view.list_wallet_txs", AsyncMock(return_value=[])),
+            patch("app.services.user_edit_view.list_catalog_plans", AsyncMock(return_value=[])),
+        )
+        with patches[0], patches[1], patches[2]:
+            response = await self.client.get("/api/panel/users/2/edit")
             self.assertEqual(response.status_code, 200)
-            self.assertIn('action="/users/2/demo"', response.text)
-            self.assertIn('name="csrf_token" value="fake-csrf"', response.text)
-            self.assertIn('value="1" selected', response.text)
-            self.assertIn('&lt;script&gt;', response.text)
-            self.assertNotIn('<script>alert', response.text)
+            body = response.json()
+            self.assertTrue(body["user"]["is_demo"])
+            self.assertTrue(body["can"]["demo"])
+            self.assertEqual(body["user"]["name"], '<script>alert("test")</script>', "plain data; React escapes it")
+            self.assertTrue(response.headers["content-type"].startswith("application/json"))
             self.staff = shop_staff(10, has_permission=False)
-            response = await self.client.get("/users/11/edit?fragment=1")
+            response = await self.client.get("/api/panel/users/11/edit")
             self.assertEqual(response.status_code, 200)
-            self.assertNotIn('action="/users/11/demo"', response.text)
-            response = await self.client.get("/users/21/edit?fragment=1")
+            self.assertFalse(response.json()["can"]["demo"])
+            response = await self.client.get("/api/panel/users/21/edit")
             self.assertEqual(response.status_code, 403)
 
 
@@ -313,7 +345,7 @@ class DemoUserMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("demo_user_migration", ROOT / "alembic/versions/0041_demo_users.py")
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as connection:
             connection.execute(sa.text("CREATE TABLE bot_users (id INTEGER PRIMARY KEY, full_name TEXT)"))
             connection.execute(sa.text("INSERT INTO bot_users VALUES (1, 'existing')"))

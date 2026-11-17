@@ -5,19 +5,19 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.miniapp_codes import register_miniapp_codes
 from app.db.models import Base, BotUser, ChargeCode, DiscountCode, Order, Plan, WalletTransaction
 from app.services import discount_checkout
 from app.services.discount_checkout import CODE_FAILURE_LIMIT, OPEN_CHECKOUT_LIMIT
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine
 
 
 class MiniAppCodesTestCase(unittest.IsolatedAsyncioTestCase):
@@ -26,7 +26,7 @@ class MiniAppCodesTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         # A file database so concurrent requests each get their own session and connection.
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'codes.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -35,6 +35,7 @@ class MiniAppCodesTestCase(unittest.IsolatedAsyncioTestCase):
             BotUser(id=1, telegram_id=101, referral_code="a", role="user", wallet_balance=100_000),
             BotUser(id=2, telegram_id=102, referral_code="b", role="user", wallet_balance=100_000),
             BotUser(id=4, telegram_id=104, referral_code="c", role="admin"),
+            BotUser(id=3, telegram_id=103, referral_code="shop3", role="reseller"),
             Plan(id=1, name="monthly", price=100_000, duration_days=30, data_limit_gb=50),
             DiscountCode(id=1, code="OFF20", percent=20, max_uses=5),
             DiscountCode(id=2, code="ONCE", percent=50, max_uses=1),

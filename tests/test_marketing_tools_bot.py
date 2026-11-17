@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.bot import marketing_panels as panels
 from app.bot.handlers import marketing_tools
@@ -20,6 +17,7 @@ from app.db.models import BotUser, CampaignRecipient, ChargeCode, TargetedCampai
 from app.services.formatting import format_number
 from app.services.campaigns import campaign_progress_map, list_recent_campaigns
 from app.services.gift_codes import set_gift_code_active
+from tests.pgtest import pg_engine
 
 
 def _callbacks(markup) -> list[str]:
@@ -89,10 +87,13 @@ class MarketingDbCase(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'm.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
+        async with self.Session() as session:
+            session.add(BotUser(id=5, telegram_id=5005, referral_code="shop5", role="reseller"))
+            await session.commit()
 
     async def asyncTearDown(self):
         await self.engine.dispose()
@@ -147,6 +148,10 @@ class CampaignServiceTests(MarketingDbCase):
             both = await list_recent_campaigns(session, shop_id=None)
             self.assertEqual({c.text for c in both}, {"a", "b"})
             self.assertEqual(await campaign_progress_map(session, []), {})
+            session.add_all(
+                BotUser(id=user_id, telegram_id=7000 + user_id, referral_code=f"rcpt{user_id}") for user_id in (1, 2, 3)
+            )
+            await session.flush()
             session.add_all([
                 CampaignRecipient(campaign_id=ids[1], user_id=1, status="sent"),
                 CampaignRecipient(campaign_id=ids[1], user_id=2, status="sent"),
@@ -275,7 +280,18 @@ class HubEntryTests(unittest.TestCase):
 
         data = _callbacks(admin_marketing_hub_keyboard({}))
         self.assertEqual(
-            data, ["nv:adm:loy", "nv:adm:broadcast", "nv:adm:gc", "nv:adm:cmp", "nv:adm:home"]
+            data,
+            [
+                "nv:adm:loy",
+                "nv:adm:broadcast",
+                "nv:adm:gc",
+                "nv:adm:cmp",
+                "nv:adm:cb",
+                "dsc:l",
+                "fnl:v",
+                "tru:l:all:0",
+                "nv:adm:home",
+            ],
         )
 
 

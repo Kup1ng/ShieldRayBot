@@ -5,16 +5,16 @@ from __future__ import annotations
 import tempfile
 import time
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, LoyaltyReward, RewardRedemption, UserService
 from app.services.loyalty import RewardPendingReview, redeem_reward
 from app.services.pasarguard import PasarGuardError
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine
 
 GB = 1024**3
 
@@ -39,7 +39,7 @@ class FakePanel:
 class LoyaltyRewardUnknownOutcomeTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'loyalty.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import os
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -121,15 +119,17 @@ class RouteTests(QueueHarness):
         self.assertEqual(response.status_code, 303)
         self.assertEqual(await self.open_orders(), {20})
 
-    async def test_the_list_page_offers_both_actions_for_a_failure_row(self):
+    async def test_the_list_data_offers_both_actions_for_a_failure_row(self):
         response = await self.client.get(
-            "/finance?tab=delivery",
+            "/api/panel/finance/delivery",
             headers={"cookie": f"session={self.signer.dumps(OWNER_SESSION)}; csrf=token"},
         )
         self.assertEqual(response.status_code, 200)
-        self.assertIn("/orders/10/dismiss-delivery-failure", response.text)
-        self.assertEqual(response.text.count("/orders/10/retry-delivery"), 1)
-        self.assertEqual(response.text.count("/orders/10/dismiss-delivery-failure"), 1)
+        rows = [row for row in response.json()["rows"] if row["order_id"] == 10]
+        # Duplicate failure rows of one order collapse into one line that can be retried and dismissed.
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["bulk_ops"], ["retry", "dismiss"])
+        self.assertIsNotNone(rows[0]["attempts"])
 
 
 class RetryClaimTests(QueueHarness):

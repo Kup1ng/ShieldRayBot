@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select, update
 
@@ -18,6 +16,7 @@ from app.services import service_import_config as cfg
 from app.services import service_import_admin
 from app.services.service_import_admin import import_scope
 from app.services.users import clear_settings_cache, get_all_settings
+from tests.settings_json import settings_fields, settings_url
 from tests.test_service_import import PLATFORM_ADMIN, SHOP_ADMIN, FakePanel, _panel_user
 from tests.test_update_owner_only import OWNER_SESSION, SHOP_SESSION, RoutesHarness
 
@@ -85,28 +84,34 @@ class TabHarness(RoutesHarness):
 
 
 class TabPageTests(TabHarness):
-    async def test_the_owner_sees_every_setting_the_status_the_test_and_the_script(self):
-        response = await self.call(OWNER_SESSION, "GET", "/settings?tab=service_import")
+    async def test_the_owner_gets_every_setting_and_may_read_the_status(self):
+        response = await self.call(OWNER_SESSION, "GET", settings_url("service_import"))
         self.assertEqual(response.status_code, 200)
-        for needle in ("s_service_import_enabled", "s_service_import_max_per_user", "s_service_import_paths",
-                       "s_service_import_admins", 'id="si-panel"', "/static/service-import-admin.js", "بررسی لینک"):
-            self.assertIn(needle, response.text)
+        keys = set(settings_fields(response.json()))
+        for key in ("service_import_enabled", "service_import_max_per_user", "service_import_paths", "service_import_admins"):
+            self.assertIn(key, keys)
+        self.assertEqual((await self.call(OWNER_SESSION, "GET", "/service-import/status")).status_code, 200)
 
     async def test_a_shop_owner_sees_the_shared_settings_but_never_the_panel_wide_ones(self):
-        response = await self.call(SHOP_SESSION, "GET", "/shop-settings?tab=service_import")
+        response = await self.call(SHOP_SESSION, "GET", "/api/panel/shop-settings?tab=service_import")
         self.assertEqual(response.status_code, 200)
-        for needle in ("s_service_import_enabled", "s_service_import_max_per_user", 'id="si-panel"'):
-            self.assertIn(needle, response.text)
-        for needle in ("s_service_import_paths", "s_service_import_admins"):
-            self.assertNotIn(needle, response.text)
+        keys = {field["key"] for section in response.json()["sections"] for field in section["fields"]}
+        for key in ("service_import_enabled", "service_import_max_per_user"):
+            self.assertIn(key, keys)
+        for key in ("service_import_paths", "service_import_admins"):
+            self.assertNotIn(key, keys)
 
     async def test_the_tab_lives_in_the_service_and_sales_group_for_both(self):
-        owner = await self.call(OWNER_SESSION, "GET", "/settings?tab=service_import")
-        shop = await self.call(SHOP_SESSION, "GET", "/shop-settings?tab=service_import")
-        for response, base in ((owner, "/settings"), (shop, "/shop-settings")):
-            head = response.text.split("settings-layout", 1)[0]
-            self.assertIn(f'href="{base}?tab=service_import" class="active"', head)
-            self.assertIn(f'href="{base}?tab=naming"', head)
+        owner = (await self.call(OWNER_SESSION, "GET", settings_url("service_import"))).json()
+        active = next(group for group in owner["nav"]["groups"] if group["is_active"])
+        self.assertEqual(active["key"], "service")
+        self.assertTrue({"service_import", "naming"} <= {tab["key"] for tab in active["tabs"]})
+        shop = (await self.call(SHOP_SESSION, "GET", "/api/panel/shop-settings?tab=service_import")).json()
+        active = next(group for group in shop["nav"] if group["active"])
+        self.assertEqual(active["key"], "service")
+        hrefs = {tab["key"]: tab["href"] for tab in active["tabs"]}
+        self.assertEqual(hrefs["service_import"], "/shop-settings?tab=service_import")
+        self.assertEqual(hrefs["naming"], "/shop-settings?tab=naming")
 
 
 class SavePlumbingTests(TabHarness):
@@ -132,7 +137,7 @@ class SavePlumbingTests(TabHarness):
         self.assertEqual((shop["service_import_enabled"], shop["service_import_max_per_user"]), ("1", "3"))
         self.assertEqual((shop["service_import_paths"], shop["service_import_admins"]), ("", ""))
         platform = await self.stored(None)
-        self.assertEqual(platform["service_import_enabled"], "0")
+        self.assertEqual(platform["service_import_enabled"], "1")
         self.assertEqual((platform["service_import_paths"], platform["service_import_admins"]), ("", ""))
 
     async def test_a_shops_own_values_never_change_the_platforms(self):

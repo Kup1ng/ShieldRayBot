@@ -3,18 +3,10 @@ from urllib.parse import quote
 
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
 
-from app.db.models import TargetedCampaign
+from app.api.spa_pages import spa_response
 from app.services.authz import authz_from_staff, can_shop
-from app.services.campaigns import (
-    AUDIENCES,
-    RECIPIENT_LIMIT,
-    audience_count,
-    campaign_progress,
-    change_campaign_state,
-    create_campaign,
-)
+from app.services.campaigns import change_campaign_state, create_campaign
 from app.services.panel_sidebar_cache import invalidate_sidebar_counts, sidebar_cache_key
 from app.services.service_cancellations import approve_cancellation, reject_cancellation
 from app.services.shop_scope import ShopScopeError, resolve_shop_scope_id
@@ -103,42 +95,9 @@ def register_customer_features(app, *, render, require_staff, get_db):
         return redirect(FINANCE_CANCEL_PATH)
 
     @app.get("/campaigns")
-    async def campaigns(request: Request, staff=Depends(require_staff), session=Depends(get_db)):
-        scope = feature_scope(staff, "campaigns")
-        audience = request.query_params.get("audience", "trial")
-        try:
-            days = int(request.query_params.get("days", "7"))
-            count = await audience_count(
-                session, shop_id=scope, audience=audience, days=days
-            )
-        except ValueError:
-            raise HTTPException(400, "گروه یا بازهٔ مخاطبان نامعتبر است") from None
-        rows = list(
-            (
-                await session.scalars(
-                    select(TargetedCampaign)
-                    .where(TargetedCampaign.reseller_id == scope)
-                    .order_by(TargetedCampaign.id.desc())
-                    .limit(50)
-                )
-            ).all()
-        )
-        # Progress only for campaigns already scoped to this shop — never by bare id.
-        history = [(row, await campaign_progress(session, row.id)) for row in rows]
-        return render(
-            request,
-            "customer_features.html",
-            {
-                "staff": staff,
-                "mode": "campaigns",
-                "audiences": AUDIENCES,
-                "audience": audience,
-                "days": days,
-                "count": count,
-                "limit": RECIPIENT_LIMIT,
-                "campaigns": history,
-            },
-        )
+    async def campaigns(staff=Depends(require_staff)):
+        feature_scope(staff, "campaigns")
+        return spa_response("campaigns")
 
     @app.post("/campaigns")
     async def campaign_create(

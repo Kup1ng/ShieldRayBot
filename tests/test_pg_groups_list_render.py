@@ -1,45 +1,21 @@
-"""The PasarGuard groups list shows a group's inbound tags as readable text."""
+"""The PasarGuard groups list gives a group's inbound tags as separate readable strings."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
-import pytest
-from jinja2 import ChoiceLoader, DictLoader, Environment, FileSystemLoader, select_autoescape
-
-from app.services.formatting import format_number
+from app.services.pg_resources_panel import serialize_group
 
 
-@pytest.fixture
-def template_env() -> Environment:
-    env = Environment(
-        loader=ChoiceLoader([
-            DictLoader({"base.html": "{% block content %}{% endblock %}"}),
-            FileSystemLoader(str(Path(__file__).resolve().parents[1] / "app/web/templates")),
-        ]),
-        autoescape=select_autoescape(),
-    )
-    env.filters["num"] = format_number
-    return env
+def test_inbound_tags_are_a_list_of_strings_not_a_printed_python_list() -> None:
+    row = serialize_group({"id": 1, "name": "main", "inbound_tags": ["vless-ws", "trojan-grpc"]})
+    assert row["inbound_tags"] == ["vless-ws", "trojan-grpc"]
 
 
-def render_groups(env: Environment, groups: list[dict]) -> str:
-    return env.get_template("pg_groups.html").render(
-        groups=groups, inbound_tags=[], can_create=False, can_update=True, can_delete=True,
-    )
+def test_a_group_without_tags_has_an_empty_list_and_a_single_tag_string_is_one_tag() -> None:
+    assert serialize_group({"id": 1, "name": "empty", "inbound_tags": []})["inbound_tags"] == []
+    assert serialize_group({"id": 1, "name": "none"})["inbound_tags"] == []
+    assert serialize_group({"id": 1, "name": "one", "inbound_tags": "vless-ws"})["inbound_tags"] == ["vless-ws"]
 
 
-def test_inbound_tags_are_joined_not_printed_as_a_python_list(template_env: Environment) -> None:
-    html = render_groups(template_env, [{"id": 1, "name": "main", "inbound_tags": ["vless-ws", "trojan-grpc"]}])
-    assert "vless-ws · trojan-grpc" in html
-    assert "[&#39;vless-ws&#39;" not in html
-
-
-def test_a_group_without_tags_shows_a_dash_and_hostile_tags_stay_escaped(template_env: Environment) -> None:
-    html = render_groups(template_env, [
-        {"id": 1, "name": "empty", "inbound_tags": []},
-        {"id": 2, "name": "bad", "inbound_tags": ["<script>x</script>"]},
-    ])
-    assert '<bdi dir="ltr">—</bdi>' in html
-    assert "<script>x</script>" not in html
-    assert "&lt;script&gt;x&lt;/script&gt;" in html
+def test_hostile_tags_are_kept_as_plain_data_for_the_page_to_escape() -> None:
+    row = serialize_group({"id": 2, "name": "bad", "inbound_tags": ["<script>x</script>"]})
+    assert row["inbound_tags"] == ["<script>x</script>"]

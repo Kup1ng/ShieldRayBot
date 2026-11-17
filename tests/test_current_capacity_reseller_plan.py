@@ -254,6 +254,7 @@ class RenewCurrentCapacityTests(unittest.IsolatedAsyncioTestCase):
                 "app.services.pg_admin_subscription.sync_pg_capacity_from_sub",
                 AsyncMock(),
             ) as sync,
+            patch("app.services.pasarguard.get_pg", return_value=SimpleNamespace(reset_admin_usage=AsyncMock())),
         ):
             result = await renew_subscription(
                 session,
@@ -261,7 +262,6 @@ class RenewCurrentCapacityTests(unittest.IsolatedAsyncioTestCase):
                 plan=plan,
                 payer=None,
                 charge_wallet=False,
-                reset_user_traffic=False,
             )
 
         self.assertEqual(sub.base_gb, 120)
@@ -298,9 +298,10 @@ class SurfaceWiringTests(unittest.TestCase):
         self.assertIn("ظرفیت فعلی", text)
         self.assertIn("default_plan_id", text)
 
-    def test_session_adds_is_system_column(self):
-        text = (ROOT / "app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("is_system", text)
+    def test_reseller_plan_table_has_is_system_column(self):
+        from app.db.models import ResellerPlan
+
+        self.assertIn("is_system", ResellerPlan.__table__.c)
 
     def test_main_ensures_on_boot(self):
         text = (ROOT / "app/main.py").read_text(encoding="utf-8")

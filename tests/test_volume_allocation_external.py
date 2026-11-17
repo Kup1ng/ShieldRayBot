@@ -3,17 +3,15 @@
 from __future__ import annotations
 
 import importlib.util
-import os
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from sqlalchemy import select, text
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db import Base
 from app.db.models import BotUser, PgAdminSubscription, ResellerProfile, Role, UserService
@@ -29,6 +27,7 @@ from app.services.volume_allocation_external import (
     list_panel_users_for_admin,
     run_external_allocation_sync,
 )
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -36,9 +35,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class ExternalHarness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(
-            f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'ext.db'}"
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -105,7 +102,11 @@ class PaginationAndMatchTests(ExternalHarness):
     async def test_panel_only_users_count_as_external(self) -> None:
         await self._shop()
         async with self.Session() as session:
-            session.add(BotUser(id=1, telegram_id=1, role=Role.USER.value, referral_code="u1"))
+            session.add_all([
+                BotUser(id=1, telegram_id=1, role=Role.USER.value, referral_code="u1"),
+                BotUser(id=20, telegram_id=1020, role=Role.RESELLER.value, referral_code="s20"),
+            ])
+            await session.flush()
             session.add_all(
                 [
                     UserService(bot_user_id=1, pg_user_id=1, pg_username="local-one", shop_id=10,
@@ -216,16 +217,16 @@ class MigrationTests(unittest.TestCase):
         migration = importlib.util.module_from_spec(spec)
         assert spec.loader is not None
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(
                 text(
                     "CREATE TABLE reseller_profiles ("
                     "id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, "
-                    "allow_volume_oversell BOOLEAN NOT NULL DEFAULT 1)"
+                    "allow_volume_oversell BOOLEAN NOT NULL DEFAULT true)"
                 )
             )
-            conn.execute(text("INSERT INTO reseller_profiles VALUES (1, 10, 1)"))
+            conn.execute(text("INSERT INTO reseller_profiles VALUES (1, 10, true)"))
             with Operations.context(MigrationContext.configure(conn)):
                 migration.upgrade()
                 migration.upgrade()

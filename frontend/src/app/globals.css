@@ -1,0 +1,311 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@import "@heroui-pro/react/css";
+@import "@heroui-pro/react/themes/mouve";
+
+/* Dark utilities follow the app's own switch only, never the OS setting behind it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --font-sans: var(--font-yekan), "Tahoma", system-ui, sans-serif;
+}
+
+/* ---------------------------------------------------------------------------------------
+ * ShieldRay design system (HeroUI Pro export, theme "mouve"), adapted from DESIGN.md.
+ * --------------------------------------------------------------------------------------- */
+.mouve-light,
+[data-theme="mouve-light"],
+.mouve-dark,
+[data-theme="mouve-dark"] {
+  --radius: 1rem;
+  --field-radius: 1.5rem;
+  --spacing: 0.265625rem;
+}
+
+.mouve-light,
+[data-theme="mouve-light"] {
+  --background: oklch(95.5% 0.0018 312.88);
+  --muted: oklch(58% 0.0046 312.88);
+  --scrollbar: oklch(82% 0.0031 312.88);
+  --scrollbar-thumb: oklch(82% 0.0031 312.88);
+  --surface: oklch(97.5% 0.0012 312.88);
+  --surface-secondary: oklch(95% 0.0018 312.88);
+  --surface-tertiary: oklch(93.5% 0.0025 312.88);
+  --overlay: oklch(97.5% 0.0012 312.88);
+  --default: oklch(92% 0.0018 312.88);
+  --accent: oklch(57.34% 0.2586 312.88);
+  --accent-foreground: var(--snow);
+  --field-background: oklch(97% 0.0009 312.88);
+  --field-border: oklch(88% 0.0031 312.88);
+  --border: oklch(88% 0.0023 312.88);
+  --separator: oklch(92% 0.0015 312.88);
+  --focus: oklch(57.34% 0.2586 312.88);
+  --backdrop: oklch(50% 0.0061 312.88 / 0.4);
+  --accent-soft: color-mix(in oklab, oklch(57.34% 0.2586 312.88) 15%, transparent);
+  --accent-hover: color-mix(in oklab, oklch(57.34% 0.2586 312.88) 90%, var(--snow) 10%);
+  --danger: oklch(65.32% 0.2328 25.74);
+  --warning: oklch(78.19% 0.1585 72.33);
+  --chart-1: oklch(42% 0.14 312.88);
+  --chart-2: oklch(50% 0.16 312.88);
+  --chart-3: oklch(55% 0.18 312.88);
+  --chart-4: oklch(65% 0.14 312.88);
+  --chart-5: oklch(75% 0.1 312.88);
+
+  /* Glass (Figma "Mini app": light overlay 50% + 2px light overlay 20% border, blur 24–28). */
+  --glass-bg: rgb(255 255 255 / 0.5);
+  --glass-border: rgb(255 255 255 / 0.2);
+  --glass-shadow: 0 24px 48px 0 rgb(33 38 43 / 0.1);
+  --glass-inset: oklch(95% 0.0018 312.88);
+  --raised-shadow: 0 24px 48px -8px rgb(90 94 107 / 0.06), 0 2px 4px 0 rgb(90 94 107 / 0.12);
+  --crystal-opacity: 1;
+}
+
+.mouve-dark,
+[data-theme="mouve-dark"] {
+  color-scheme: dark;
+  --background: oklch(16% 0.0031 312.88);
+  --muted: oklch(65% 0.0031 312.88);
+  --scrollbar: oklch(35% 0.0031 312.88);
+  --scrollbar-thumb: oklch(35% 0.0031 312.88);
+  --surface: oklch(20% 0.0031 312.88);
+  --surface-secondary: oklch(24% 0.0031 312.88);
+  --surface-tertiary: oklch(27% 0.0031 312.88);
+  --overlay: oklch(20% 0.0031 312.88);
+  --default: oklch(26% 0.0031 312.88);
+  --accent: oklch(57.34% 0.2586 312.88);
+  --accent-foreground: var(--snow);
+  --success-foreground: oklch(20% 0.0031 312.88);
+  --warning-foreground: oklch(20% 0.0031 312.88);
+  --field-background: oklch(22% 0.0028 312.88);
+  --field-border: oklch(32% 0.0038 312.88);
+  --segment: oklch(28% 0.0038 312.88);
+  --border: oklch(30% 0.0031 312.88);
+  --separator: oklch(28% 0.0028 312.88);
+  --focus: oklch(57.34% 0.2586 312.88);
+  --accent-soft: color-mix(in oklab, oklch(57.34% 0.2586 312.88) 15%, transparent);
+  --accent-hover: color-mix(in oklab, oklch(57.34% 0.2586 312.88) 90%, var(--snow) 10%);
+  --danger: oklch(59.4% 0.1967 24.63);
+  --warning: oklch(82.03% 0.1388 76.34);
+  --chart-1: oklch(50% 0.12 312.88);
+  --chart-2: oklch(60% 0.14 312.88);
+  --chart-3: oklch(70% 0.16 312.88);
+  --chart-4: oklch(78% 0.12 312.88);
+  --chart-5: oklch(85% 0.08 312.88);
+
+  --glass-bg: color-mix(in oklab, oklch(22% 0.0031 312.88) 62%, transparent);
+  --glass-border: rgb(255 255 255 / 0.06);
+  --glass-shadow: 0 24px 48px 0 rgb(0 0 0 / 0.32);
+  --glass-inset: oklch(24% 0.0031 312.88);
+  --raised-shadow: 0 24px 48px -8px rgb(0 0 0 / 0.3), 0 2px 4px 0 rgb(0 0 0 / 0.3);
+  --crystal-opacity: 0.85;
+}
+
+/* Safe areas: the larger of the browser's inset and Telegram's (its top insets count only in
+   fullscreen; otherwise Telegram's header already sits above the page). */
+:root {
+  --mini-safe-top: env(safe-area-inset-top, 0px);
+  --mini-safe-bottom: max(
+    env(safe-area-inset-bottom, 0px),
+    calc(var(--tg-safe-area-inset-bottom, 0px) + var(--tg-content-safe-area-inset-bottom, 0px))
+  );
+}
+
+:root[data-fullscreen] {
+  --mini-safe-top: max(
+    env(safe-area-inset-top, 0px),
+    calc(var(--tg-safe-area-inset-top, 0px) + var(--tg-content-safe-area-inset-top, 0px))
+  );
+}
+
+/* Icon tiles (Figma "Main icon"): solid tone, white glyph, 8px corners. */
+:root {
+  --tile-blue: #004de5;
+  --tile-yellow: #f5b800;
+  --tile-green: #2dc656;
+  --tile-purple: oklch(57.34% 0.2586 312.88);
+  --tile-red: #e5484d;
+  --tile-teal: #12a594;
+  --tile-pink: #d6409f;
+  --tile-orange: #f76b15;
+  --tile-gray: oklch(58% 0.0046 312.88);
+  /* Figma «فاکتور نهایی» and the service hero card. */
+  --invoice-blue: #1f6bff;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    background: var(--background);
+  }
+
+  /* The canvas colour lives on <html> only, so the fixed crystal layer can sit between it and
+     the content (a body background would paint over a negative z-index layer). */
+  body {
+    min-height: 100dvh;
+    overflow-x: clip;
+    background: transparent;
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Numbers, ids, links and codes stay left-to-right inside Persian text. */
+  .ltr {
+    direction: ltr;
+    unicode-bidi: isolate;
+  }
+
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Frosted panel over the crystal backdrop. */
+  .glass {
+    background: var(--glass-bg);
+    border: 2px solid var(--glass-border);
+    box-shadow: var(--glass-shadow);
+    -webkit-backdrop-filter: blur(28px) saturate(140%);
+    backdrop-filter: blur(28px) saturate(140%);
+  }
+
+  /* Neutral inset row on a glass panel (Figma "Tag-base"). */
+  .inset-tile {
+    background: var(--glass-inset);
+  }
+
+  .raised {
+    box-shadow: var(--raised-shadow);
+  }
+
+  /* Row- and tile-shaped buttons hold content, so their text wraps like content does
+     (a HeroUI button is nowrap, which let long messages widen the whole page). */
+  .button.\!h-auto {
+    white-space: normal;
+    min-width: 0;
+  }
+
+  /* Dark "Next" button from the Figma flows; the mouve raised highlight keeps it glossy. */
+  .button--ink {
+    background: var(--eclipse);
+    color: var(--snow);
+    border: 1px solid oklch(18% 0.003 312.88);
+    box-shadow: var(--mouve-raised-shadow);
+  }
+
+  .button--ink:hover,
+  .button--ink[data-hovered="true"] {
+    background: color-mix(in oklab, var(--eclipse) 88%, var(--snow) 12%);
+  }
+
+  /* Figma dark frames: the ink button inverts to a snow pill with dark text. */
+  .dark .button--ink {
+    background: var(--snow);
+    color: var(--eclipse);
+    border-color: transparent;
+  }
+
+  .dark .button--ink:hover,
+  .dark .button--ink[data-hovered="true"] {
+    background: color-mix(in oklab, var(--snow) 90%, var(--eclipse) 10%);
+  }
+}
+
+/* Unlayered on purpose: HeroUI Pro component CSS is unlayered, so a layered override would lose. */
+
+/* Web panel: the floating sidebar is a glass card over the crystals, like the Mini App panels. */
+.sidebar--floating.panel-sidebar {
+  background: var(--glass-bg);
+  border: 2px solid var(--glass-border);
+  box-shadow: var(--glass-shadow);
+  -webkit-backdrop-filter: blur(28px) saturate(140%);
+  backdrop-filter: blur(28px) saturate(140%);
+  border-radius: var(--radius-xl);
+}
+
+/*
+ * The sidebar sits on the right edge. HeroUI Pro's right side is physical (drawer, rail, edges) except
+ * `order: 1`, which puts it after the content: in a right-to-left row that is the left edge.
+ */
+[dir="rtl"] .sidebar.sidebar--right,
+[dir="rtl"] .sidebar__offcanvas-wrapper[data-side="right"] {
+  order: 0;
+}
+
+.panel-sidebar .sidebar__menu-item[data-current="true"] .sidebar__menu-item-content {
+  background: var(--surface);
+  box-shadow: var(--raised-shadow);
+}
+
+.panel-sidebar .sidebar__menu-item[data-current="true"] .sidebar__menu-icon {
+  color: var(--accent);
+}
+
+.sidebar__provider,
+.app-layout__body,
+.app-layout__main {
+  background: transparent;
+}
+
+/* Mini App: the auto-renew switch on the blue service card. The accent track would vanish on blue,
+   so the track is translucent white when off and the ink of the renew button when on. */
+.switch.switch--on-blue {
+  --switch-control-bg: rgb(255 255 255 / 0.3);
+  --switch-control-bg-checked: var(--eclipse);
+  --switch-control-bg-checked-hover: color-mix(in oklab, var(--eclipse) 88%, var(--snow) 12%);
+}
+
+.switch.switch--on-blue .switch__content {
+  color: white;
+  white-space: nowrap;
+}
+
+/* The theme draws an accent (purple) border on a switch that is on; on blue it reads as a stray ring. */
+.switch.switch--on-blue[data-selected="true"] .switch__control {
+  border-color: rgb(255 255 255 / 0.35);
+}
+
+.switch.switch--on-blue .switch__thumb {
+  background: white;
+}
+
+/* Figma segmented choice: grey track, the selected segment is the dark glossy "ink" pill. */
+.segment.segment--ink {
+  height: 3rem;
+  padding: 0.25rem;
+  border-radius: var(--radius-lg);
+}
+
+.segment--ink .segment__indicator {
+  border-radius: 10px;
+  background-color: var(--eclipse);
+  box-shadow: var(--mouve-raised-shadow);
+}
+
+.dark .segment--ink .segment__indicator {
+  background-color: oklch(36% 0.004 312.88);
+}
+
+.segment--ink .segment__item {
+  flex: 1;
+  height: 2.5rem;
+  font-size: 0.875rem;
+}
+
+.segment--ink .segment__item[data-selected="true"] {
+  color: var(--snow);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}

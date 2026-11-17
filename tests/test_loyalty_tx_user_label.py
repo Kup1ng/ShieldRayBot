@@ -5,11 +5,11 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from tests.pgtest import pg_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
 LOYALTY = ROOT / "app/web/templates/loyalty.html"
-LOYALTY_PAGES = ROOT / "app/api/loyalty_pages.py"
 
 
 class BotUserPanelLabelTests(unittest.TestCase):
@@ -44,11 +44,36 @@ class LoyaltyTransactionsTemplateTests(unittest.TestCase):
         self.assertIn("{{ t.user_label }}", html)
         self.assertNotIn("{{ t.user_id }}", html)
 
-    def test_api_builds_user_label_rows(self):
-        src = LOYALTY_PAGES.read_text(encoding="utf-8")
-        self.assertIn("bot_user_panel_label", src)
-        self.assertIn('"user_label": bot_user_panel_label(user, fallback_id=tx.user_id)', src)
-        self.assertIn("select(PointsTransaction, BotUser)", src)
+
+class LoyaltyTransactionsPayloadTests(unittest.IsolatedAsyncioTestCase):
+    async def test_ledger_rows_carry_a_user_label_and_no_user_id(self):
+        import tempfile
+
+        from sqlalchemy.ext.asyncio import async_sessionmaker
+
+        from app.db.models import Base, BotUser, PointsTransaction
+        from app.services.loyalty_panel import loyalty_transactions
+
+        with tempfile.TemporaryDirectory():
+            engine = pg_engine()
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            try:
+                async with async_sessionmaker(engine, expire_on_commit=False)() as session:
+                    session.add(BotUser(id=7, telegram_id=555, referral_code="c7", username="alice", full_name="Alice"))
+                    await session.flush()
+                    session.add(
+                        PointsTransaction(
+                            user_id=7, amount=5, balance_after=5, tx_type="earn", source="x",
+                            description="d", idempotency_key="k", reseller_id=None,
+                        )
+                    )
+                    await session.commit()
+                    rows = await loyalty_transactions(session, None)
+            finally:
+                await engine.dispose()
+        self.assertEqual(rows[0]["user_label"], "Alice (@alice)")
+        self.assertNotIn("user_id", rows[0])
 
 
 if __name__ == "__main__":

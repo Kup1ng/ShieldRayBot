@@ -4,17 +4,15 @@ from __future__ import annotations
 
 import importlib.util
 import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import sqlalchemy as sa
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.handlers.psp_check import psp_gateway_picker
 from app.bot.handlers.shop import _psp_callback_target
@@ -47,6 +45,7 @@ from app.services.users import (
     set_settings_bulk,
 )
 from app.services.wallet_topup import TopupError, start_topup, topup_options
+from tests.pgtest import pg_engine, pg_sync_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 AMOUNT = 70_000
@@ -141,7 +140,7 @@ class GatewayCheckoutTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         clear_settings_cache()
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 't.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)
@@ -153,7 +152,11 @@ class GatewayCheckoutTests(unittest.IsolatedAsyncioTestCase):
                 session, "psp_gateways", gateways_json(gateway("a", "merchant-a"), gateway("b", "merchant-b"))
             )
             user = BotUser(telegram_id=7001, username="u", full_name="u", referral_code="r71", role=Role.USER.value)
-            session.add(user)
+            session.add_all([
+                user,
+                BotUser(id=SHOP_A, telegram_id=SHOP_A, referral_code="shop-a", role=Role.RESELLER.value),
+                BotUser(id=SHOP_B, telegram_id=SHOP_B, referral_code="shop-b", role=Role.RESELLER.value),
+            ])
             await session.commit()
             self.user_id = int(user.id)
         clear_settings_cache()
@@ -273,7 +276,7 @@ class SettlementGatewayMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("m0071", path)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(text("CREATE TABLE payment_settlements (id INTEGER PRIMARY KEY, provider VARCHAR(32))"))
             conn.execute(text("INSERT INTO payment_settlements VALUES (1, 'zarinpal'), (2, 'sunpay')"))

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.login_guard import login_begin, login_end, login_fail, login_success
+from app.api.spa_pages import spa_response
 from app.config import get_settings
 from app.db.models import ResellerProfile
 from app.services.setup_wizard import update_env_keys
@@ -71,23 +72,9 @@ def register_security_pages(app, *, render, require_staff, get_db, get_signer, c
         return ok
 
     @app.get("/security", response_class=HTMLResponse)
-    async def security_page(
-        request: Request,
-        staff: dict = Depends(require_staff),
-    ):
-        from app.services.platform_identity import identity_help_fa
-
-        return render(
-            request,
-            "security.html",
-            {
-                "staff": staff,
-                "current_username": staff.get("username") or "",
-                "identity_help": identity_help_fa(staff.get("role")),
-                "flash_ok": request.query_params.get("ok"),
-                "flash_err": request.query_params.get("err"),
-            },
-        )
+    async def security_page(staff: dict = Depends(require_staff)):
+        """The React page; the current user name and identity help come from /api/panel/security."""
+        return spa_response("security")
 
     @app.post("/security/credentials")
     async def security_change_credentials(

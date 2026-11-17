@@ -40,7 +40,7 @@ LOGO_KEY = "panel_brand_logo"
 COLOR_KEY = "panel_brand_color"
 BRAND_KEYS = (NAME_KEY, LOGO_KEY, COLOR_KEY)
 
-DEFAULT_NAME = "MrClockBot"
+DEFAULT_NAME = "ShieldRay"
 DEFAULT_LOGO_URL = "/static/logo-64.png"
 NAME_MAX = 40
 LOGO_MAX_BYTES = 2 * 1024 * 1024

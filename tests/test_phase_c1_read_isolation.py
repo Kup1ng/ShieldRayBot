@@ -165,21 +165,13 @@ class FilterFailClosedTests(unittest.TestCase):
 
 class SourceGuardReadPathsTests(unittest.TestCase):
     def test_list_gets_use_staff_pg_read_client(self):
-        src = Path("app/api/pg_pages.py").read_text(encoding="utf-8")
-        for marker in (
-            'async def pg_users(',
-            'async def pg_templates(',
-            'async def pg_groups(',
-            'async def pg_hosts(',
-            'async def pg_nodes(',
-            'async def pg_inbounds(',
-        ):
-            idx = src.find(marker)
-            self.assertGreater(idx, 0, marker)
-            chunk = src[idx : idx + 900]
-            self.assertIn("staff_pg_read_client", chunk, marker)
+        # /pg/users, /pg/templates, /pg/groups and /pg/hosts are React pages; their list reads
+        # moved to these services behind /api/panel/pg/... (tests/test_panel_pg_users_api.py).
+        for path in ("app/services/pg_users_panel.py", "app/services/pg_resources_panel.py"):
+            src = Path(path).read_text(encoding="utf-8")
+            self.assertIn("staff_pg_read_client", src, path)
             # Must not hardcode owner client for the list fetch
-            self.assertNotIn("pg = get_pg()", chunk, marker)
+            self.assertNotIn("get_pg()", src, path)
 
     def test_writes_still_use_staff_pg(self):
         src = Path("app/api/pg_pages.py").read_text(encoding="utf-8")

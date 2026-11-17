@@ -84,9 +84,19 @@ class TicketShopScopeTests(unittest.TestCase):
         self.assertTrue(hasattr(Ticket, "reseller_id"))
 
     def test_migration_adds_column(self):
-        src = (ROOT / "app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn('ADD COLUMN reseller_id INTEGER', src)
-        self.assertIn('has_table("tickets")', src)
+        from sqlalchemy import inspect
+
+        from app.db.alembic_runner import upgrade_head
+        from tests.pgtest import ensure_schema, new_schema, pg_sync_engine, sync_url
+
+        schema = ensure_schema(new_schema())
+        upgrade_head(sync_url(schema))
+        engine = pg_sync_engine(schema=schema)
+        try:
+            columns = {column["name"] for column in inspect(engine).get_columns("tickets")}
+            self.assertIn("reseller_id", columns)
+        finally:
+            engine.dispose()
 
     def test_create_ticket_uses_shop_context(self):
         src = (ROOT / "app/services/tickets.py").read_text(encoding="utf-8")
@@ -120,7 +130,7 @@ class MiddlewareFailClosedTests(unittest.TestCase):
     def test_unknown_shop_token_rejected(self):
         src = (ROOT / "app/bot/middlewares.py").read_text(encoding="utf-8")
         chunk = src.split("class UserMiddleware")[1].split("class ")[0]
-        self.assertIn("not a known reseller shop", chunk)
+        self.assertIn("not an active reseller shop", chunk)
         self.assertIn("return None", chunk)
 
 

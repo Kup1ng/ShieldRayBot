@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import unittest
 from pathlib import Path
+from tests.template_source import template_with_includes
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -32,7 +33,7 @@ class DeleteWalletWarnTests(unittest.TestCase):
 
 class PlansUnifyTests(unittest.TestCase):
     def test_single_add_button_and_unified_modal(self):
-        html = (ROOT / "app/web/templates/plans.html").read_text(encoding="utf-8")
+        html = template_with_includes("plans.html")
         self.assertIn("افزودن پلن", html)
         self.assertIn("modal-plan-unified", html)
         self.assertIn("plan-audience", html)
@@ -61,9 +62,10 @@ class PlansUnifyTests(unittest.TestCase):
         self.assertIn("billing_mode", block)
         self.assertNotIn("commission_percent", block)
 
-    def test_session_alters_billing_mode(self):
-        src = (ROOT / "app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("reseller_plans ADD COLUMN billing_mode", src)
+    def test_reseller_plan_table_has_billing_mode(self):
+        from app.db.models import ResellerPlan
+
+        self.assertIn("billing_mode", ResellerPlan.__table__.c)
 
     def test_make_reseller_accepts_billing_mode(self):
         src = (ROOT / "app/services/resellers.py").read_text(encoding="utf-8")

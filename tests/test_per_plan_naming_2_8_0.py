@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
+from tests.template_source import template_with_includes
 
 
 class ResolveUsernameNamingTests(unittest.TestCase):
@@ -80,7 +81,7 @@ class GenerateWithPlanTests(unittest.IsolatedAsyncioTestCase):
 
 class PlansUiNamingTests(unittest.TestCase):
     def test_custom_modal_has_inline_naming_no_settings_link(self):
-        html = Path("app/web/templates/plans.html").read_text(encoding="utf-8")
+        html = template_with_includes("plans.html")
         self.assertNotIn('href="/settings?tab=naming"', html)
         self.assertIn("custom_plan_username_prefix", html)
         self.assertIn("_plan_naming_fields.html", html)
@@ -92,12 +93,10 @@ class PlansUiNamingTests(unittest.TestCase):
         self.assertIn("_plan_naming_fields.html", html)
 
     def test_model_has_columns(self):
-        src = Path("app/db/models.py").read_text(encoding="utf-8")
-        self.assertIn("pg_username_prefix", src)
-        self.assertIn("pg_username_suffix", src)
-        self.assertIn("pg_username_pattern", src)
-        migrate = Path("app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("pg_username_prefix", migrate)
+        from app.db.models import Plan
+
+        for column in ("pg_username_prefix", "pg_username_suffix", "pg_username_pattern"):
+            self.assertIn(column, Plan.__table__.c)
 
     def test_deliver_passes_plan(self):
         src = Path("app/services/orders.py").read_text(encoding="utf-8")

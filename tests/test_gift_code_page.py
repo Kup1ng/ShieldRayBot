@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from pathlib import Path
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+
+from unittest.mock import patch
 
 import httpx
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.gift_code_pages import legacy_gift_modal_redirect, register_gift_code_pages
 from app.services.gift_codes import gift_code_scope
+from tests.pgtest import pg_engine
 
 OWNER = {
     "role": "admin",
@@ -81,16 +82,32 @@ class LegacyRedirectTests(unittest.TestCase):
         self.assertTrue(target.startswith("/gift-codes"))
 
 
+def _deny_unless_allowed(staff_ref: dict, permission: str):
+    """Stand-in for the app's ``require_perm`` that uses the real authorization rule."""
+    from fastapi import HTTPException
+
+    from app.services.authz import authz_from_staff, can_shop
+
+    def dependency() -> dict:
+        if not can_shop(authz_from_staff(staff_ref), permission):
+            raise HTTPException(403, "forbidden")
+        return staff_ref
+
+    return dependency
+
+
 class GiftCodeHarness(unittest.IsolatedAsyncioTestCase):
-    """Real page route over a temp database with codes for the platform and two shops."""
+    """Real page and data routes over a temp database with codes for the platform and two shops."""
 
     async def asyncSetUp(self):
+        from app.api import spa_pages
+        from app.api.panel_catalog_api import register_panel_catalog_api
         from app.db import Base
-        from app.db.models import ChargeCode
+        from app.db.models import BotUser, ChargeCode
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmpdir.name) / 'g.db'}")
+        engine = pg_engine()
         self.engine = engine
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -98,12 +115,21 @@ class GiftCodeHarness(unittest.IsolatedAsyncioTestCase):
         async with self.Session() as session:
             session.add_all(
                 [
+                    BotUser(id=5, telegram_id=105, referral_code="shop5", role="reseller"),
+                    BotUser(id=6, telegram_id=106, referral_code="shop6", role="reseller"),
                     ChargeCode(code="PLATFORMCODE", amount=1000, reseller_id=None, note="<script>x</script>"),
                     ChargeCode(code="SHOPFIVECODE", amount=2000, reseller_id=5),
                     ChargeCode(code="SHOPSIXCODE", amount=3000, reseller_id=6),
                 ]
             )
             await session.commit()
+
+        spa_dir = Path(self._tmpdir.name) / "spa"
+        (spa_dir / "gift-codes").mkdir(parents=True)
+        (spa_dir / "gift-codes" / "index.html").write_text("<html><body>gift-codes-shell</body></html>", encoding="utf-8")
+        self._spa_patch = patch.object(spa_pages, "SPA_DIR", spa_dir)
+        self._spa_patch.start()
+        spa_pages._cache.clear()
 
         from app.api.app import render
 
@@ -115,16 +141,28 @@ class GiftCodeHarness(unittest.IsolatedAsyncioTestCase):
 
         app = FastAPI()
         register_gift_code_pages(app, render=render, require_staff=lambda: self.staff, get_db=get_db)
+        register_panel_catalog_api(
+            app,
+            require_staff=lambda: self.staff,
+            require_admin=lambda: self.staff,
+            require_perm=lambda permission: _deny_unless_allowed(self.staff, permission),
+            require_pg_perm=lambda permission: _deny_unless_allowed(self.staff, permission),
+            get_db=get_db,
+        )
         self.client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         )
 
     async def asyncTearDown(self):
+        from app.api import spa_pages
+
+        self._spa_patch.stop()
+        spa_pages._cache.clear()
         await self.client.aclose()
         await self.engine.dispose()
         self._tmpdir.cleanup()
 
-    async def _get(self, staff: dict, url: str = "/gift-codes"):
+    async def _get(self, staff: dict, url: str = "/api/panel/gift-codes"):
         self.staff.clear()
         self.staff.update(staff)
         return await self.client.get(url)
@@ -132,29 +170,22 @@ class GiftCodeHarness(unittest.IsolatedAsyncioTestCase):
 
 class GiftCodePageTests(GiftCodeHarness):
 
-    async def test_owner_sees_only_platform_codes_and_notes_are_escaped(self):
+    async def test_owner_sees_only_platform_codes_and_notes_stay_data(self):
         response = await self._get(OWNER)
         self.assertEqual(response.status_code, 200)
-        self.assertIn("PLATFORMCODE", response.text)
-        self.assertNotIn("SHOPFIVECODE", response.text)
-        self.assertNotIn("SHOPSIXCODE", response.text)
-        self.assertNotIn("<script>x</script>", response.text)
-        self.assertIn("&lt;script&gt;x&lt;/script&gt;", response.text)
-
-    async def test_the_title_has_no_caption_under_it(self):
-        response = await self._get(OWNER)
-        self.assertNotIn("page-sub", response.text)
+        self.assertTrue(response.headers["content-type"].startswith("application/json"))
+        codes = {row["code"]: row for row in response.json()["codes"]}
+        self.assertEqual(set(codes), {"PLATFORMCODE"})
+        # A note is returned as data; the React page renders it as text, never as markup.
+        self.assertEqual(codes["PLATFORMCODE"]["note"], "<script>x</script>")
 
     async def test_shop_staff_see_only_their_own_shop(self):
         response = await self._get(_reseller(["gift_codes"], shop_id=5))
-        self.assertIn("SHOPFIVECODE", response.text)
-        self.assertNotIn("SHOPSIXCODE", response.text)
-        self.assertNotIn("PLATFORMCODE", response.text)
+        self.assertEqual([c["code"] for c in response.json()["codes"]], ["SHOPFIVECODE"])
         other = await self._get(_reseller(["gift_codes"], shop_id=6))
-        self.assertIn("SHOPSIXCODE", other.text)
-        self.assertNotIn("SHOPFIVECODE", other.text)
+        self.assertEqual([c["code"] for c in other.json()["codes"]], ["SHOPSIXCODE"])
 
-    async def test_staff_without_permission_or_shop_are_sent_home(self):
+    async def test_staff_without_permission_or_shop_get_403_from_the_data_and_home_from_the_page(self):
         for staff in (
             _reseller(["tickets"]),
             _reseller(["gift_codes"], shop_id=None),
@@ -162,31 +193,28 @@ class GiftCodePageTests(GiftCodeHarness):
             {"role": "admin", "permissions": []},
         ):
             with self.subTest(staff=staff):
-                response = await self._get(staff)
-                self.assertEqual(response.status_code, 303)
-                self.assertEqual(response.headers["location"], "/home")
+                self.assertEqual((await self._get(staff)).status_code, 403)
+                page = await self._get(staff, "/gift-codes")
+                self.assertEqual(page.status_code, 303)
+                self.assertEqual(page.headers["location"], "/home")
 
-    async def test_forms_carry_a_csrf_token_and_post_to_the_existing_routes(self):
-        response = await self._get(_reseller(["gift_codes"], shop_id=5))
-        self.assertIn('name="csrf_token"', response.text)
-        self.assertIn('action="/plans/gift-codes"', response.text)
-        self.assertIn('/plans/gift-codes/', response.text)
-        self.assertIn('/static/gift-codes.js', response.text)
+    async def test_the_page_is_the_exported_react_shell_for_allowed_staff(self):
+        page = await self._get(_reseller(["gift_codes"], shop_id=5), "/gift-codes")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn("gift-codes-shell", page.text)
+        self.assertEqual(page.headers["cache-control"], "no-store")
 
-    async def test_flash_messages_are_shown_and_escaped(self):
-        done = await self._get(OWNER, "/gift-codes?ok=1")
-        self.assertIn("انجام شد", done.text)
-        failed = await self._get(OWNER, "/gift-codes?err=%3Cb%3Ebad%3C%2Fb%3E")
-        self.assertNotIn("<b>bad</b>", failed.text)
-
-    async def test_sidebar_entry_is_active_on_the_page(self):
-        response = await self._get(_reseller(["gift_codes"], shop_id=5))
-        entry = response.text.split("بازاریابی و وفاداری</span>", 1)[0].rsplit("<a ", 1)[1]
-        self.assertIn("active", entry)
+    async def test_rules_and_state_labels_are_part_of_each_row(self):
+        row = (await self._get(OWNER)).json()["codes"][0]
+        for key in ("kind", "amount", "percent", "max_uses", "max_uses_per_user", "used_count", "state", "expiry_label", "expiry_input", "purchase_types"):
+            self.assertIn(key, row)
+        self.assertEqual(row["state"], "فعال")
 
     async def test_tab_strip_marks_gift_codes_active(self):
-        response = await self._get(_reseller(["gift_codes", "loyalty"], shop_id=5))
-        self.assertIn('href="/gift-codes" class="active" aria-current="page"', response.text)
+        tabs = (await self._get(_reseller(["gift_codes", "loyalty"], shop_id=5))).json()["tabs"]
+        active = [t["key"] for t in tabs if t["active"]]
+        self.assertEqual(active, ["gift_codes"])
+        self.assertIn("/gift-codes", [t["href"] for t in tabs])
 
 
 class GiftCodeRedirectTests(GiftCodeHarness):

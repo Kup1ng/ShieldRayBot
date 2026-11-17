@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import os
 import unittest
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import FastAPI, HTTPException
@@ -36,7 +34,7 @@ SHOP_WITHOUT_RIGHT = {"role": "reseller", "permissions": ["plans", "orders"], "b
 SHOP_NO_PERMISSIONS = {"role": "reseller", "permissions": [], "bot_user_id": 5}
 
 
-def _request(path: str) -> Request:
+def _request(path: str, query: bytes = b"") -> Request:
     return Request(
         {
             "type": "http",
@@ -46,7 +44,7 @@ def _request(path: str) -> Request:
             "scheme": "https",
             "path": path,
             "raw_path": path.encode(),
-            "query_string": b"",
+            "query_string": query,
             "headers": [(b"host", b"example.test")],
             "client": ("127.0.0.1", 123),
             "server": ("example.test", 443),
@@ -55,11 +53,16 @@ def _request(path: str) -> Request:
     )
 
 
-def _settings_page(name: str, path: str, staff: dict, **ctx) -> str:
+def _settings_page(name: str, path: str, staff: dict, *, query: bytes = b"", **ctx) -> str:
     from app.api.app import render
 
     base = {"staff": staff, "values": dict(DEFAULT_SETTINGS), "groups": {}, "tab_groups": [], **ctx}
-    return render(_request(path), name, base).body.decode("utf-8")
+    return render(_request(path, query), name, base).body.decode("utf-8")
+
+
+def _settings_list(html: str) -> str:
+    """The list of a settings area (its page opened without ``?tab=``)."""
+    return html.split('class="settings-hub', 1)[1].split("</main>", 1)[0]
 
 
 def _tab_strip(html: str) -> str:
@@ -88,57 +91,55 @@ class VisibilityMirrorsTheRouteTests(unittest.TestCase):
 
 
 class GroupingTests(unittest.TestCase):
-    def test_it_joins_the_service_and_sales_group_last_and_opens_its_own_page(self):
+    def test_it_joins_the_texts_group_last_and_opens_its_own_page(self):
         for tabs, staff in ((SETTINGS_TABS, OWNER), (RESELLER_SETTINGS_TABS, SHOP_WITH_RIGHT)):
             groups = group_settings_tabs(tabs_with_message_variables(tabs, staff), "welcome")
-            service = next(group for group in groups if group.key == "service")
-            self.assertEqual(service.tabs[-1].key, MESSAGE_VARIABLES_TAB_KEY)
-            self.assertEqual(service.tabs[-1].href, "/message-variables")
-            self.assertEqual([t.href for t in service.tabs[:-1]], [None] * (len(service.tabs) - 1))
+            texts = next(group for group in groups if group.key == "texts")
+            self.assertEqual(texts.tabs[-1].key, MESSAGE_VARIABLES_TAB_KEY)
+            self.assertEqual(texts.tabs[-1].href, "/message-variables")
+            self.assertEqual([t.href for t in texts.tabs[:-1]], [None] * (len(texts.tabs) - 1))
 
     def test_every_tab_still_appears_exactly_once_and_no_group_is_added(self):
         for tabs, staff in ((SETTINGS_TABS, OWNER), (RESELLER_SETTINGS_TABS, SHOP_WITH_RIGHT)):
             before = group_settings_tabs(tabs, "welcome")
             after = group_settings_tabs(tabs_with_message_variables(tabs, staff), "welcome")
-            keys = [tab.key for group in after for tab in group.tabs]
+            keys = [s.key for group in after for tab in group.tabs for s in (tab.sections or (tab,))]
             self.assertEqual(len(keys), len(set(keys)))
             self.assertEqual(sorted(keys), sorted([*(k for k, _ in tabs), MESSAGE_VARIABLES_TAB_KEY]))
             self.assertEqual([g.key for g in before], [g.key for g in after])
 
-    def test_on_the_variables_page_the_service_group_and_its_tab_are_active(self):
+    def test_on_the_variables_page_the_texts_group_and_its_tab_are_active(self):
         groups = group_settings_tabs(tabs_with_message_variables(SETTINGS_TABS, OWNER), MESSAGE_VARIABLES_TAB_KEY)
-        self.assertEqual([g.key for g in groups if g.is_active], ["service"])
+        self.assertEqual([g.key for g in groups if g.is_active], ["texts"])
 
 
 class SettingsPagesTests(unittest.TestCase):
-    def _owner_page(self, tab: str) -> str:
-        nav = group_settings_tabs(tabs_with_message_variables(SETTINGS_TABS, OWNER), tab)
+    def _owner_page(self, tab: str | None) -> str:
+        nav = group_settings_tabs(tabs_with_message_variables(SETTINGS_TABS, OWNER), tab or "welcome")
         return _settings_page(
-            "settings.html", "/settings", OWNER,
-            tabs=SETTINGS_TABS, tab=tab, is_panel_settings=False, tab_nav=nav,
+            "settings.html", "/settings", OWNER, query=f"tab={tab}".encode() if tab else b"",
+            tabs=SETTINGS_TABS, tab=tab or "welcome", is_panel_settings=False, tab_nav=nav,
         )
 
-    def test_the_header_button_is_gone_and_the_tab_is_in_the_service_group(self):
-        html = self._owner_page("limits")
-        head = html.split("settings-layout", 1)[0]
-        self.assertNotIn("page-head-actions", head)
-        self.assertEqual(head.count('href="/message-variables"'), 1)
-        self.assertIn('href="/message-variables" class="">متغیرهای پیام</a>', head)
+    def test_the_variables_page_is_one_row_of_the_texts_group_in_the_list(self):
+        rows = _settings_list(self._owner_page(None))
+        self.assertEqual(rows.count('href="/message-variables"'), 1)
+        texts = rows.split("متن‌ها", 1)[1].split("hub-group-title", 1)[0]
+        self.assertIn('href="/message-variables"', texts)
 
-    def test_the_subtab_is_only_shown_inside_its_own_group(self):
-        head = self._owner_page("welcome").split("settings-layout", 1)[0]
-        self.assertNotIn('href="/message-variables"', head)
+    def test_no_settings_page_links_to_it_from_its_header(self):
+        for tab in ("messages", "welcome"):
+            head = self._owner_page(tab).split("settings-layout", 1)[0]
+            self.assertNotIn('href="/message-variables"', head, tab)
 
-    def test_shop_page_has_the_tab_for_a_shop_with_the_right_and_not_without(self):
+    def test_shop_list_has_the_row_for_a_shop_with_the_right_and_not_without(self):
         for staff, expected in ((SHOP_WITH_RIGHT, 1), (SHOP_WITHOUT_RIGHT, 0)):
-            nav = group_settings_tabs(tabs_with_message_variables(RESELLER_SETTINGS_TABS, staff), "limits")
+            nav = group_settings_tabs(tabs_with_message_variables(RESELLER_SETTINGS_TABS, staff), "welcome")
             html = _settings_page(
                 "shop_settings.html", "/shop-settings", staff,
-                tabs=RESELLER_SETTINGS_TABS, tab="limits", shop_mode=True, settings_base="/shop-settings", tab_nav=nav,
+                tabs=RESELLER_SETTINGS_TABS, tab="welcome", shop_mode=True, settings_base="/shop-settings", tab_nav=nav,
             )
-            head = html.split("settings-layout", 1)[0]
-            self.assertEqual(head.count('href="/message-variables"'), expected, staff)
-            self.assertNotIn("page-head-actions", head)
+            self.assertEqual(_settings_list(html).count('href="/message-variables"'), expected, staff)
 
     def test_panel_settings_have_no_bot_tabs_at_all(self):
         html = _settings_page(
@@ -151,6 +152,7 @@ class SettingsPagesTests(unittest.TestCase):
 class VariablesPageTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         from app.api.app import render
+        from app.api.panel_catalog_api import register_panel_catalog_api
 
         self.staff: dict = {}
 
@@ -169,41 +171,63 @@ class VariablesPageTests(unittest.IsolatedAsyncioTestCase):
         register_message_variables_pages(
             app, render=render, require_perm=require_perm, require_admin=lambda: self.staff, get_db=get_db
         )
+        register_panel_catalog_api(
+            app,
+            require_staff=lambda: self.staff,
+            require_admin=lambda: self.staff,
+            require_perm=require_perm,
+            require_pg_perm=require_perm,
+            get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self):
         await self.client.aclose()
 
-    async def _get(self, staff: dict):
+    async def _get(self, staff: dict, url: str = "/api/panel/message-variables"):
         self.staff.clear()
         self.staff.update(staff)
-        return await self.client.get("/message-variables")
+        return await self.client.get(url)
 
-    async def test_owner_gets_the_platform_tab_strip_with_the_variables_tab_active(self):
+    @staticmethod
+    def _tabs(response) -> list[dict]:
+        return [tab for group in response.json()["tab_groups"] for tab in group["tabs"]]
+
+    async def test_owner_page_leads_back_to_the_bot_settings_list(self):
         response = await self._get(OWNER)
         self.assertEqual(response.status_code, 200)
-        strip = _tab_strip(response.text)
-        self.assertIn('href="/settings?tab=welcome"', strip)
-        self.assertIn('href="/message-variables" class="active">متغیرهای پیام</a>', strip)
-        self.assertIn('href="/settings?tab=naming" class=""', strip)
-        self.assertNotIn("/shop-settings", strip)
+        tabs = self._tabs(response)
+        hrefs = {tab["key"]: tab["href"] for tab in tabs}
+        self.assertEqual(hrefs["welcome"], "/settings?tab=welcome")
+        self.assertEqual(hrefs["naming"], "/settings?tab=naming")
+        self.assertEqual(hrefs[MESSAGE_VARIABLES_TAB_KEY], "/message-variables")
+        self.assertEqual([tab["key"] for tab in tabs if tab["active"]], [MESSAGE_VARIABLES_TAB_KEY])
+        self.assertFalse(any("/shop-settings" in tab["href"] for tab in tabs))
+        self.assertEqual(response.json()["title"], "تنظیمات ربات")
 
-    async def test_shop_owner_gets_the_shop_tab_strip(self):
+    async def test_shop_owner_page_leads_back_to_the_shop_settings_list(self):
         response = await self._get(SHOP_WITH_RIGHT)
         self.assertEqual(response.status_code, 200)
-        strip = _tab_strip(response.text)
-        self.assertIn('href="/shop-settings?tab=welcome"', strip)
-        self.assertIn('href="/message-variables" class="active">متغیرهای پیام</a>', strip)
-        self.assertNotIn('href="/settings?tab=', strip)
+        tabs = self._tabs(response)
+        hrefs = {tab["key"]: tab["href"] for tab in tabs}
+        self.assertEqual(hrefs["welcome"], "/shop-settings?tab=welcome")
+        self.assertEqual(hrefs[MESSAGE_VARIABLES_TAB_KEY], "/message-variables")
+        self.assertFalse(any(tab["href"].startswith("/settings?tab=") for tab in tabs))
+        self.assertEqual(response.json()["title"], "تنظیمات فروشگاه")
 
-    async def test_a_role_without_the_right_cannot_open_the_page_the_tab_would_point_to(self):
+    async def test_a_role_without_the_right_cannot_open_the_page_or_its_data(self):
         for staff in (SHOP_WITHOUT_RIGHT, SHOP_NO_PERMISSIONS):
             self.assertEqual((await self._get(staff)).status_code, 403, staff)
+            self.assertEqual((await self._get(staff, "/message-variables")).status_code, 403, staff)
 
     async def test_owner_only_variables_stay_hidden_from_a_shop(self):
-        owner = await self._get(OWNER)
-        shop = await self._get(SHOP_WITH_RIGHT)
-        self.assertGreater(owner.text.count("msg-vars-token-box"), shop.text.count("msg-vars-token-box"))
+        def tokens(response) -> set[str]:
+            return {v["token"] for g in response.json()["groups"] for v in g["vars"]}
+
+        owner = tokens(await self._get(OWNER))
+        shop = tokens(await self._get(SHOP_WITH_RIGHT))
+        self.assertGreater(len(owner), len(shop))
+        self.assertTrue(shop < owner)
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 import app.db.models  # noqa: F401
@@ -32,6 +32,7 @@ from app.services.principal_lifecycle import (
     public_views_contain_secret,
 )
 from app.services.secret_box import encrypt_secret
+from tests.pgtest import pg_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -116,7 +117,7 @@ class SimplePg:
 
 class L2LifecycleServiceTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -312,7 +313,7 @@ class L2LifecycleServiceTests(unittest.IsolatedAsyncioTestCase):
 
 class L2ManagementHttpTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -524,13 +525,16 @@ class Product2SourceContracts(unittest.TestCase):
         self.assertNotIn("pg_password_enc", tpl)
         self.assertNotIn('name="parent_id"', tpl)
         self.assertNotIn('name="depth"', tpl)
-        base = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
-        self.assertIn("ident.can_add_representative", base)
+        from tests.sidebar_view import sidebar
+
+        self.assertNotIn("نمایندگان من", [label for label, _ in sidebar("principal", perms=("dashboard",))["shop"]])
 
     def test_l2_nav_not_shown_for_l2_kind(self) -> None:
-        base = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
-        self.assertIn("ident.can_add_representative", base)
-        self.assertNotIn('href="/principals"', base)
+        from tests.sidebar_view import sidebar
+
+        l2 = sidebar("principal", perms=("dashboard",), add_rep=False)["shop"]
+        self.assertNotIn("/resellers", [h for _, h in l2])
+        self.assertNotIn("/principals", [h for _, h in l2])
 
 
 if __name__ == "__main__":

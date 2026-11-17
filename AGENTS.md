@@ -1,4 +1,4 @@
-# PGClockBot engineering rules
+# ShieldRay engineering rules
 
 These rules apply to every change, whether written by a person or by an AI agent. Read this file before editing code. When a rule conflicts with a quick fix, follow the rule and explain the trade-off in the pull request.
 
@@ -6,8 +6,8 @@ Rules marked **MUST** are required. Rules marked **SHOULD** are the default and 
 
 ## 1. Core rules
 
-- Implement features independently within PGClockBot's existing architecture, naming conventions, service boundaries, and UI patterns.
-- Commit messages, code comments, identifiers, tests, release notes, and product documentation should describe PGClockBot behavior and the concrete problem or feature being implemented.
+- Implement features independently within ShieldRay's existing architecture, naming conventions, service boundaries, and UI patterns.
+- Commit messages, code comments, identifiers, tests, release notes, and product documentation should describe ShieldRay behavior and the concrete problem or feature being implemented.
 - Preserve shop isolation, scoped wallet balances, authorization checks, and idempotent payment and delivery behavior when extending commerce flows.
 - Introduce changes incrementally and verify affected behavior with focused tests before expanding the scope.
 - Retain required notices for existing dependencies and assets.
@@ -31,7 +31,7 @@ tests/         pytest + unittest tests, Node tests for browser code
 - **MUST** keep dependencies flowing downward: `api`/`bot`/`jobs` -> `services` -> `db`. A service never imports from `app.api` or `app.bot`.
 - **MUST NOT** add routes to `app/api/app.py` or handlers to `reply_nav.py`. These files are already far too large. Add a new module with its own `register_*` function or `APIRouter`/`Router` and register it in one line.
 - **SHOULD** create a new focused module when a new feature needs more than about 150 lines. Name it after the domain noun (`service_cancellations.py`, `campaigns.py`), not after a version or ticket.
-- The project runs on SQLite (default) and PostgreSQL. Code and migrations **MUST** work on both.
+- The project runs on PostgreSQL only. SQLite support was removed; `pgclock migrate --from-sqlite` moves an old SQLite database into PostgreSQL and is the only code that still reads SQLite. Do not add SQLite branches, `sqlite_where` or SQLite fallbacks.
 
 ## 3. Hard invariants for commerce, tenancy and security
 
@@ -67,7 +67,7 @@ Money, quota and access paths are the most expensive place to be wrong.
 
 - Python 3.12. Dependencies are pinned in `requirements.txt` with upper bounds; adding one needs a written reason and a license check. **SHOULD** prefer the standard library or a library already in the project.
 - **SQLAlchemy 2.0 style only**: `select()`, `session.scalars()`, `session.execute()`, `Mapped[...]`/`mapped_column`. No legacy `Query` API, no `session.query`.
-- **Async everywhere in request/bot paths.** Use `httpx.AsyncClient`, `aiosqlite`/`asyncpg` through SQLAlchemy async, `asyncio.sleep`. **MUST NOT** call `time.sleep`, `requests`, `urllib.request`, blocking file I/O, `subprocess.run`, bcrypt/hash work or heavy image work directly in an `async def`. Wrap unavoidable blocking calls in `asyncio.to_thread(...)`.
+- **Async everywhere in request/bot paths.** Use `httpx.AsyncClient`, `asyncpg` through SQLAlchemy async, `asyncio.sleep`. **MUST NOT** call `time.sleep`, `requests`, `urllib.request`, blocking file I/O, `subprocess.run`, bcrypt/hash work or heavy image work directly in an `async def`. Wrap unavoidable blocking calls in `asyncio.to_thread(...)`.
 - **Time.** Store and compare timezone-aware UTC (`datetime.now(timezone.utc)`). **MUST NOT** use `datetime.utcnow()` or naive `datetime.now()`. Use `time.monotonic()` for durations, and `zoneinfo` for display time zones.
 - **HTTP clients.** Reuse a client, set explicit timeouts, and handle `httpx.HTTPError`. Do not create a client per call in a loop.
 - **FastAPI.** Use `Depends` for auth and the DB session, pydantic v2 models for JSON bodies, and return `HTTPException` with a safe message. `raise ... from None` or `from exc` when converting exceptions.
@@ -87,7 +87,7 @@ Money, quota and access paths are the most expensive place to be wrong.
 
 ## 7. Performance
 
-PGClockBot serves many shops and customers from one process and one PasarGuard panel. Assume tables grow and the panel is slow.
+ShieldRay serves many shops and customers from one process and one PasarGuard panel. Assume tables grow and the panel is slow.
 
 - **No N+1 queries.** Never run a query inside a loop over rows. Load related rows with `selectinload`/`joinedload`, or fetch them in one `WHERE id IN (...)` query and index the result in a dict. Review any `await session.get/scalar/execute` inside a `for` loop.
 - **Bound every query.** Every list endpoint and job loop has a `LIMIT`, and large scans use keyset pagination (`WHERE id > :last ORDER BY id LIMIT :n`) instead of `OFFSET` or `.all()` on a whole table. Do not load full rows when you need one column or a count (`select(func.count())`, `select(Model.id)`).
@@ -106,13 +106,16 @@ PGClockBot serves many shops and customers from one process and one PasarGuard p
 
 - Every model change ships with an Alembic migration in the same pull request. Revision ids follow `NNNN_short_name`; `down_revision` is the current head. Check `alembic/versions/` on the target branch right before you open the pull request, because another merge may have taken your number.
 - Migrations **MUST** be idempotent (inspect columns, indexes and tables first) and **MUST** have a working `downgrade` that keeps existing rows. Give new `NOT NULL` columns a `server_default`.
-- **MUST** work on SQLite and PostgreSQL: no dialect-specific SQL without a guard, partial indexes declared with both `sqlite_where` and `postgresql_where`, and batch mode for SQLite `ALTER`.
+- **MUST** target PostgreSQL: partial indexes use `postgresql_where`, and a migration that rewrites a large table says how long it locks it.
 - Do not drop or rename a column in the same release that stops using it; remove it in a later release.
 - Never edit a migration that has been merged to `dev` or `main`; add a new one.
 - Add a test that upgrades an existing database, runs the upgrade twice, and downgrades (see `tests/test_customer_features.py::CustomerFeatureMigrationTests`).
 
 ## 9. User interface, Persian text and accessibility
 
+- **MUST** build every web panel page, modal and component to [docs/DESIGN_SYSTEM.md](docs/DESIGN_SYSTEM.md). It is the single source for sizes, spacing, dividers, colours, motion and the cancel-button rule, and its "Building a new page or modal" section lists the markup and macros to start from. A new UI pattern is added to that document first, in the same pull request; do not invent one-off spacing, sizes or colours.
+- **MUST** keep `python scripts/design_check.py` passing: a template or stylesheet you change must not gain design findings (modal outside `.ds`, «انصراف» in a form modal, inline `style=`, literal colours in CSS). CI runs it on every pull request.
+- **MUST** keep one design language everywhere, on desktop and phone, in pages and modals: the five-step type scale and the radius scale (§2), shape-means-role (a circle is always a button, a tinted square is never one), one primary action per page with the rest in the «⋯» menu, the capsule header for page titles on phones (§7), the list → detail pattern for every settings area and settings modal (§6-2), the empty, loading and error states (§6-3), Persian digits for displayed numbers (§2), and the motion rules (§7-1: only `transform`, `opacity` and `clip-path` animate, durations from tokens, off under reduced motion). Go through the checklist in §11 before opening a pull request that changes the UI.
 - User-facing strings are Persian and RTL. Use `dir="ltr"` for URLs, usernames and numbers inside RTL text. Use the shared number and date formatters instead of hand-formatting.
 - Reuse the existing CSS variables (`var(--space-*)`, `var(--card)`, `var(--border)`) and component classes (`.card`, `.btn`, `.form-field`). Do not add one-off colors or inline styles.
 - Templates extend `base.html`, include the CSRF token in every POST form, and rely on autoescape. Inline scripts must be compatible with the CSP nonce handling in `csp_nonce.py`; prefer an external file.
@@ -124,20 +127,22 @@ PGClockBot serves many shops and customers from one process and one PasarGuard p
 ## 10. Testing
 
 - **MUST** add or update a test for every behavior change and every bug fix, and write the test so it fails without the change. A fix without a regression test is incomplete.
-- Prefer the smallest test that proves the behavior: service-level tests with an in-memory SQLite database and a fake panel client, not tests that need Telegram or a real panel. No test may use the network or real credentials.
+- Prefer the smallest test that proves the behavior: service-level tests with a `tests/pgtest.py` engine (`pg_engine()` gives each engine its own schema in the run's PostgreSQL test database) and a fake panel client, not tests that need Telegram or a real panel. No test may use the network or real credentials; the local test database is the one exception.
 - Cover the failure paths that matter: duplicate and concurrent calls, panel timeout or unknown outcome, wrong shop, wrong customer, missing permission, out-of-range numbers, and hostile text (escaping).
 - Tests assert behavior, not source text. **MUST NOT** add tests that read a source file and assert on its strings or line layout; they break on harmless refactors (many existing ones do).
 - Name tests after the behavior (`test_repeated_approval_does_not_credit_twice`).
 - Security, isolation, wallet and authorization tests are added to `scripts/security_test_manifest.txt` so CI always runs them.
 - Do not weaken, skip or delete an existing test to make a change pass. If a test is wrong, fix it in a separate commit and say why.
 
-How to verify a change:
+How to verify a change (the tests need PostgreSQL: `tests/conftest.py` creates a throwaway database per run from `PGCLOCK_TEST_DATABASE_URL`, a server where that user may create databases):
 
 ```bash
+export PGCLOCK_TEST_DATABASE_URL=postgresql+asyncpg://<user>:<password>@127.0.0.1:5432/postgres
 python -m pytest tests/test_<area>.py -q          # focused tests first
 node tests/<name>.test.cjs                        # browser logic, if touched
 bash scripts/run_security_tests.sh               # what CI runs
 scripts/lint_changed.sh                          # lint ratchet, see section 11
+python scripts/design_check.py --details         # design ratchet for templates and CSS, see section 9
 python -m pytest tests -q -p no:cacheprovider    # full suite before opening the PR
 ```
 
@@ -175,7 +180,8 @@ scripts/lint_changed.sh --details  # also prints the findings of the failing fil
 - [ ] No query in a loop, no unbounded query, no blocking call in async code, no naive datetime.
 - [ ] No swallowed exceptions; failures are logged and the user sees a safe message.
 - [ ] New code is typed, has no dead code, and respects the complexity and size limits.
-- [ ] Migration added, idempotent, works on SQLite and PostgreSQL, has a downgrade, and the revision number is current.
+- [ ] Migration added, idempotent, works on PostgreSQL, has a downgrade, and the revision number is current.
 - [ ] Focused tests, the security manifest, and the full suite were run; no new failures.
 - [ ] `scripts/lint_changed.sh` passes.
+- [ ] UI changes follow docs/DESIGN_SYSTEM.md and `python scripts/design_check.py` passes; new patterns are documented there.
 - [ ] No stray files in the diff; the description is complete and accurate.

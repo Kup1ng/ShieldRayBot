@@ -7,11 +7,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.db.models import Base, BotUser, PgAdminSubscription, ResellerPlan, ResellerProfile, WalletTransaction
 from app.services.billing import GB
-from app.services.pg_admin_subscription import RenewalPanelIncomplete
+from app.services.pg_admin_subscription import RENEW_UNKNOWN_WARNING
 from app.services.reseller_package import (
     NEEDS_SUPPORT,
     RELATION_CURRENT,
@@ -22,6 +22,7 @@ from app.services.reseller_package import (
     package_overview,
     renew_package,
 )
+from tests.pgtest import pg_engine
 
 PERMS = '["orders","payments"]'
 BRONZE, SILVER, GOLD_PERMS, TINY, PAYG, OTHER_ROLE = 1, 2, 3, 4, 5, 6
@@ -38,7 +39,7 @@ def plan(plan_id: int, name: str, *, users: int, gb: int, price: int, **extra) -
 
 class ResellerPackageTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.session = async_sessionmaker(self.engine, expire_on_commit=False)()
@@ -183,25 +184,34 @@ class PackageRenewTests(ResellerPackageTestCase):
 
 
 class PackagePanelFailureTests(ResellerPackageTestCase):
-    async def test_panel_failure_after_restore_keeps_the_paid_renewal(self) -> None:
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        self.pg.reset_admin_usage = AsyncMock(return_value={})
+        # The capacity write is sent and its answer is lost: the panel may hold the new package.
         self.pg.modify_admin = AsyncMock(side_effect=TimeoutError("lost panel response"))
-        with self.assertRaises(RenewalPanelIncomplete):
-            await self.renew(SILVER)
+
+    async def credits(self) -> int:
+        return int(await self.session.scalar(
+            select(func.count()).select_from(WalletTransaction).where(WalletTransaction.user_id == 3, WalletTransaction.amount > 0)
+        ))
+
+    async def test_panel_failure_after_restore_keeps_the_paid_renewal(self) -> None:
+        result = await self.renew(SILVER)
+        self.assertIn(RENEW_UNKNOWN_WARNING, result["warnings"], "the owner is told to check, not to renew again")
         self.assertEqual(await self.wallet(), 800_000, "a renewal that took effect is not refunded")
-        self.assertEqual(await self.debits(), 1)
+        self.assertEqual((await self.debits(), await self.credits()), (1, 0))
         self.assertEqual((await self.profile()).plan_id, SILVER)
         sub = await self.session.scalar(select(PgAdminSubscription))
         self.assertEqual((sub.plan_id, sub.base_gb, sub.access_status), (SILVER, 200, "active"))
         self.assertIsNotNone(sub.expires_at)
 
     async def test_retry_with_the_old_page_after_a_panel_failure_charges_nothing(self) -> None:
-        self.pg.modify_admin = AsyncMock(side_effect=TimeoutError("lost panel response"))
-        with self.assertRaises(RenewalPanelIncomplete):
-            await self.renew(SILVER)
+        first = await self.renew(SILVER)
+        self.assertIn(RENEW_UNKNOWN_WARNING, first["warnings"])
         with self.assertRaises(ValueError) as caught:
             await self.renew(SILVER)
         self.assertEqual(str(caught.exception), STALE_PAGE)
-        self.assertEqual((await self.wallet(), await self.debits()), (800_000, 1))
+        self.assertEqual((await self.wallet(), await self.debits(), await self.credits()), (800_000, 1, 0))
 
 
 if __name__ == "__main__":

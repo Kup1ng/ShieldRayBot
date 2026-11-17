@@ -23,6 +23,7 @@ from app.services.backup import (
 )
 from app.services.backup_settings import KEEP_KEY, keep_count
 from app.services.backup_telegram import BackupTelegramError, send_backup, send_test_message
+from app.services.redact import user_safe_error
 from app.services.users import get_setting
 
 logger = logging.getLogger(__name__)
@@ -55,7 +56,7 @@ async def _after_manual_backup(session: AsyncSession, result: dict) -> str:
     try:
         sent = await send_backup(
             session, Path(str(result.get("path"))), include_env=bool(result.get("include_env")),
-            caption=f"💾 بکاپ PGClockBot — {result.get('created_at', '')[:16]}",
+            caption=f"💾 بکاپ شیلدری — {result.get('created_at', '')[:16]}",
         )
     except Exception:  # noqa: BLE001 - a failed delivery must not hide a good backup
         logger.exception("manual backup telegram delivery failed")
@@ -122,10 +123,11 @@ def register_backup_pages(app, *, render, require_admin, get_db):
                 created_by=f"web:{staff.get('username') or 'admin'}",
             )
         except Exception as e:
+            logger.warning("Backup creation failed", exc_info=True)
             return RedirectResponse(
                 "/settings?tab=backup&err="
                 + quote(
-                    f"ساخت بکاپ ناموفق بود: {e}. "
+                    f"ساخت بکاپ ناموفق بود: {user_safe_error(e)} "
                     "علت محتمل: فضای دیسک یا قفل فایل. "
                     "راه حل: فضای دیسک و دسترسی به data/backups را بررسی کنید و دوباره تلاش کنید."
                 ),

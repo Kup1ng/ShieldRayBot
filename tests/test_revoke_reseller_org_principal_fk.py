@@ -12,14 +12,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from sqlalchemy import event, func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-
-
-def _enable_sqlite_fk(dbapi_conn, _connection_record):
-    cur = dbapi_conn.cursor()
-    cur.execute("PRAGMA foreign_keys=ON")
-    cur.close()
+from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from tests.pgtest import pg_engine
 
 
 class RevokeResellerOrgPrincipalFkTests(unittest.IsolatedAsyncioTestCase):
@@ -28,14 +23,9 @@ class RevokeResellerOrgPrincipalFkTests(unittest.IsolatedAsyncioTestCase):
         import app.db.models  # noqa: F401
 
         self._tmpdir = tempfile.TemporaryDirectory()
-        db_path = Path(self._tmpdir.name) / "revoke_fk.db"
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{db_path}")
-        event.listen(self.engine.sync_engine, "connect", _enable_sqlite_fk)
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-            await conn.execute(
-                __import__("sqlalchemy").text("PRAGMA foreign_keys=ON")
-            )
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
 
     async def asyncTearDown(self):
@@ -323,7 +313,6 @@ class RevokeResellerOrgPrincipalFkTests(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(t.opener_pg_staff_id)
 
     def test_revoke_reseller_source_calls_principal_purge(self):
-        from pathlib import Path
 
         src = Path("app/services/resellers.py").read_text(encoding="utf-8")
         block = src.split("async def revoke_reseller", 1)[1].split(
@@ -336,7 +325,6 @@ class RevokeResellerOrgPrincipalFkTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_revoke_web_access_source_calls_principal_purge(self):
-        from pathlib import Path
 
         src = Path("app/services/pg_staff_access.py").read_text(encoding="utf-8")
         revoke_block = src.split("async def revoke_web_access", 1)[1].split(

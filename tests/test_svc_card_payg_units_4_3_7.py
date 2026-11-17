@@ -106,9 +106,13 @@ class VolumeUnitFaTests(unittest.TestCase):
             "app/bot/handlers/admin_pg_users.py",
             "app/services/resellers.py",
             "app/web/templates/plans.html",
-            "app/web/templates/miniapp.html",
             "app/web/templates/pg_admins.html",
         ]
+        paths += sorted(
+            str(f.relative_to(ROOT)).replace("\\", "/")
+            for f in (ROOT / "frontend" / "src" / "miniapp").rglob("*.tsx")
+            if not f.name.endswith(".test.tsx")
+        )
         for rel in paths:
             src = (ROOT / rel).read_text(encoding="utf-8")
             if rel.endswith(".py"):

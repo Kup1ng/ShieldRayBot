@@ -14,6 +14,7 @@ from typing import Any, Mapping
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.services.redact import user_safe_error
 from app.db.models import OrgPrincipal, OrgPrincipalProvision
 from app.services.authz import (
     authz_from_staff,
@@ -178,7 +179,7 @@ async def _resolve_pg_role(
         roles = await get_pg().get_admin_roles()
     except Exception as exc:
         raise PrincipalProvisionError(
-            f"دریافت نقش‌های پاسارگارد ناموفق: {exc}",
+            f"دریافت نقش‌های پاسارگارد ناموفق: {user_safe_error(exc)}",
             code="pg_roles_unavailable",
         ) from exc
 
@@ -212,7 +213,7 @@ async def _create_pg_admin(
     payload: dict[str, Any] = {
         "username": username,
         "password": password,
-        "note": (note or "PGClockBot Level-1 Principal").strip()[:255],
+        "note": (note or "ShieldRay Level-1 Principal").strip()[:255],
         "is_sudo": False,
     }
     if role_id is not None:

@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from aiogram import Bot
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy.orm import selectinload
 
 from app.db import Base
@@ -18,12 +18,13 @@ from app.db.models import (
     Plan, Role, UserService,
 )
 from app.services.orders import approve_payment, reject_payment
-from app.services.payment_review_messages import remember_review_message, sync_review_messages
+from app.services.payment_review_messages import remember_review_message
+from tests.pgtest import pg_engine, pg_sync_engine
 
 
 class AsyncDatabaseTest(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -125,6 +126,10 @@ class DeliveryPlanLoadingTests(AsyncDatabaseTest):
             self.assertIn("یک ماهه", content["text"])
 
 
+def _callbacks(markup) -> list[str]:
+    return [button.callback_data for row in markup.inline_keyboard for button in row]
+
+
 class MultiAdminReviewTests(AsyncDatabaseTest):
     async def test_approve_updates_both_cards_with_original_reviewer(self):
         await self._notify()
@@ -137,7 +142,7 @@ class MultiAdminReviewTests(AsyncDatabaseTest):
                 self.assertIn("تأیید شد توسط علی &lt;ادمین&gt;", call.kwargs["text"])
                 self.assertNotIn("نیاز به تأیید", call.kwargs["text"])
                 self.assertNotIn("از دکمه‌های زیر", call.kwargs["text"])
-                self.assertIsNone(call.kwargs["reply_markup"])
+                self.assertEqual(_callbacks(call.kwargs["reply_markup"]), [f"nto:adm:users:view:{self.user_id}"])
             self.assertEqual(
                 {c.kwargs["chat_id"] for c in self.bot.edit_message_text.await_args_list},
                 {201, 202},
@@ -162,12 +167,13 @@ class MultiAdminReviewTests(AsyncDatabaseTest):
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(r.is_photo for r in rows))
             payment = await session.get(Payment, self.payment_id)
-            await reject_payment(session, payment, 202, bot=self.bot)
+            await reject_payment(session, payment, 202, bot=self.bot, note="رسید خوانا نبود <b>")
         self.assertEqual(self.bot.edit_message_caption.await_count, 2)
         self.bot.edit_message_text.assert_not_awaited()
         for call in self.bot.edit_message_caption.await_args_list:
             self.assertIn("رد شد توسط رضا", call.kwargs["caption"])
-            self.assertIsNone(call.kwargs["reply_markup"])
+            self.assertIn("رسید خوانا نبود &lt;b&gt;", call.kwargs["caption"])
+            self.assertEqual(_callbacks(call.kwargs["reply_markup"]), [f"nto:adm:users:view:{self.user_id}"])
 
     async def test_photo_failure_tracks_actual_fallback_text_message(self):
         self.bot.send_photo.side_effect = RuntimeError("photo unavailable")
@@ -322,13 +328,13 @@ class ReviewMessageMigrationTests(unittest.TestCase):
         from pathlib import Path
         from alembic.operations import Operations
         from alembic.runtime.migration import MigrationContext
-        from sqlalchemy import Column, Integer, MetaData, Table, create_engine, inspect
+        from sqlalchemy import Column, Integer, MetaData, Table, inspect
 
         path = Path(__file__).resolve().parents[1] / "alembic/versions/0035_payment_review_messages.py"
         spec = importlib.util.spec_from_file_location("review_message_migration", path)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         try:
             with engine.begin() as conn:
                 Table("payments", MetaData(), Column("id", Integer, primary_key=True)).create(conn)

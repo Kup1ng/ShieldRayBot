@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unittest
 from pathlib import Path
+from tests.pgtest import pg_engine
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -55,12 +56,12 @@ class NodeTrafficTests(unittest.TestCase):
 
 class OrdersCancelServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_cancel_order_rejects_pending_payment(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base, BotUser, Order, OrderStatus, Payment, PaymentStatus, Role
         from app.services.orders import cancel_order
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -89,12 +90,12 @@ class OrdersCancelServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(pay.status, PaymentStatus.REJECTED.value)
 
     async def test_cancel_blocks_delivered(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base, BotUser, Order, OrderStatus, Role
         from app.services.orders import cancel_order
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(engine, expire_on_commit=False)
@@ -113,11 +114,11 @@ class OrdersCancelServiceTests(unittest.IsolatedAsyncioTestCase):
 
 class SingleDeliveryGuaranteeTests(unittest.IsolatedAsyncioTestCase):
     async def _session(self):
-        from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+        from sqlalchemy.ext.asyncio import async_sessionmaker
 
         from app.db.models import Base
 
-        engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        engine = pg_engine()
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         return async_sessionmaker(engine, expire_on_commit=False)
@@ -353,11 +354,16 @@ class PanelTemplateContractTests(unittest.TestCase):
         self.assertIn("cancel_order", app)
         self.assertIn("manual_fulfill_unpaid_order", app)
         self.assertIn("notify_payer", app)
-        self.assertIn("filter_by_search", app)
-        self.assertIn("normalize_search_q", app)
-        pg = (ROOT / "app/api/pg_pages.py").read_text(encoding="utf-8")
-        self.assertIn("enrich_nodes_with_traffic", pg)
-        self.assertIn("get_nodes_realtime", pg)
+        # The customer list search moved with the list data into users_list_view (the React /users page);
+        # tests/test_panel_users_api.py covers its behavior.
+        users_list = (ROOT / "app/services/users_list_view.py").read_text(encoding="utf-8")
+        self.assertIn("filter_by_search", users_list)
+        self.assertIn("normalize_search_q", users_list)
+        # The node list merges the live traffic figures (the React /pg/nodes page); the behavior is
+        # covered by tests/test_panel_pg_infra_api.py::NodesTests.
+        nodes = (ROOT / "app/services/pg_nodes_panel.py").read_text(encoding="utf-8")
+        self.assertIn("enrich_nodes_with_traffic", nodes)
+        self.assertIn("get_nodes_realtime", nodes)
 
     def test_cancel_keeps_shop_isolation(self):
         app = (ROOT / "app/api/app.py").read_text(encoding="utf-8")

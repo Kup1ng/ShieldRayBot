@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, patch
 import sqlalchemy as sa
 from alembic.migration import MigrationContext
 from alembic.operations import Operations
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 import app.db.models  # noqa: F401
 from app.db import Base
@@ -25,6 +25,7 @@ from app.services.billing_alerts import (
     report_tick_issue,
 )
 from app.services.resellers import make_reseller
+from tests.pgtest import pg_engine, pg_sync_engine
 
 PLATFORM_ADMIN_ID = 9001
 MIGRATION_PATH = Path(__file__).resolve().parents[1] / "alembic/versions/0049_payg_tick_issue.py"
@@ -41,16 +42,18 @@ class FakePanel:
 
 class TickIssueTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
             self.engine, expire_on_commit=False, class_=AsyncSession
         )
         self.sent: list[tuple[list[int], str]] = []
+        self.markups: list[object] = []
 
-        async def fake_send(_session, _shop_user_id, chat_ids, text) -> None:
+        async def fake_send(_session, _shop_user_id, chat_ids, text, *, markup=None) -> None:
             self.sent.append((list(chat_ids), text))
+            self.markups.append(markup)
 
         settings = SimpleNamespace(admin_ids=[PLATFORM_ADMIN_ID])
         patches = [
@@ -108,6 +111,10 @@ class TickIssueTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(await report_tick_issue(session, profile, TickIssue.RATE_ZERO))
         self.assertEqual(len(self.sent), 3)
         self.assertTrue(all(chat_ids == [PLATFORM_ADMIN_ID] for chat_ids, _ in self.sent))
+        self.assertEqual(
+            [b.callback_data for b in self.markups[0].inline_keyboard[0]],
+            [f"adm:resellers:view:{profile.user_id}"],
+        )
 
     async def test_tick_without_pg_admin_tells_owner_once(self) -> None:
         async with self.Session() as session:
@@ -176,7 +183,7 @@ class TickIssueMigrationTests(unittest.TestCase):
         spec = importlib.util.spec_from_file_location("tick_issue_migration", MIGRATION_PATH)
         migration = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(migration)
-        engine = sa.create_engine("sqlite:///:memory:")
+        engine = pg_sync_engine()
         with engine.begin() as conn:
             conn.execute(sa.text("CREATE TABLE reseller_profiles (id INTEGER PRIMARY KEY, user_id INTEGER)"))
             conn.execute(sa.text("INSERT INTO reseller_profiles VALUES (1, 42)"))

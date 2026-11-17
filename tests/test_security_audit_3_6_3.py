@@ -40,7 +40,7 @@ class WebShopOrderIsolationTests(unittest.TestCase):
         # doesn't silently bit-rot into a brittle no-op on the next move, and
         # actually assert the platform-admin branch filters reseller_id IS NULL.
         candidates = [
-            ROOT / "app/api/finance_pages.py",
+            ROOT / "app/services/finance_panel.py",
             ROOT / "app/api/app.py",
         ]
         found = False
@@ -145,13 +145,6 @@ class ResellerReplyAclTests(unittest.TestCase):
         )
         self.assertNotIn("⚙️ تنظیمات فروشگاه", mapping)
         self.assertNotIn("💎 پلن‌های فروش", mapping)
-
-
-class PreviewDefaultsTests(unittest.TestCase):
-    def test_preview_js_uses_emoji_defaults(self):
-        js = (ROOT / "app/web/templates/_tg_preview_chat_js.html").read_text(encoding="utf-8")
-        self.assertIn("🟢🛒 خرید سرویس", js)
-        self.assertIn("🔵📦 سرویس‌های من", js)
 
 
 if __name__ == "__main__":

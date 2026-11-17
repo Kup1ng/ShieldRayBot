@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 from fastapi import FastAPI, HTTPException
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.db import Base
 import app.db.models  # noqa: F401
@@ -33,6 +33,7 @@ from app.services.representative_unification import (
     staff_is_sub_representative,
 )
 from app.services.secret_box import decrypt_secret, encrypt_secret
+from tests.pgtest import pg_engine
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -127,7 +128,7 @@ class PlatformPg:
 
 class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
-        self.engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(
@@ -215,6 +216,16 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
             render=render,
             require_admin=require_admin,
             require_staff=require_staff,
+            get_db=get_db,
+        )
+        from app.api.panel_resellers_api import register_panel_resellers_api
+
+        register_panel_resellers_api(
+            app,
+            require_staff=require_staff,
+            require_admin=require_admin,
+            require_perm=lambda _perm: require_staff,
+            require_pg_perm=lambda _perm: require_staff,
             get_db=get_db,
         )
         return app
@@ -448,11 +459,11 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
             owner_child = await client.post(
                 "/resellers/create-child", data=form, follow_redirects=False
             )
-            owner_list = await client.get("/resellers", follow_redirects=False)
-            apps = await client.get("/resellers/applications", follow_redirects=False)
+            owner_list = await client.get("/api/panel/resellers", follow_redirects=False)
+            apps = await client.get("/api/panel/resellers/applications", follow_redirects=False)
         self.assertEqual(owner_child.status_code, 403)
         self.assertEqual(owner_list.status_code, 200)
-        self.assertIn("نمایندگان", owner_list.text)
+        self.assertTrue(owner_list.json()["owner_view"])
         self.assertNotIn("Level 1", owner_list.text)
         self.assertNotIn("Principal", owner_list.text)
         self.assertNotIn(_CHILD_PASSWORD, owner_list.text)
@@ -489,11 +500,14 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
     async def test_web_bot_parity_and_no_secret_in_ui(self) -> None:
         _, a, _ = await self._seed()
         async with self._client(_l1_staff(a)) as client:
-            page = await client.get("/resellers")
+            page = await client.get("/api/panel/resellers")
+            options = await client.get("/api/panel/resellers/create-options")
         self.assertEqual(page.status_code, 200)
-        self.assertIn("نمایندگان من", page.text)
-        self.assertIn("افزودن نماینده", page.text)
-        self.assertIn("/resellers/create-child", page.text)
+        listing = page.json()
+        # The page shows «نمایندگان من» and the create button for a representative (not the owner's tools).
+        self.assertFalse(listing["owner_view"])
+        self.assertEqual(listing["can_create"], "child")
+        self.assertEqual(options.json()["mode"], "child")
         self.assertNotIn("Level 1", page.text)
         self.assertNotIn("Level 2", page.text)
         self.assertNotIn("Principal", page.text)
@@ -657,11 +671,12 @@ class RepresentativeUnificationTests(unittest.IsolatedAsyncioTestCase):
 
 class RepresentativeUnificationSourceContracts(unittest.TestCase):
     def test_product_ui_is_resellers_not_principals_nav(self) -> None:
-        base = (ROOT / "app/web/templates/base.html").read_text(encoding="utf-8")
-        self.assertIn("ident.can_add_representative", base)
-        self.assertIn("ident.can_manage_representatives", base)
-        self.assertIn("نمایندگان من", base)
-        self.assertNotIn('href="/principals"', base)
+        from tests.sidebar_view import owner_sidebar, sidebar
+
+        self.assertIn(("نمایندگان من", "/resellers"), sidebar("reseller", perms=("dashboard",), add_rep=True)["shop"])
+        self.assertIn(("نمایندگان", "/resellers"), owner_sidebar()["shop"])
+        self.assertNotIn("نمایندگان", [label for label, _ in sidebar("admin", owner=True)["shop"]])
+        self.assertNotIn("/principals", [h for nav in owner_sidebar().values() for _, h in nav])
         pages = (ROOT / "app/api/principal_pages.py").read_text(encoding="utf-8")
         self.assertIn('dest = "/resellers"', pages)
         self.assertIn("assert_live_parent_for_child", pages)

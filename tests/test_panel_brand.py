@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 import tempfile
 import unittest
@@ -11,13 +10,12 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import Depends, FastAPI, Request
 from PIL import Image
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.panel_brand_pages import MAX_BODY_BYTES, register_panel_brand_pages
 from app.db import Base
@@ -41,6 +39,7 @@ from app.services.panel_brand import (
     process_logo,
     save_brand,
 )
+from tests.pgtest import pg_engine
 
 OWNER = {
     "role": "admin",
@@ -175,7 +174,7 @@ class BrandStoreTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         self._tmpdir = tempfile.TemporaryDirectory()
         self.root = Path(self._tmpdir.name)
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{self.root / 'brand.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -427,7 +426,7 @@ class BrandRouteTests(BrandStoreTestCase):
 
     async def test_without_any_brand_the_header_keeps_the_default(self) -> None:
         page = await self._page(_shop_staff(self.shop_a.id))
-        self.assertIn("MrClockBot", page)
+        self.assertIn("ShieldRay", page)
         self.assertIn("/static/logo-64.png", page)
         self.assertNotRegex(page, r"<html[^>]*data-brand=")
 
@@ -438,6 +437,7 @@ class SettingsTabTests(BrandStoreTestCase):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
         from app.api.app import render
+        from app.api.panel_ops_api import register_panel_ops_api
         from app.api.shop_settings import register_shop_settings
 
         self.staff = _shop_staff(self.shop_a.id)
@@ -448,26 +448,31 @@ class SettingsTabTests(BrandStoreTestCase):
 
         app = FastAPI()
         register_shop_settings(app, render=render, require_staff=lambda: self.staff, get_db=get_db)
+        register_panel_ops_api(
+            app, require_staff=lambda: self.staff, require_admin=lambda: self.staff,
+            require_perm=lambda _perm: (lambda: self.staff), require_pg_perm=lambda _perm: (lambda: self.staff), get_db=get_db,
+        )
         self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
 
     async def asyncTearDown(self) -> None:
         await self.client.aclose()
         await super().asyncTearDown()
 
-    async def test_the_shop_settings_page_serves_the_brand_tab_with_its_saved_values(self) -> None:
+    async def test_the_shop_settings_data_serves_the_brand_tab_with_its_saved_values(self) -> None:
         async with self.Session() as session:
             await save_brand(session, shop_id=self.shop_a.id, name="Saved Name", color="purple")
             await save_brand(session, shop_id=self.shop_b.id, name="Other Shop", color="green")
         panel_brand.invalidate_brand_cache()
-        response = await self.client.get("/shop-settings?tab=brand")
+        response = await self.client.get("/api/panel/shop-settings?tab=brand")
         self.assertEqual(response.status_code, 200)
-        text = response.text
-        self.assertIn('action="/panel-brand"', text)
-        self.assertIn('value="Saved Name"', text)
-        self.assertRegex(text, r'value="purple"\s+checked')
-        self.assertIn("ظاهر و برند", text)
-        self.assertNotIn("Other Shop", text)
-        self.assertNotIn("آیکن وب‌اپ", text)  # the web-app (PWA) icon belongs to the platform only
+        body = response.json()
+        self.assertEqual(body["tab"], "brand")
+        self.assertEqual(body["extra"]["name"], "Saved Name")
+        # The panel keeps one brand colour: the shop's form neither shows nor sends a colour.
+        self.assertNotIn("color", body["extra"])
+        self.assertIn("ظاهر و برند", [tab["label"] for group in body["nav"] for tab in group["tabs"]])
+        self.assertNotIn("Other Shop", response.text)
+        self.assertNotIn("آیکن وب‌اپ", response.text)  # the web-app (PWA) icon belongs to the platform only
 
     def test_the_owners_tab_holds_the_brand_card_and_the_web_app_form(self) -> None:
         from app.api.app import templates

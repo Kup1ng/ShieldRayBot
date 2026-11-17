@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import unittest
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
 from fastapi import FastAPI
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api import miniapp_loyalty
 from app.api.miniapp_loyalty import register_miniapp_loyalty
@@ -27,6 +26,7 @@ from app.db.models import (
 )
 from app.services.customer_loyalty import HISTORY_PAGE_SIZE, UNKNOWN_OUTCOME_MESSAGE
 from app.services.users import reset_shop_reseller_id, set_shop_reseller_id
+from tests.pgtest import pg_engine
 
 
 def reward(reward_id: int, reward_type: str, value: int, cost: int, **extra) -> LoyaltyReward:
@@ -49,7 +49,7 @@ class MiniAppClubTestCase(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self) -> None:
         # A file database so concurrent requests each get their own session and connection.
         self.tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self.tmp.name) / 'club.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)

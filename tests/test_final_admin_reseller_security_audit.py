@@ -260,7 +260,7 @@ class KnownGapDocumentationTests(unittest.TestCase):
 
     def test_shop_create_payload_may_omit_hwid(self):
         orders = (ROOT / "app/services/orders.py").read_text(encoding="utf-8")
-        idx = orders.find("pg_user = await pg.create_user(")
+        idx = orders.find("await pg.create_user(")
         self.assertGreater(idx, 0)
         chunk = orders[idx : idx + 350]
         self.assertIn("build_user_create_payload", chunk)

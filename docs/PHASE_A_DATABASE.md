@@ -1,13 +1,13 @@
 # Phase A — Database Foundation
 
 **Version:** builds on 3.8.3  
-**Scope:** PostgreSQL + Alembic + SQLite→PG tooling + engine-aware backup/restore  
+**Scope:** PostgreSQL + Alembic + SQLite→PG tooling + PostgreSQL backup/restore  
 **Out of scope:** global CLI, identity sync, permissions parity, node ops
 
-**Runtime model:** one `DATABASE_URL` per process. Fresh product installs use
-PostgreSQL only (auto-provisioned by `pgclock.sh install`). SQLite remains for
-unit tests and the optional offline ETL source documented below — not for new
-production scaffolds. There is no dual-write / dual-runtime path.
+**Runtime model:** one `DATABASE_URL` per process, PostgreSQL only. The app refuses
+any other URL at startup, the tests run on PostgreSQL (`tests/conftest.py`,
+`tests/pgtest.py`), and the one place that still reads SQLite is the offline
+migration of an old SQLite database documented below.
 
 ---
 
@@ -17,7 +17,7 @@ production scaffolds. There is no dual-write / dual-runtime path.
 # Ensure schema exists (creates/stamps Alembic on current DATABASE_URL)
 .venv/bin/python -m scripts.alembic_upgrade
 
-# Create production baseline: ZIP backup + SQLite copy + configs + git/version + restore verify
+# Create production baseline: ZIP backup (pg_dump) + configs + git/version + restore verify
 .venv/bin/python -m scripts.phase0_baseline --note "pre-phase-a"
 ```
 
@@ -27,7 +27,6 @@ Artifacts land in `data/baselines/phase0-<timestamp>/`:
 |------|---------|
 | `BASELINE.json` | Git commit, version, hashes, restore verification |
 | `pgclock-backup-*.zip` | Full archive |
-| `bot.db` | Explicit SQLite copy |
 | `config/env` | `.env` snapshot |
 | `config/web_admin.json` | Owner credentials (if present) |
 
@@ -101,24 +100,23 @@ Validation compares row counts, settings keys, wallet/billing sums, and reports 
 
 ---
 
-## Engine-aware backup / restore
+## Backup / restore
 
-| Engine | Archive member | Tool |
-|--------|----------------|------|
-| SQLite | `data/bot.db` | SQLite backup API |
-| PostgreSQL | `data/postgres.dump` | `pg_dump -Fc` / `pg_restore` |
-
-Manifest field `db_engine` is required. Restore **refuses** engine mismatch (SQLite archive vs PostgreSQL `DATABASE_URL` and vice versa).
+Backups hold `data/postgres.dump` (`pg_dump -Fc`, restored with `pg_restore`); the manifest's
+`db_engine` is always `postgresql`. An old archive that holds a SQLite database (`data/bot.db`
+or `db_engine: sqlite`) is still listed but refused for restore: move it into PostgreSQL with
+`pgclock migrate --from-sqlite` first.
 
 ---
 
 ## Rollback
 
 1. Stop service  
-2. Restore `.env` `DATABASE_URL` to SQLite (from Phase 0 `config/env`)  
-3. Restore `data/bot.db` from Phase 0 copy or ZIP  
-4. Start service  
-5. Keep the abandoned PostgreSQL DB for forensics (do not drop immediately)
+2. Restore the Phase 0 backup ZIP into PostgreSQL (`pg_restore` through the panel or CLI)  
+3. Start service  
+4. Keep the abandoned database for forensics (do not drop immediately)
+
+A SQLite runtime is no longer supported, so rolling back to SQLite is not an option.
 
 Alembic downgrade: `.venv/bin/python -m scripts.alembic_upgrade --downgrade` (drops baseline schema — destructive).
 

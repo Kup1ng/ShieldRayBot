@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from fastapi import FastAPI
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api.settlement_pages import register_settlement_pages
 from app.db import Base
@@ -29,6 +26,7 @@ from app.services.payment_providers import sunpay as sunpay_mod
 from app.services.payment_providers.sunpay import close_client
 from app.services.payment_settlement import CHANNEL_PSP, idem_key_psp
 from app.services.users import clear_settings_cache, set_setting
+from tests.pgtest import pg_engine
 
 PAY_URL = "https://pay.sunpay.test"
 API_KEY = "sunpay-test-key-abcdef"
@@ -45,7 +43,7 @@ class PspReturnPageStateTests(unittest.IsolatedAsyncioTestCase):
         clear_settings_cache()
         await close_client()
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 't.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False, class_=AsyncSession)

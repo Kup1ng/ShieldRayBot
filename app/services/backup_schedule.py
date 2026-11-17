@@ -29,11 +29,11 @@ VERIFY_KEY = "backup_last_verify_ok"
 DEFAULT_HOUR = 3
 
 FAILED_MESSAGE = (
-    "⚠️ بکاپ خودکار PGClockBot ساخته نشد. از وب‌پنل ← تنظیمات ← بکاپ یک بکاپ دستی بسازید "
+    "⚠️ بکاپ خودکار شیلدری ساخته نشد. از وب‌پنل ← تنظیمات ← بکاپ یک بکاپ دستی بسازید "
     "و اگر دوباره خطا داد، لاگ سرور را بررسی کنید."
 )
 UNVERIFIED_MESSAGE = (
-    "⚠️ بکاپ خودکار PGClockBot ساخته شد ولی بررسی سلامت آن رد شد. "
+    "⚠️ بکاپ خودکار شیلدری ساخته شد ولی بررسی سلامت آن رد شد. "
     "از وب‌پنل ← تنظیمات ← بکاپ یک بکاپ دستی بسازید."
 )
 
@@ -86,7 +86,7 @@ async def run_nightly_backup(session: AsyncSession, now: datetime) -> str:
     try:
         await send_backup(
             session, path, include_env=bool(meta.get("include_env")),
-            caption=f"💾 بکاپ خودکار PGClockBot — {now.strftime('%Y-%m-%d %H:%M')} UTC",
+            caption=f"💾 بکاپ خودکار شیلدری — {now.strftime('%Y-%m-%d %H:%M')} UTC",
         )
     except Exception:  # noqa: BLE001 - a failed delivery must not undo a good backup
         logger.exception("scheduled backup telegram delivery failed")

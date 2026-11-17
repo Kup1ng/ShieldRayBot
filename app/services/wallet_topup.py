@@ -22,7 +22,8 @@ from typing import Any
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from aiogram.types import BufferedInputFile
-from sqlalchemy import func, select, update
+from sqlalchemy import exists, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import Payment, PaymentMethod, PaymentStatus
@@ -103,6 +104,31 @@ PSP_CHECK_MESSAGES = {
 
 class TopupError(ValueError):
     """A top-up rule the customer must see (Persian, safe to show)."""
+
+
+TOPUP_REQUEST_KEY = re.compile(r"[A-Za-z0-9_-]{16,64}")
+TOPUP_REPEATED = "این درخواست قبلاً ثبت شده یا صفحه قدیمی است؛ صفحه را دوباره باز کنید"
+
+
+class TopupRepeated(TopupError):
+    """The same top-up form was already turned into a payment; nothing new was created."""
+
+    def __init__(self) -> None:
+        super().__init__(TOPUP_REPEATED)
+
+
+def _checked_request_key(request_key: object) -> str | None:
+    if request_key is None:
+        return None
+    if not isinstance(request_key, str) or not TOPUP_REQUEST_KEY.fullmatch(request_key):
+        raise TopupRepeated()
+    return request_key
+
+
+async def _request_key_used(session: AsyncSession, user_id: int, request_key: str) -> bool:
+    return bool(await session.scalar(select(exists().where(
+        Payment.user_id == int(user_id), Payment.request_key == request_key,
+    ))))
 
 
 def parse_topup_presets(ui: dict | None = None) -> list[int]:
@@ -274,15 +300,19 @@ async def start_topup(
     dest_id: object,
     ui: dict,
     now: datetime | None = None,
+    request_key: object = None,
 ) -> TopupStart:
     """Create one top-up payment for the ``shop_id`` purse and return how to pay it.
 
     ``ui`` must be that purse's own settings, so only its cards and gateways are offered.
+    A ``request_key`` (the web form's) makes the call safe to repeat: the unique key on the
+    payment lets one copy through and refuses the rest with ``TopupRepeated``.
 
     Raises ``TopupError`` for any rule the customer must see; nothing is created then.
     A ``ValueError`` from preparing the checkout closes the new payment before it is
     re-raised: the customer never saw where to pay, so it cannot have been paid.
     """
+    key = _checked_request_key(request_key)
     if not isinstance(method, str) or method not in OUTSIDE_BOT_METHODS:
         raise TopupError("روش پرداخت نامعتبر است")
     flag, payment_method = TOPUP_METHODS[method]
@@ -290,8 +320,19 @@ async def start_topup(
         raise TopupError("این روش پرداخت غیرفعال است")
     value = _validate_amount(amount)
     destination = _choose_destination(method, ui, dest_id, f"topup:{user_id}:{value}")
+    if key is not None and await _request_key_used(session, user_id, key):
+        raise TopupRepeated()
     await _assert_open_topup_room(session, user_id, shop_id, now or datetime.now(timezone.utc))
-    payment = await create_wallet_topup(session, int(user_id), value, method=payment_method, wallet_shop_id=shop_id)
+    try:
+        payment = await create_wallet_topup(
+            session, int(user_id), value, method=payment_method, wallet_shop_id=shop_id, request_key=key,
+        )
+    except IntegrityError as exc:
+        await rollback_quiet(session)
+        if key is None:
+            raise
+        # A concurrent copy of the same form took the key first.
+        raise TopupRepeated() from exc
     payment_id = int(payment.id)
     try:
         return await _prepare_payment(session, payment, method, destination, ui)
@@ -309,7 +350,8 @@ async def _close_unshown_topup(session: AsyncSession, payment_id: int) -> None:
             Payment.status == PaymentStatus.PENDING.value,
             Payment.receipt_file_id.is_(None),
         )
-        .values(status=PaymentStatus.REJECTED.value, review_note="checkout could not be prepared")
+        # The customer never saw where to pay, so the same form may be sent again with its key.
+        .values(status=PaymentStatus.REJECTED.value, review_note="checkout could not be prepared", request_key=None)
         .execution_options(synchronize_session=False)
     )
     await session.commit()

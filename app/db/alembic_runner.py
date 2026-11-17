@@ -15,15 +15,23 @@ ALEMBIC_INI = ROOT_DIR / "alembic.ini"
 ALEMBIC_DIR = ROOT_DIR / "alembic"
 
 
+def _set_url(cfg: Config, url: str) -> None:
+    # The option goes through configparser interpolation; a percent-encoded password or a
+    # ``?options=-csearch_path%3D…`` query would otherwise raise "invalid interpolation syntax".
+    cfg.set_main_option("sqlalchemy.url", url.replace("%", "%%"))
+
+
 def alembic_config(database_url: str | None = None) -> Config:
     if not ALEMBIC_INI.is_file():
         raise FileNotFoundError(f"Missing {ALEMBIC_INI}")
     cfg = Config(str(ALEMBIC_INI))
+    # The app already configured logging; alembic/env.py must not reset it.
+    cfg.attributes["configure_logging"] = False
     cfg.set_main_option("script_location", str(ALEMBIC_DIR))
     if database_url:
         from app.db.engine_url import to_sync_url
 
-        cfg.set_main_option("sqlalchemy.url", to_sync_url(database_url))
+        _set_url(cfg, to_sync_url(database_url))
     return cfg
 
 
@@ -58,7 +66,7 @@ def upgrade_head(database_url: str | None = None) -> None:
     url = cfg.get_main_option("sqlalchemy.url") or ""
     if url.startswith("postgresql") and "connect_timeout=" not in url:
         sep = "&" if "?" in url else "?"
-        cfg.set_main_option("sqlalchemy.url", f"{url}{sep}connect_timeout=15")
+        _set_url(cfg, f"{url}{sep}connect_timeout=15")
     command.upgrade(cfg, "head")
 
 

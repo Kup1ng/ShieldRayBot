@@ -242,9 +242,11 @@ class ModalStripFlashTests(unittest.TestCase):
         self.assertIn("quota_data_limit_bytes", models)
         self.assertIn("quota_synced_at", models)
 
-        session = (ROOT / "app/db/session.py").read_text(encoding="utf-8")
-        self.assertIn("quota_expire_at", session)
-        self.assertIn("quota_synced_at", session)
+        from app.db.models import UserService
+
+        columns = UserService.__table__.c
+        self.assertIn("quota_expire_at", columns)
+        self.assertIn("quota_synced_at", columns)
 
 
 if __name__ == "__main__":

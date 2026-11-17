@@ -2,18 +2,15 @@
 
 from __future__ import annotations
 
-import os
 import tempfile
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
-os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import httpx
 from itsdangerous import URLSafeTimedSerializer
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker
 from starlette.requests import Request
 
 from app.api import app as app_module
@@ -22,6 +19,7 @@ from app.db.models import BotUser, ResellerProfile
 from app.services import panel_update as pu
 from app.services.panel_inbox import build_inbox_context
 from app.services.setup_wizard import ensure_web_secret
+from tests.pgtest import pg_engine
 
 SESSION_VERSION = "session-version"
 PASSWORD_HASH = "h" * 40
@@ -47,13 +45,16 @@ BACKUP_ROUTES = (
     ("POST", "/backup/delete/abc"),
     ("GET", "/backup/download/abc"),
 )
+SYSTEM_TAB_ROUTES = tuple(
+    ("GET", f"/api/panel/system/{tab}") for tab in ("general", "pwa", "backup", "ssl", "update")
+)
 UPDATE_AVAILABLE = {"update_available": True, "remote_version": "9.9.9", "version": "0.4.0", "checked": True}
 
 
 class RoutesHarness(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self._tmp = tempfile.TemporaryDirectory()
-        self.engine = create_async_engine(f"sqlite+aiosqlite:///{Path(self._tmp.name) / 'u.db'}")
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -105,7 +106,7 @@ class UpdateAndBackupRoutesTests(RoutesHarness):
         self.assertIn("current_version", response.json())
 
     async def test_a_shop_owner_is_turned_away_from_every_update_and_backup_route(self):
-        for method, path in (*UPDATE_ROUTES, *BACKUP_ROUTES):
+        for method, path in (*UPDATE_ROUTES, *BACKUP_ROUTES, *SYSTEM_TAB_ROUTES):
             response = await self.call(SHOP_SESSION, method, path)
             self.assertEqual(response.status_code, 303, (method, path))
             self.assertEqual(response.headers["location"], "/home", (method, path))
@@ -113,7 +114,7 @@ class UpdateAndBackupRoutesTests(RoutesHarness):
 
     async def test_other_staff_roles_cannot_use_them_either(self):
         for payload in (PRINCIPAL_SESSION, PG_STAFF_SESSION):
-            for method, path in (*UPDATE_ROUTES, *BACKUP_ROUTES):
+            for method, path in (*UPDATE_ROUTES, *BACKUP_ROUTES, *SYSTEM_TAB_ROUTES):
                 response = await self.call(payload, method, path)
                 self.assertEqual(response.status_code, 303, (payload["role"], method, path))
                 self.assertTrue(response.headers["location"].startswith("/login"), (payload["role"], method, path))
@@ -131,16 +132,17 @@ class UpdateAndBackupRoutesTests(RoutesHarness):
 
     async def test_the_update_tab_offers_an_update_and_no_version_rollback(self):
         context = pu._degraded_update_page_context()
-        with patch("app.services.panel_update.update_page_context", AsyncMock(return_value=context)):
-            response = await self.call(OWNER_SESSION, "GET", "/settings?tab=update")
+        with patch("app.services.panel_system.update_page_context", AsyncMock(return_value=context)):
+            response = await self.call(OWNER_SESSION, "GET", "/api/panel/system/update")
         self.assertEqual(response.status_code, 200)
-        self.assertIn('id="upd-start"', response.text)
-        self.assertIn('id="upd-channel"', response.text)
+        data = response.json()
+        self.assertIn("can_start", data)
+        self.assertEqual([channel["id"] for channel in data["channels"]], ["main", "dev"])
         self.assertNotIn("rollback", response.text.lower())
         self.assertNotIn("راه برگشت", response.text)
 
     async def test_without_a_session_nothing_runs(self):
-        for method, path in UPDATE_ROUTES:
+        for method, path in (*UPDATE_ROUTES, *SYSTEM_TAB_ROUTES):
             response = await self.client.request(
                 method, path, headers={"x-csrf-token": "t", "cookie": "csrf=t", "origin": "http://panel.test"},
                 json={} if method == "POST" else None,
