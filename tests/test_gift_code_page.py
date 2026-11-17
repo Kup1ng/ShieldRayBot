@@ -206,7 +206,7 @@ class GiftCodePageTests(GiftCodeHarness):
 
     async def test_rules_and_state_labels_are_part_of_each_row(self):
         row = (await self._get(OWNER)).json()["codes"][0]
-        for key in ("kind", "amount", "percent", "max_uses", "max_uses_per_user", "used_count", "state", "expiry_label", "expiry_input", "purchase_types"):
+        for key in ("kind", "amount", "percent", "max_uses", "max_uses_per_user", "used_count", "state", "expiry_label", "expiry_days", "plans_label", "plan_ids", "purchase_types"):
             self.assertIn(key, row)
         self.assertEqual(row["state"], "فعال")
 
@@ -215,6 +215,61 @@ class GiftCodePageTests(GiftCodeHarness):
         active = [t["key"] for t in tabs if t["active"]]
         self.assertEqual(active, ["gift_codes"])
         self.assertIn("/gift-codes", [t["href"] for t in tabs])
+
+
+class GiftCodeFormDataTests(GiftCodeHarness):
+    """What the React form needs: the days left, the plans a code can be limited to, and the caps."""
+
+    async def test_expiry_is_given_in_whole_days_left_and_empty_without_one(self):
+        from datetime import datetime, timedelta, timezone
+
+        from app.db.models import ChargeCode
+
+        now = datetime.now(timezone.utc)
+        async with self.Session() as session:
+            session.add_all(
+                [
+                    ChargeCode(code="IN4DAYS", amount=1, reseller_id=5, expires_at=now + timedelta(days=3, hours=20)),
+                    ChargeCode(code="GONE", amount=1, reseller_id=5, expires_at=now - timedelta(hours=2)),
+                ]
+            )
+            await session.commit()
+        rows = {row["code"]: row for row in (await self._get(_reseller(["gift_codes"], shop_id=5))).json()["codes"]}
+        self.assertEqual(rows["IN4DAYS"]["expiry_days"], "4")
+        self.assertEqual(rows["GONE"]["expiry_days"], "0")
+        self.assertEqual(rows["GONE"]["state"], "منقضی")
+        self.assertEqual(rows["SHOPFIVECODE"]["expiry_days"], "")
+        self.assertNotIn("expiry_input", rows["IN4DAYS"])
+
+    async def test_a_shop_is_offered_only_its_own_sellable_plans_and_names_them_on_a_limited_code(self):
+        from app.db.models import ChargeCode, Plan
+
+        async with self.Session() as session:
+            session.add_all(
+                [
+                    Plan(id=71, name="پلن پنج", price=10, duration_days=30, owner_reseller_id=5),
+                    Plan(id=72, name="پلن پنج خاموش", price=10, duration_days=30, owner_reseller_id=5, is_active=False),
+                    Plan(id=73, name="تست پنج", price=0, duration_days=1, owner_reseller_id=5, is_trial=True),
+                    Plan(id=74, name="پلن شش", price=10, duration_days=30, owner_reseller_id=6),
+                ]
+            )
+            await session.flush()
+            session.add(ChargeCode(code="LIMITED", kind="discount", percent=10, reseller_id=5, plan_ids="71,72", purchase_types="new"))
+            await session.commit()
+        body = (await self._get(_reseller(["gift_codes"], shop_id=5))).json()
+        self.assertEqual({p["id"]: p["active"] for p in body["plans"]}, {71: True, 72: False})
+        limited = next(row for row in body["codes"] if row["code"] == "LIMITED")
+        self.assertEqual(limited["plan_ids"], [71, 72])
+        self.assertEqual(limited["plans_label"], "پلن پنج، پلن پنج خاموش")
+        other = (await self._get(_reseller(["gift_codes"], shop_id=6))).json()
+        self.assertEqual([p["id"] for p in other["plans"]], [74])
+        self.assertTrue(all(row["plan_ids"] == [] for row in other["codes"]))
+
+    async def test_the_caps_the_form_validates_against_come_from_the_service(self):
+        from app.services.gift_codes import MAX_AMOUNT, MAX_EXPIRY_DAYS, MAX_USES
+
+        limits = (await self._get(OWNER)).json()["limits"]
+        self.assertEqual((limits["max_amount"], limits["max_uses"], limits["max_expiry_days"]), (MAX_AMOUNT, MAX_USES, MAX_EXPIRY_DAYS))
 
 
 class GiftCodeRedirectTests(GiftCodeHarness):
@@ -240,6 +295,70 @@ class GiftCodeRedirectTests(GiftCodeHarness):
     async def asyncTearDown(self):
         await self.post_client.aclose()
         await super().asyncTearDown()
+
+    async def test_the_react_form_fields_create_and_edit_a_code_in_days_limited_to_a_plan(self):
+        from app.db.models import ChargeCode, Plan
+
+        async with self.Session() as session:
+            session.add(Plan(id=81, name="پلن", price=10, duration_days=30, owner_reseller_id=None))
+            await session.commit()
+        self.staff.update(OWNER)
+        created = await self.post_client.post(
+            "/plans/gift-codes",
+            data={
+                "kind": "discount", "percent": "15", "max_discount_toman": "", "first_purchase_only": "1",
+                "purchase_types": ["new"], "plan_ids": ["81"], "max_uses": "", "max_uses_per_user": "2",
+                "expires_in_days": "30", "expires_in_days_shown": "", "code": "REACTDAYS", "note": "n",
+            },
+        )
+        self.assertTrue(created.headers["location"].startswith("/gift-codes?ok="), created.headers["location"])
+        row = next(c for c in (await self._get(OWNER)).json()["codes"] if c["code"] == "REACTDAYS")
+        self.assertEqual((row["expiry_days"], row["plan_ids"], row["max_uses"], row["max_uses_per_user"]), ("30", [81], None, 2))
+        shown = row["expiry_days"]
+        async with self.Session() as session:
+            before = (await session.get(ChargeCode, row["id"])).expires_at
+        # Saving the days the form showed keeps the exact expiry; clearing the field removes it.
+        edit_fields = {
+            "kind": "discount", "percent": "20", "purchase_types": ["new"], "first_purchase_only": "1", "plan_ids": ["81"],
+            "max_uses": "", "max_uses_per_user": "2", "expires_in_days_shown": shown,
+        }
+        edited = await self.post_client.post(
+            f"/plans/gift-codes/{row['id']}/edit", data={**edit_fields, "expires_in_days": shown}
+        )
+        self.assertTrue(edited.headers["location"].startswith("/gift-codes?ok="), edited.headers["location"])
+        async with self.Session() as session:
+            kept = await session.get(ChargeCode, row["id"])
+            self.assertEqual((kept.percent, kept.expires_at), (20, before))
+        await self.post_client.post(f"/plans/gift-codes/{row['id']}/edit", data={**edit_fields, "expires_in_days": ""})
+        row = next(c for c in (await self._get(OWNER)).json()["codes"] if c["code"] == "REACTDAYS")
+        self.assertEqual(row["expiry_days"], "")
+
+    async def test_a_date_time_or_out_of_range_expiry_is_refused(self):
+        from app.services.gift_codes import MAX_EXPIRY_DAYS
+
+        self.staff.update(OWNER)
+        for raw in ("2030-01-01 23:59", "0", "-1", str(MAX_EXPIRY_DAYS + 1)):
+            with self.subTest(raw=raw):
+                response = await self.post_client.post(
+                    "/plans/gift-codes", data={"kind": "wallet", "amount": "1000", "expires_in_days": raw}
+                )
+                self.assertTrue(response.headers["location"].startswith("/gift-codes?err="), raw)
+
+    async def test_a_shop_cannot_limit_its_code_to_another_shops_plan(self):
+        from app.db.models import Plan
+
+        async with self.Session() as session:
+            session.add(Plan(id=82, name="پلن شش", price=10, duration_days=30, owner_reseller_id=6))
+            await session.commit()
+        shop = _reseller(["gift_codes"], shop_id=5)
+        self.staff.update(shop)
+        response = await self.post_client.post(
+            "/plans/gift-codes",
+            data={"kind": "discount", "percent": "10", "plan_ids": ["82"], "purchase_types": ["new"], "code": "FOREIGNPLAN"},
+        )
+        self.assertTrue(response.headers["location"].startswith("/gift-codes?err="))
+        codes = (await self._get(shop)).json()["codes"]
+        self.assertFalse(any(c["code"] == "FOREIGNPLAN" for c in codes))
 
     async def test_create_and_toggle_return_to_the_gift_code_page(self):
         self.staff.update(OWNER)

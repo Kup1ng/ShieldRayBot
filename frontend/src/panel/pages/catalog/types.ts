@@ -266,14 +266,21 @@ export type GiftCode = {
   note: string;
   is_active: boolean;
   state: string;
-  expiry_input: string;
+  /** Whole days left (rounded up), "" without an expiry and "0" once expired: what the form shows. */
+  expiry_days: string;
   expiry_label: string;
+  plans_label: string;
+  plan_ids: number[];
 };
+
+export type GiftCodePlan = { id: number; name: string; active: boolean };
 
 export type GiftCodesData = {
   codes: GiftCode[];
+  /** The shop's own plans a discount code can be limited to. */
+  plans: GiftCodePlan[];
   purchase_types: Array<{ key: string; label: string }>;
-  limits: { max_amount: number; max_uses: number; list_limit: number };
+  limits: { max_amount: number; max_uses: number; max_expiry_days: number; list_limit: number };
   tabs: MarketingTab[];
 };
 
