@@ -411,7 +411,6 @@ tests/test_shop_bot_customer_tools.py
 # Mini App order payments: shop/customer isolation, request-key idempotency, receipt ownership.
 tests/test_miniapp_order_payments.py
 # Mini App entry gate: per-shop entry terms and referral code scope.
-tests/test_miniapp_access.py
 # React marketing pages: loyalty, campaigns, funnel and broadcast data endpoints keep permission and shop scope.
 tests/test_panel_marketing_api.py
 # React customer pages: users list, card, edit and trial users data keep permission, shop scope and hide subscription links.

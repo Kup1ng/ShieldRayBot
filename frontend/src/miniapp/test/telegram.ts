@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, vi } from "vitest";
 
 import { resetLaunchCache } from "../core/launch";
-import { resetTelegramState, type TelegramWebApp } from "../core/telegram";
+import { resetTelegramState, type TelegramEvent, type TelegramWebApp } from "../core/telegram";
 
 export type TelegramStub = {
   tg: TelegramWebApp & {
@@ -21,7 +21,7 @@ export type TelegramStub = {
   /** Telegram's BackButton: whether it is shown and the handler the app bound to it. */
   back: { visible: boolean; handler: (() => void) | null };
   /** Handlers the app registered with `onEvent`, by event name. */
-  events: Record<string, () => void>;
+  events: Record<string, (event?: TelegramEvent) => void>;
 };
 
 export function installTelegram(overrides: Partial<TelegramWebApp> = {}): TelegramStub {
@@ -39,7 +39,7 @@ export function installTelegram(overrides: Partial<TelegramWebApp> = {}): Telegr
     openLink: vi.fn(),
     openTelegramLink: vi.fn(),
     showConfirm: vi.fn((_message: string, cb: (ok: boolean) => void) => cb(true)),
-    onEvent: (name: string, cb: () => void) => {
+    onEvent: (name: string, cb: (event?: TelegramEvent) => void) => {
       events[name] = cb;
     },
     HapticFeedback: { selectionChanged: vi.fn(), notificationOccurred: vi.fn() },

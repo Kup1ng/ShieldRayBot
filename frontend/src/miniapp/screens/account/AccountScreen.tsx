@@ -17,6 +17,7 @@ import { openReceipt } from "./receipt";
 import { TopupFlow } from "./TopupFlow";
 import { TOPUP_STEP, openTopup } from "./topup";
 import type { ActivityItem, ActivityPayload, RecentTopup, TopupOptions } from "./types";
+import { useHomeScreenShortcut } from "./useHomeScreenShortcut";
 
 /** The purple hero card: balance, whether wallet payment is on, top-up and gift code. */
 function WalletCard() {
@@ -168,22 +169,26 @@ function ActivityList() {
   );
 }
 
-/** Support and the club, each with its unread count (the home screen has no shortcut tiles for them). */
-function SupportLinks() {
+type AccountLink = { key: string; icon: string; tone: "blue" | "pink" | "green"; label: string; badge: string; onPress: () => void };
+
+/** Support, the club (each with its unread count) and the home-screen shortcut: the account's shortcuts. */
+function AccountLinks() {
   const { can, go, customer } = useMini();
+  const shortcut = useHomeScreenShortcut();
   const badges = customer?.badges ?? {};
   const links = [
-    can("support") ? { key: "support", icon: "solar:headphones-round-linear", tone: "blue" as const, label: "پشتیبانی و تیکت‌ها", badge: badgeText(badges.support) } : null,
-    can("club") ? { key: "club", icon: "solar:gift-bold", tone: "pink" as const, label: "امتیاز، جوایز و دعوت دوستان", badge: badgeText(badges.club) } : null,
-  ].filter((item): item is NonNullable<typeof item> => Boolean(item));
+    can("support") ? { key: "support", icon: "solar:headphones-round-linear", tone: "blue" as const, label: "پشتیبانی و تیکت‌ها", badge: badgeText(badges.support), onPress: () => go("support") } : null,
+    can("club") ? { key: "club", icon: "solar:gift-bold", tone: "pink" as const, label: "امتیاز، جوایز و دعوت دوستان", badge: badgeText(badges.club), onPress: () => go("club") } : null,
+    shortcut.available ? { key: "home-screen", icon: "solar:smartphone-2-linear", tone: "green" as const, label: "افزودن به صفحهٔ اصلی", badge: "", onPress: shortcut.add } : null,
+  ].filter((item): item is AccountLink => Boolean(item));
   if (!links.length) return null;
   return (
-    <nav aria-label="پشتیبانی" className="flex flex-col gap-3">
+    <nav aria-label="میانبرهای حساب" className="flex flex-col gap-3">
       {links.map((link) => (
         <Button
           key={link.key}
           variant="secondary"
-          onPress={() => go(link.key === "support" ? "support" : "club")}
+          onPress={link.onPress}
           aria-label={link.badge ? `${link.label}، ${link.badge} مورد` : link.label}
           className="inset-tile !h-auto !w-full !justify-start !gap-3 !rounded-lg !p-2 !pe-3 text-start"
         >
@@ -213,7 +218,7 @@ export function AccountScreen() {
       </div>
       <WalletCard />
       <RecentTopups />
-      <SupportLinks />
+      <AccountLinks />
       <ActivityList />
     </>
   );

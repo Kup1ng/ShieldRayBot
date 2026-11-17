@@ -1608,7 +1608,6 @@ def create_api_app(lifespan=None) -> FastAPI:
         require_staff=require_staff,
         get_db=get_db,
     )
-    from app.api.miniapp_access import register_miniapp_access
     from app.api.miniapp_codes import register_miniapp_codes
     from app.api.miniapp_feeds import register_miniapp_feeds
     from app.api.miniapp_guides import register_miniapp_guides
@@ -1637,7 +1636,6 @@ def create_api_app(lifespan=None) -> FastAPI:
     register_miniapp_service_usage(app, get_db=get_db)
     register_miniapp_service_import(app, get_db=get_db)
     register_miniapp_order_payments(app, get_db=get_db)
-    register_miniapp_access(app, get_db=get_db)
     register_miniapp_onboarding(app, get_db=get_db)
     from app.api.customer_features import register_customer_features
 

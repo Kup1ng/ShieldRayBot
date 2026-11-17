@@ -73,7 +73,6 @@ SHOP_ROUTES: frozenset[str] = frozenset({
     "/api/mini/club",
     "/api/mini/club/history",
     "/api/mini/club/rewards/{reward_id}/redeem",
-    "/api/mini/access",
     "/api/mini/service-import/offer",
     "/api/mini/service-import/dismiss",
     "/api/mini/service-import",
