@@ -7,11 +7,10 @@ from unittest import mock
 from urllib.parse import parse_qs, urlparse
 
 
+import httpx
 from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from sqlalchemy import select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
-from sqlalchemy.pool import StaticPool
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.api.reseller_pages import register_reseller_pages
 from app.db import Base
@@ -24,6 +23,7 @@ from app.services.reseller_wallet import (
     build_reseller_wallet_idempotency_key,
     change_notice,
 )
+from tests.pgtest import pg_engine
 
 PAYG_SHOP = 5
 FIXED_SHOP = 6
@@ -32,9 +32,7 @@ PAYG_SHOP_B = 7
 
 class _Db:
     async def setup(self) -> None:
-        self.engine = create_async_engine(
-            "sqlite+aiosqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool
-        )
+        self.engine = pg_engine()
         async with self.engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
         self.Session = async_sessionmaker(self.engine, expire_on_commit=False)
@@ -129,7 +127,9 @@ class WalletFormTests(unittest.IsolatedAsyncioTestCase):
 
         app = FastAPI()
         register_reseller_pages(app, render=None, require_admin=lambda: {"username": "owner"}, get_db=get_db)
-        self.client = TestClient(app)
+        # On the test's own event loop, where the asyncpg engine lives (TestClient runs another loop).
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
         self.followups = mock.patch.object(reseller_wallet, "schedule_followups")
         self.scheduled = self.followups.start()
         self.addCleanup(self.followups.stop)
@@ -137,27 +137,27 @@ class WalletFormTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self) -> None:
         await self.db.engine.dispose()
 
-    def submit(self, shop: int = PAYG_SHOP, **form) -> dict[str, list[str]]:
-        response = self.client.post(f"/resellers/{shop}/billing-topup", data=form, follow_redirects=False)
+    async def submit(self, shop: int = PAYG_SHOP, **form) -> dict[str, list[str]]:
+        response = await self.client.post(f"/resellers/{shop}/billing-topup", data=form, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         return parse_qs(urlparse(response.headers["location"]).query)
 
     async def test_the_decrease_button_lowers_the_wallet(self) -> None:
-        query = self.submit(amount="15000", mode="debit", nonce="n" * 16)
+        query = await self.submit(amount="15000", mode="debit", nonce="n" * 16)
         self.assertIn("ok", query)
         self.assertEqual(await self.db.balance(PAYG_SHOP), 35_000)
 
     async def test_a_form_without_a_mode_is_still_a_charge(self) -> None:
-        self.submit(amount="15000", nonce="n" * 16)
+        await self.submit(amount="15000", nonce="n" * 16)
         self.assertEqual(await self.db.balance(PAYG_SHOP), 65_000)
 
     async def test_a_decrease_too_large_shows_an_error(self) -> None:
-        query = self.submit(amount="90000", mode="debit", nonce="n" * 16)
+        query = await self.submit(amount="90000", mode="debit", nonce="n" * 16)
         self.assertIn("کافی نیست", query["err"][0])
         self.assertEqual(await self.db.balance(PAYG_SHOP), 50_000)
 
     async def test_a_fixed_plan_reseller_wallet_changes_like_a_user_wallet(self) -> None:
-        self.assertIn("ok", self.submit(shop=FIXED_SHOP, amount="20000", mode="debit", nonce="n" * 16))
+        self.assertIn("ok", await self.submit(shop=FIXED_SHOP, amount="20000", mode="debit", nonce="n" * 16))
         self.assertEqual(await self.db.balance(FIXED_SHOP), 30_000)
         self.assertEqual(await self.db.ledger(), [])
         self.assertEqual([tx.amount for tx in await self.db.wallet_ledger()], [-20_000])
@@ -165,7 +165,7 @@ class WalletFormTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_a_signed_or_tiny_amount_is_refused(self) -> None:
         for amount in ("-5000", "500"):
-            self.assertIn("err", self.submit(amount=amount, mode="debit", nonce="n" * 16))
+            self.assertIn("err", await self.submit(amount=amount, mode="debit", nonce="n" * 16))
         self.assertEqual(await self.db.balance(PAYG_SHOP), 50_000)
 
 
@@ -279,7 +279,8 @@ class UserPageResellerWalletTests(unittest.IsolatedAsyncioTestCase):
         owner = {"role": "admin", "org_principal_id": 1, "org_depth": 0, "org_parent_id": None, "username": "owner"}
         app = FastAPI()
         register_user_pages(app, render=None, require_admin=lambda: owner, get_db=get_db)
-        self.client = TestClient(app)
+        self.client = httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+        self.addAsyncCleanup(self.client.aclose)
         patcher = mock.patch.object(reseller_wallet, "schedule_followups")
         self.scheduled = patcher.start()
         self.addCleanup(patcher.stop)
@@ -288,7 +289,7 @@ class UserPageResellerWalletTests(unittest.IsolatedAsyncioTestCase):
         await self.db.engine.dispose()
 
     async def test_a_payg_reseller_changed_from_the_user_page_uses_the_billing_ledger(self) -> None:
-        response = self.client.post(
+        response = await self.client.post(
             f"/users/{PAYG_SHOP}/wallet-credit",
             data={"amount": "5000", "mode": "debit", "note": "کاهش دستی تست", "nonce": "n" * 16},
             follow_redirects=False,
