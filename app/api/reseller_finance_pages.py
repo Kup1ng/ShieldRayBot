@@ -32,11 +32,11 @@ from app.services.payment_settlement import check_psp_payment, claim_psp_check_s
 from app.services.redact import user_safe_error
 from app.services.reseller_bots import ShopBotUnavailable, open_notify_bot_for_user
 from app.services.shop_credit import CreditOverview, credit_overview
-from app.services.topup_request_claims import claim_topup_request, release_topup_request
 from app.services.users import get_all_settings
 from app.services.wallet_topup import (
     PSP_CHECK_MESSAGES,
     RECEIPT_MAX_BYTES,
+    TOPUP_REQUEST_KEY,
     TopupError,
     recent_topups,
     start_topup,
@@ -56,7 +56,6 @@ NO_STORE = {"Cache-Control": "private, no-store"}
 CHARGES_PAGE_SIZE = 50
 STATEMENTS_SHOWN = 24
 TOPUP_STARTED = "پرداخت ایجاد شد؛ دستور پرداخت را دنبال کنید"
-TOPUP_REPEATED = "این درخواست قبلاً ثبت شده یا صفحه قدیمی است؛ صفحه را دوباره باز کنید"
 _ID_MAX = 2**31 - 1
 
 
@@ -68,7 +67,7 @@ class TopupBody(BaseModel):
     amount: int | str = ""
     method: str = Field("", max_length=32)
     dest_id: str = Field("", max_length=64)
-    request_key: str = Field("", max_length=64)
+    request_key: str = Field("", pattern=rf"^{TOPUP_REQUEST_KEY.pattern}$")
 
 
 def _back(path: str, *, ok: str = "", err: str = "") -> RedirectResponse:
@@ -188,20 +187,16 @@ async def _charges_payload(session: AsyncSession, owner: BotUser, *, before: int
 
 
 async def _begin_topup(session: AsyncSession, owner: BotUser, body: TopupBody) -> JSONResponse:
-    user_id = int(owner.id)
-    if not claim_topup_request(user_id, body.request_key):
-        return _refused(TOPUP_REPEATED)
     try:
         start = await start_topup(
-            session, user_id=user_id, shop_id=None, amount=_topup_amount(body.amount),
+            session, user_id=int(owner.id), shop_id=None, amount=_topup_amount(body.amount),
             method=body.method, dest_id=body.dest_id or None, ui=await get_all_settings(session),
+            request_key=body.request_key,
         )
     except TopupError as exc:
-        release_topup_request(user_id, body.request_key)
         return _refused(str(exc))
     except ValueError as exc:
         logger.warning("web top-up start refused owner=%s", owner.id, exc_info=True)
-        release_topup_request(user_id, body.request_key)
         return _refused(user_safe_error(exc, fallback="شروع پرداخت ناموفق بود"))
     # The payment instructions are shown once, in this answer; the payment stays in «recent».
     return _json({"ok": True, "message": TOPUP_STARTED, "topup": start.payload()})

@@ -320,6 +320,11 @@ class Payment(Base):
             postgresql_where=text("status = 'pending' AND receipt_at IS NOT NULL"),
         ),
         Index("ix_payments_wallet_shop_amount", "wallet_shop_id", "amount", "created_at"),
+        # One payment per submitted top-up form: a resent form finds this row instead of a second.
+        Index(
+            "uq_payments_topup_request_key", "user_id", "request_key", unique=True,
+            postgresql_where=text("request_key IS NOT NULL"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -339,6 +344,8 @@ class Payment(Base):
     reviewed_by: Mapped[Optional[int]] = mapped_column(BigInteger, nullable=True)
     review_note: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     is_wallet_topup: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The web wallet form's key; NULL for the bot and the Mini App, which send none.
+    request_key: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
     # Shop scope for wallet top-ups (None = platform / main-bot purse).
     # Set at top-up creation from the bot context — never inferred from sticky
     # user.reseller_id at settlement time (that allowed cross-tenant minting).

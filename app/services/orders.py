@@ -2775,6 +2775,7 @@ async def create_wallet_topup(
     *,
     method: str = PaymentMethod.CARD.value,
     wallet_shop_id: int | None = None,
+    request_key: str | None = None,
 ) -> Payment:
     if amount < MIN_TOPUP_AMOUNT:
         raise ValueError("حداقل مبلغ شارژ ۱۰۰۰ است")
@@ -2794,6 +2795,7 @@ async def create_wallet_topup(
         status=PaymentStatus.PENDING.value,
         is_wallet_topup=True,
         wallet_shop_id=shop_id,
+        request_key=request_key,
     )
     session.add(payment)
     await session.commit()

@@ -18,13 +18,19 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.api import spa_pages
 from app.api.reseller_finance_pages import (
     CHARGES_PAGE_SIZE,
-    TOPUP_REPEATED,
     register_reseller_finance_pages,
 )
 from app.db.models import Base, BotUser, CreditStatement, Payment, ResellerCharge, ResellerProfile
 from app.services.payment_destinations import dump_payment_cards
 from app.services.payment_settlement import PspCheckOutcome
-from app.services.wallet_topup import RECEIPT_MAX_BYTES, TopupError, TopupStart
+from app.services.wallet_topup import (
+    RECEIPT_MAX_BYTES,
+    TOPUP_REPEATED,
+    TopupError,
+    TopupRepeated,
+    TopupStart,
+    start_topup,
+)
 from tests.pgtest import pg_engine
 
 OWNER = {"role": "reseller", "bot_user_id": 5}
@@ -39,7 +45,7 @@ class FinancePagesCase(unittest.IsolatedAsyncioTestCase):
     staff: dict = OWNER
 
     async def asyncSetUp(self) -> None:
-        # Keys are claimed process-wide, so each test submits its own.
+        # Each test submits its own form key, as a fresh page read would hand out.
         self.request_key = secrets.token_hex(16)
         self.engine = pg_engine()
         async with self.engine.begin() as conn:
@@ -200,6 +206,45 @@ class OwnerTests(FinancePagesCase):
                                                       json={"amount": 50_000, "method": "card", "request_key": key})
                     self.assertIn(response.status_code, (400, 422))
         start.assert_not_awaited()
+
+    async def test_a_resent_form_after_the_first_answer_was_lost_opens_no_second_payment(self) -> None:
+        """The key lives on the payment, so it still holds for a request served by another process."""
+        ui = {"pay_card_enabled": "1", "payment_cards": dump_payment_cards([{"number": "6037991234567890", "holder": "x"}])}
+        async with self.Session() as session:
+            await start_topup(session, user_id=5, shop_id=None, amount=50_000, method="card", dest_id=None, ui=ui,
+                              request_key=self.request_key)
+        async with self.Session() as session:
+            with self.assertRaises(TopupRepeated):
+                await start_topup(session, user_id=5, shop_id=None, amount=50_000, method="card", dest_id=None, ui=ui,
+                                  request_key=self.request_key)
+            other = await start_topup(session, user_id=6, shop_id=None, amount=50_000, method="card", dest_id=None,
+                                      ui=ui, request_key=self.request_key)
+        self.assertGreater(other.payment_id, 0, "another account's form is its own request")
+
+    async def test_a_concurrent_copy_that_loses_the_unique_key_is_refused(self) -> None:
+        ui = {"pay_card_enabled": "1", "payment_cards": dump_payment_cards([{"number": "6037991234567890", "holder": "x"}])}
+        async with self.Session() as session:
+            session.add(Payment(user_id=5, amount=50_000, method="card", is_wallet_topup=True, request_key=self.request_key))
+            await session.commit()
+        before = await self.topup_count()
+        async with self.Session() as session:
+            with patch("app.services.wallet_topup._request_key_used", AsyncMock(return_value=False)):
+                with self.assertRaises(TopupRepeated):
+                    await start_topup(session, user_id=5, shop_id=None, amount=50_000, method="card", dest_id=None,
+                                      ui=ui, request_key=self.request_key)
+        self.assertEqual(await self.topup_count(), before)
+
+    async def test_a_checkout_that_could_not_be_shown_frees_its_key(self) -> None:
+        ui = {"pay_card_enabled": "1", "payment_cards": dump_payment_cards([{"number": "6037991234567890", "holder": "x"}])}
+        async with self.Session() as session:
+            with patch("app.services.wallet_topup._prepare_payment", AsyncMock(side_effect=ValueError("no card"))):
+                with self.assertRaises(ValueError):
+                    await start_topup(session, user_id=5, shop_id=None, amount=50_000, method="card", dest_id=None,
+                                      ui=ui, request_key=self.request_key)
+        async with self.Session() as session:
+            again = await start_topup(session, user_id=5, shop_id=None, amount=50_000, method="card", dest_id=None,
+                                      ui=ui, request_key=self.request_key)
+        self.assertGreater(again.payment_id, 0)
 
     async def test_the_same_key_from_another_shop_is_a_different_request(self) -> None:
         start = AsyncMock(return_value=TopupStart(payment_id=9, method="card", amount=50_000, needs_receipt=True))
