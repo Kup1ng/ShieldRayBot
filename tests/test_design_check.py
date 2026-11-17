@@ -125,6 +125,7 @@ class ScopeTests(unittest.TestCase):
     def test_only_panel_templates_and_stylesheets_are_checked(self) -> None:
         self.assertEqual(findings_for("app/services/x.py", '<div class="ui-modal">'), [])
         self.assertEqual(findings_for("app/web/static/guide/a.css", ".x { color: #000; }"), [])
+        self.assertEqual(findings_for("app/web/static/spa/_next/static/chunks/0a1b.css", ".x { color: #000; }"), [])
         self.assertEqual(rules(findings_for("app/web/static/panel-ds.css", ".x { color: #000; }")), ["raw-colour"])
 
 

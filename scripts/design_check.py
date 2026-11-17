@@ -24,7 +24,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 TEMPLATES = "app/web/templates/"
 STYLES = "app/web/static/"
-STYLE_EXCLUDES = ("app/web/static/guide/",)
+# The guide has its own look; spa/ is the Next.js build of frontend/ (Tailwind output with hashed
+# names that change on every build), whose rules live in frontend/DESIGN.md, not in this check.
+STYLE_EXCLUDES = ("app/web/static/guide/", "app/web/static/spa/")
 BASE_CANDIDATES = ("upstream/dev", "origin/dev", "dev")
 CANCEL_WORDS = ("انصراف", "بستن")
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"}
