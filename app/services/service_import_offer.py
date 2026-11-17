@@ -52,9 +52,12 @@ async def customer_has_services(session: AsyncSession, user_id: int, shop_id: in
     return found is not None
 
 
-def offer_applies(ui: Mapping[str, str] | None, *, has_services: bool, dismissed: bool) -> bool:
-    """A customer of this shop with no service who did not ask to stop, while adding old services is on."""
-    return read_settings(ui).enabled and not has_services and not dismissed
+def offer_applies(
+    ui: Mapping[str, str] | None, *, has_services: bool, dismissed: bool, trial_available: bool = False
+) -> bool:
+    """A customer of this shop with no service who did not ask to stop, while adding old services
+    or a free trial can be offered."""
+    return (read_settings(ui).enabled or trial_available) and not has_services and not dismissed
 
 
 async def home_offer_visible(

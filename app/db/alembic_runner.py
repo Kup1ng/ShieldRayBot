@@ -72,7 +72,22 @@ def upgrade_head(database_url: str | None = None) -> None:
 
 def downgrade_one(database_url: str | None = None) -> None:
     cfg = alembic_config(database_url)
-    command.downgrade(cfg, "-1")
+    command.downgrade(cfg, _one_step_back(cfg, current_revision(database_url)))
+
+
+def _one_step_back(cfg: Config, current: str | None) -> str:
+    """The target that undoes only the current revision.
+
+    Alembic refuses "-1" at a revision that joins two branches ("ambiguous walk"). Naming one of
+    its parents undoes just the join and leaves both branch heads as they were.
+    """
+    from alembic.script import ScriptDirectory
+
+    revision = ScriptDirectory.from_config(cfg).get_revision(current) if current else None
+    parents = revision.down_revision if revision is not None else None
+    if isinstance(parents, (tuple, list)) and parents:
+        return str(parents[0])
+    return "-1"
 
 
 def stamp_head(database_url: str | None = None) -> None:

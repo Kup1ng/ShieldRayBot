@@ -317,7 +317,8 @@ def node_overview_card(node: dict) -> dict[str, Any]:
     return {
         "id": nid,
         "name": name,
-        "status": status or "—",
+        # Persian in ``status`` (as upstream shows it) and in ``status_label`` (what the React cards read).
+        "status": node_status_fa(status) if status else "—",
         "status_label": node_status_fa(status) if status else "—",
         "status_kind": node.get("_status_kind") or _status_kind(node.get("status")),
         "cpu_percent": node.get("_cpu_percent"),

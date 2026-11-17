@@ -21,10 +21,19 @@ from app.services.bot_user_admin import (
 )
 from app.services.pg_access import staff_user_actions
 from app.services.platform_identity import is_explicit_owner_staff
+from app.services.service_import_assign import may_assign_existing_services
+from app.services.resellers import list_active_reseller_plans
 from app.services.shop_membership import assert_customer_in_staff_scope
 from app.services.shop_scope import (
     ShopScopeError,
     resolve_shop_scope_id,
+)
+from app.services.user_card import (
+    DEFAULT_CARD_PAGE,
+    USER_CARD_PAGES,
+    USER_CARD_PERMISSION,
+    build_user_card,
+    user_card_page,
 )
 from app.services.user_photo import photo_bot, user_photo
 
@@ -50,6 +59,26 @@ def _redirect_user(user_id: int, *, ok: str | None = None, err: str | None = Non
     return RedirectResponse(f"/users?{'&'.join(qs)}", status_code=303)
 
 
+def user_card_actions(staff: dict, user: BotUser, *, shop_scope: int | None, opened_from: str | None) -> dict:
+    """Which actions the user card offers, and where «ویرایش» leads.
+
+    - Resellers list: the platform owner edits a reseller in that page's reseller edit modal.
+    - Users list: the customer edit modal of that page.
+    - Any other table (payments, tickets, …): a link to the users list with the customer's edit modal open.
+    Customer edit is offered to anyone working in a shop; each change inside it checks its own permission.
+    ``opened_from`` only ever selects one of the known pages.
+    """
+    page = user_card_page(opened_from)
+    in_shop = is_explicit_owner_staff(staff) or shop_scope is not None
+    if page == "resellers":
+        edit = "reseller" if user.role == "reseller" and is_explicit_owner_staff(staff) else None
+    elif page == DEFAULT_CARD_PAGE:
+        edit = "user" if in_shop else None
+    else:
+        edit = "user_link" if in_shop else None
+    return {"edit_target": edit, "can_message": not user.is_blocked}
+
+
 def _list_return_from_form(form) -> tuple[str, str | None]:
     from app.services.users_ops import normalize_users_filter
 
@@ -67,8 +96,12 @@ def _redirect_list_form(
 ):
     from app.services.users_ops import users_list_href
 
-    fk, q = _list_return_from_form(form)
-    href = users_list_href(filter_key=fk, uid=uid, q=q)
+    return_page = str(form.get("return_page") or "")
+    if return_page in USER_CARD_PAGES and return_page != DEFAULT_CARD_PAGE:
+        href = USER_CARD_PAGES[return_page]
+    else:
+        fk, q = _list_return_from_form(form)
+        href = users_list_href(filter_key=fk, uid=uid, q=q)
     bits = []
     if err:
         bits.append(f"err={_q(err)}")
@@ -109,6 +142,7 @@ def register_user_pages(app, *, render=None, require_admin, get_db, require_perm
     # ``render`` is no longer used (the screens are the React export); the parameter keeps the
     # registration call unchanged.
     require_ops = require_perm("dashboard") if require_perm else require_admin
+    require_card = require_perm(USER_CARD_PERMISSION) if require_perm else require_admin
     require_service_ops = (
         require_perm(CUSTOMER_SERVICES_PERMISSION) if require_perm else require_admin
     )
