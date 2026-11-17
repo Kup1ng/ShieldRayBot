@@ -420,6 +420,7 @@ async def delivery_queue(session: AsyncSession, staff: dict) -> dict[str, Any]:
         is_stuck = oid in stuck_ids
         return {
             "order_id": oid,
+            "user_id": int(order.user_id) if order is not None and order.user_id else None,
             "user_name": _user_name(order.user, order.user_id) if order is not None else "—",
             "stuck": is_stuck,
             "diag": _diag_payload(diag),

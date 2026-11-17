@@ -56,6 +56,7 @@ export type PaymentsPayload = { q: string; rows: PaymentRow[]; pager: Pager; can
 
 export type DeliveryRow = {
   order_id: number;
+  user_id: number | null;
   user_name: string;
   stuck: boolean;
   diag: {

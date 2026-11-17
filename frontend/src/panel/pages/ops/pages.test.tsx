@@ -204,7 +204,8 @@ describe("tickets page", () => {
     expect(await screen.findByText("<i>اتصال</i>")).toBeTruthy();
     expect(document.querySelector("i")).toBeNull();
     expect(screen.getByText("پاسخ جدید")).toBeTruthy();
-    expect(screen.getByText("کاربر نمونه").closest("a")?.getAttribute("href")).toBe("/users?uid=11");
+    // This session has no users right, so the customer's name stays plain text (the card is tested with the right).
+    expect(screen.getByText("کاربر نمونه").closest("a, button")).toBeNull();
     expect(screen.getByRole("button", { name: "تیکت جدید" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "پشتیبان‌ها" })).toBeNull();
   });

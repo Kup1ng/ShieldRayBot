@@ -10,6 +10,7 @@ import { Ltr } from "../../ui/Data";
 import { FormGrid, TextInput, TextAreaInput } from "../../ui/Fields";
 import { EmptyBlock, Loadable } from "../../ui/States";
 import { GlassSection } from "../../ui/Page";
+import { UserNameLink } from "../../ui/UserNameLink";
 import { EditorForm } from "./editor";
 import type { LoyaltyOverview, PointsTransaction } from "./types";
 
@@ -117,7 +118,7 @@ function LedgerTable({ rows }: { rows: PointsTransaction[] }) {
                   <Ltr>{fa(row.id)}</Ltr>
                 </Table.Cell>
                 <Table.Cell>
-                  <span dir="auto">{row.user_label}</span>
+                  <UserNameLink userId={row.user_id} name={row.user_label} page="loyalty" />
                 </Table.Cell>
                 <Table.Cell>
                   <span className={row.amount > 0 ? "text-success" : "text-danger"}>

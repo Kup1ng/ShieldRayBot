@@ -60,7 +60,8 @@ function RowMenu({ row, can, onAction }: { row: UserRow; can: UsersList["can"]; 
   const items: { id: RowAction; label: string; icon: string; danger?: boolean }[] = [];
   if (row.can_message) items.push({ id: "message", label: "پیام", icon: "solar:chat-round-dots-linear" });
   if (row.can_renew) items.push({ id: "renew", label: "تمدید سریع", icon: "solar:refresh-circle-linear" });
-  if (can.edit_services) items.push({ id: "edit", label: "ویرایش", icon: "solar:pen-linear" });
+  // The edit screen opens for anyone working in the shop; each change inside it checks its own right.
+  if (can.edit_services || can.provision) items.push({ id: "edit", label: "ویرایش", icon: "solar:pen-linear" });
   if (can.manage) items.push({ id: "block", label: row.is_blocked ? "رفع مسدودی" : "مسدود", icon: row.is_blocked ? "solar:lock-unlocked-linear" : "solar:lock-linear" });
   if (can.manage && row.role !== "admin") items.push({ id: "delete", label: "حذف", icon: "solar:trash-bin-trash-linear", danger: true });
   if (items.length === 0) return null;
@@ -172,17 +173,11 @@ export function UsersTable({ rows, can, focusUid, selected, onSelect, onOpenCard
                   <Table.Cell>
                     <div className="flex min-w-0 flex-col gap-1">
                       <span className="flex items-center gap-1.5">
-                        {can.edit_services ? (
-                          <Button variant="ghost" className="!h-auto !min-w-0 !justify-start !p-0 font-medium text-foreground hover:underline" onPress={() => onOpenCard(row.id)} aria-label={`اطلاعات ${row.name}`}>
-                            <span className="truncate" dir="auto">
-                              {row.name}
-                            </span>
-                          </Button>
-                        ) : (
-                          <span className="min-w-0 truncate font-medium text-foreground" dir="auto">
+                        <Button variant="ghost" className="!h-auto !min-w-0 !justify-start !p-0 font-medium text-foreground hover:underline" onPress={() => onOpenCard(row.id)} aria-label={`اطلاعات ${row.name}`}>
+                          <span className="truncate" dir="auto">
                             {row.name}
                           </span>
-                        )}
+                        </Button>
                         {row.has_alert ? <AlertDot /> : null}
                       </span>
                       <span className="flex flex-wrap items-center gap-1.5">

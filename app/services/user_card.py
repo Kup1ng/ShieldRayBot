@@ -20,6 +20,7 @@ from app.services.color_tags import ColorTag, color_tag_meta
 from app.services.customer_marks import marks_of
 from app.services.daily_report import format_jalali_parts
 from app.services.loyalty import points_balance
+from app.services.platform_identity import is_explicit_owner_staff
 from app.services.users_ops import ServiceSummary, build_user_ops_row
 from app.services.wallet import get_wallet_balance
 
@@ -54,6 +55,43 @@ def user_card_page(opened_from: str | None) -> str:
     """The known page a card was opened from; anything else counts as the users list."""
     page = str(opened_from or "")
     return page if page in USER_CARD_PAGES else DEFAULT_CARD_PAGE
+
+
+# Where the card's «ویرایش» leads: the reseller's own edit screen, the customer's edit screen, or the customer's
+# edit screen through a link (the card was opened from a table that has no edit screen of its own).
+EDIT_RESELLER = "reseller"
+EDIT_USER = "user"
+EDIT_USER_LINK = "user_link"
+
+
+@dataclass(frozen=True, slots=True)
+class UserCardActions:
+    edit_target: str | None
+    can_message: bool
+
+
+def user_card_actions(
+    staff: dict, user: BotUser, *, shop_scope: int | None, opened_from: str | None
+) -> UserCardActions:
+    """Which actions the card offers, and where «ویرایش» leads, for the row it was opened from.
+
+    - Resellers list: the platform owner edits a reseller on the reseller edit screen.
+    - Users list: the customer edit screen.
+    - Any other table (payments, tickets, ...): a link to the customer edit screen.
+    Customer edit is offered to anyone working in a shop; each change inside it checks its own permission.
+    ``opened_from`` only ever selects one of the known pages.
+    """
+    page = user_card_page(opened_from)
+    is_owner = is_explicit_owner_staff(staff)
+    in_shop = is_owner or shop_scope is not None
+    edit_target: str | None
+    if page == "resellers":
+        edit_target = EDIT_RESELLER if user.role == "reseller" and is_owner else None
+    elif page == DEFAULT_CARD_PAGE:
+        edit_target = EDIT_USER if in_shop else None
+    else:
+        edit_target = EDIT_USER_LINK if in_shop else None
+    return UserCardActions(edit_target=edit_target, can_message=not user.is_blocked)
 
 
 @dataclass(slots=True)

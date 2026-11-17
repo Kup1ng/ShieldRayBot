@@ -8,13 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.db.models import Plan
+from app.db.models import Plan, ResellerPlan
 from app.services.bot_user_admin import ServiceSnapshot
 from app.services.color_tags import ColorTag, color_tag_meta, color_tags_for_ui
 from app.services.formatting import format_gb
 from app.services.marketing_nav import MarketingSection
 from app.services.trial_users import FILTER_LABELS, TrialSummary, TrialUserRow, TrialUsersPage
-from app.services.user_card import UserCard
+from app.services.user_card import UserCard, UserCardActions
 from app.services.user_edit_view import UserEditView
 from app.services.users_list_view import UsersListView
 from app.services.users_ops import ServiceSummary, UserOpsRow
@@ -111,28 +111,43 @@ def users_list_payload(view: UsersListView) -> dict[str, Any]:
     }
 
 
-def user_card_payload(card: UserCard, *, can_edit: bool, can_message: bool) -> dict[str, Any]:
+def identity_payload(user: Any) -> dict[str, Any]:
+    """Who the person is: the one header of the card and of both edit screens."""
+    return {
+        "id": int(user.id),
+        "name": display_name(user),
+        "username": user.username or "",
+        "telegram_id": int(user.telegram_id),
+        "role": user.role,
+        "is_blocked": bool(user.is_blocked),
+    }
+
+
+def user_card_payload(card: UserCard, actions: UserCardActions, *, opened_from: str) -> dict[str, Any]:
     user = card.user
     return {
         "user": {
-            "id": int(user.id),
-            "name": display_name(user),
-            "username": user.username or "",
-            "telegram_id": int(user.telegram_id),
-            "role": user.role,
+            **identity_payload(user),
             "is_demo": bool(user.is_demo),
-            "is_blocked": bool(user.is_blocked),
             "message_name": user.full_name or user.username or str(user.telegram_id),
         },
         "risk_tag": tag_payload(card.risk_tag) if card.risk_tag else None,
         "wallet_balance": card.wallet_balance,
+        "points_balance": card.points_balance,
         "paid_total": card.paid_total,
         "paid_count": card.paid_count,
         "joined": card.joined,
         "services": [_summary_payload(s) for s in card.services],
-        "can_edit": can_edit,
-        "can_message": can_message,
+        "edit_target": actions.edit_target,
+        "can_message": actions.can_message,
+        # The known page the card was opened from; the message form returns there.
+        "opened_from": opened_from,
     }
+
+
+def reseller_plan_option(plan: ResellerPlan) -> dict[str, Any]:
+    mode = "PAYG" if (plan.billing_mode or "fixed") == "payg" else "ثابت"
+    return {"id": int(plan.id), "label": f"[{mode}] {plan.name}"}
 
 
 def plan_option(plan: Plan) -> dict[str, Any]:
@@ -163,15 +178,7 @@ def user_edit_payload(view: UserEditView) -> dict[str, Any]:
     shop_block = view.shop_block
     shop_points = view.shop_points
     return {
-        "user": {
-            "id": int(user.id),
-            "name": display_name(user),
-            "username": user.username or "",
-            "telegram_id": int(user.telegram_id),
-            "role": user.role,
-            "is_blocked": bool(user.is_blocked),
-            "is_demo": bool(user.is_demo),
-        },
+        "user": {**identity_payload(user), "is_demo": bool(user.is_demo)},
         "tag": tag_payload(view.tag),
         "color_tags": color_tag_options(),
         "note": view.marks.note if view.can_edit_private_marks else "",
@@ -185,6 +192,7 @@ def user_edit_payload(view: UserEditView) -> dict[str, Any]:
         },
         "services": [_edit_service_payload(s) for s in view.services],
         "plans": [plan_option(p) for p in view.plans],
+        "reseller_plans": [reseller_plan_option(p) for p in view.reseller_plans],
         "can": {
             "manage": view.can_manage_users,
             "demo": view.can_manage_demo_users,
@@ -193,6 +201,7 @@ def user_edit_payload(view: UserEditView) -> dict[str, Any]:
             "pg_create": view.can_pg_create,
             "pg_update": view.can_pg_update,
             "pg_delete": view.can_pg_delete,
+            "assign_existing_service": view.can_assign_existing_services,
             "delete_user": view.can_manage_users and user.role != "admin",
         },
         "shop_wallet": (

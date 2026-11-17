@@ -1,6 +1,6 @@
 import { fa } from "../../core/format";
 import { pathId } from "../../core/data";
-import type { BulkOp, RiskTagKey, UserRow, UsersFilter } from "./types";
+import type { BulkOp, CardEditTarget, RiskTagKey, UserRow, UsersFilter } from "./types";
 
 /** Money in the shop currency (toman), grouped; negative balances keep their sign. */
 export function money(value: number): string {
@@ -132,4 +132,9 @@ export function sortRows(rows: UserRow[], spec: SortSpec | null): UserRow[] {
     const order = typeof left === "string" || typeof right === "string" ? String(left).localeCompare(String(right), "fa") : left - right;
     return order * sign || a.id - b.id;
   });
+}
+
+/** Where the card's «ویرایش» leads; a reseller's own screen only for the Owner's resellers list. */
+export function cardEditHref(target: CardEditTarget, userId: number): string {
+  return target === "reseller" ? `/resellers/${userId}/edit` : `/users/${userId}/edit`;
 }

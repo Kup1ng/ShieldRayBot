@@ -373,12 +373,25 @@ class EndpointTests(TabHarness):
         self.assertEqual([(s.bot_user_id, s.shop_id) for s in await self.services()], [(6, 5)])
 
     async def test_the_edit_screen_offers_the_section_only_with_the_permission(self):
-        owner = await self.call(OWNER_SESSION, "GET", "/users/1/edit?fragment=1")
-        self.assertIn("/users/1/import-service", owner.text)
+        owner = await self.call(OWNER_SESSION, "GET", "/api/panel/users/1/edit")
+        self.assertEqual(owner.status_code, 200, owner.text)
+        self.assertTrue(owner.json()["can"]["assign_existing_service"])
         await self.grant_shop("dashboard,customer_services")
-        shop = await self.call(SHOP_SESSION, "GET", "/users/6/edit?fragment=1")
+        shop = await self.call(SHOP_SESSION, "GET", "/api/panel/users/6/edit")
         self.assertEqual(shop.status_code, 200)
-        self.assertNotIn("import-service", shop.text)
+        self.assertFalse(shop.json()["can"]["assign_existing_service"])
         await self.grant_shop(SHOP_WITH_ASSIGN)
-        shop = await self.call(SHOP_SESSION, "GET", "/users/6/edit?fragment=1")
-        self.assertIn("/users/6/import-service", shop.text)
+        shop = await self.call(SHOP_SESSION, "GET", "/api/panel/users/6/edit")
+        self.assertTrue(shop.json()["can"]["assign_existing_service"])
+        self.assertNotIn("tok-", shop.text, "the edit screen never carries a subscription link")
+
+    async def test_the_section_needs_the_service_right_as_well(self):
+        await self.grant_shop("dashboard,service_import_assign")
+        shop = await self.call(SHOP_SESSION, "GET", "/api/panel/users/6/edit")
+        self.assertFalse(shop.json()["can"]["assign_existing_service"])
+
+    async def test_a_shop_cannot_open_another_shops_customer_edit_screen(self):
+        await self.grant_shop(SHOP_WITH_ASSIGN)
+        foreign = await self.call(SHOP_SESSION, "GET", "/api/panel/users/1/edit")
+        self.assertEqual(foreign.status_code, 403)
+        self.assertNotIn("assign_existing_service", foreign.text)

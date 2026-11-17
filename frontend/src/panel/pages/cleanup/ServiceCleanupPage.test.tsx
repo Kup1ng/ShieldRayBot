@@ -12,6 +12,9 @@ vi.mock("../../core/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../core/api")>();
   return { ...actual, panelGet: (path: string) => get(path), panelAction: (path: string, fields: unknown) => action(path, fields) };
 });
+vi.mock("../../core/session", () => ({
+  usePanelSession: () => ({ session: { nav: [{ id: "shop", items: [{ id: "users" }] }] }, refresh: vi.fn() }),
+}));
 vi.mock("../../layout/PanelShell", () => ({ PanelShell: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 
 import { deadlineColor, ServiceCleanupPage } from "./ServiceCleanupPage";
@@ -68,7 +71,7 @@ describe("service cleanup page", () => {
     expect(screen.getByText("وضعیت فعلی")).toBeTruthy();
     expect(screen.getByText("بر اساس آخرین اطلاعات")).toBeTruthy();
     expect(screen.getByText(/۲ سرویس تا ۷ روز دیگر/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Eve" }).getAttribute("href")).toBe("/users/20/edit");
+    expect(screen.getByRole("button", { name: "Eve" }).getAttribute("aria-haspopup")).toBe("dialog");
     expect(screen.getByText("kept")).toBeTruthy();
   });
 

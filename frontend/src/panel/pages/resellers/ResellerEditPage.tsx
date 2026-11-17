@@ -12,7 +12,9 @@ import { pathId, useJson, useUrlFlash } from "../../core/data";
 import { toman } from "../../core/format";
 import { PanelShell } from "../../layout/PanelShell";
 import { RiskTagChip } from "../users/RiskTagChip";
-import { Ltr, StatusChip } from "../../ui/Data";
+import type { UserIdentityData } from "../users/types";
+import { UserIdentity } from "../users/UserIdentity";
+import { StatusChip } from "../../ui/Data";
 import { SelectInput, SubmitButton } from "../../ui/Fields";
 import { GlassSection, PageHeader } from "../../ui/Page";
 import { Loadable, LoadingBlock } from "../../ui/States";
@@ -108,25 +110,27 @@ function DangerSections({ data, onSettled }: { data: ResellerEdit; onSettled: (r
   );
 }
 
-function Identity({ data }: { data: ResellerEdit }) {
+/** The same header as the user card and the user edit screen: whose account this is, before any setting. */
+export function ResellerIdentity({ data }: { data: Pick<ResellerEdit, "user" | "color_tags"> }) {
+  const { user } = data;
+  // The handle and the blocked state come from the users API; the header shows at once from what this screen has.
+  const identity = useJson<UserIdentityData>(`/api/panel/users/${user.id}/identity`).data;
+  const person = identity ?? { id: user.id, name: user.name || "نماینده", username: "", telegram_id: user.telegram_id };
+  const badges = (
+    <>
+      <StatusChip color={user.role === "reseller" ? "success" : "default"}>{roleLabel(user.role)}</StatusChip>
+      {identity ? <StatusChip color={identity.is_blocked ? "danger" : "success"}>{identity.is_blocked ? "مسدود" : "فعال"}</StatusChip> : null}
+      <RiskTagChip tag={{ key: user.color_tag as "green", title: data.color_tags.find((t) => t.key === user.color_tag)?.title ?? "" }} />
+    </>
+  );
   return (
     <GlassSection>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-2">
-          <h3 className="truncate text-lg font-bold text-foreground" dir="auto">
-            {data.user.name || "نماینده"}
-          </h3>
-          <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
-            <Ltr>{data.user.telegram_id}</Ltr>
-            <StatusChip color={data.user.role === "reseller" ? "success" : "default"}>{roleLabel(data.user.role)}</StatusChip>
-            <RiskTagChip tag={{ key: data.user.color_tag as "green", title: data.color_tags.find((t) => t.key === data.user.color_tag)?.title ?? "" }} />
-          </p>
-        </div>
-        <div className="inset-tile flex min-w-44 flex-col gap-0.5 rounded-lg px-4 py-3">
+      <UserIdentity person={person} badges={badges}>
+        <div className="inset-tile flex min-w-44 flex-col gap-0.5 self-start rounded-lg px-4 py-3">
           <span className="text-xs text-muted">کیف پول</span>
-          <strong className="num text-lg">{toman(data.user.wallet_balance)}</strong>
+          <strong className="num text-lg">{toman(user.wallet_balance)}</strong>
         </div>
-      </div>
+      </UserIdentity>
     </GlassSection>
   );
 }
@@ -167,7 +171,7 @@ function EditBody({ id }: { id: number }) {
       <Loadable state={state} rows={6}>
         {(data) => (
           <div className="flex flex-col gap-6">
-            <Identity data={data} />
+            <ResellerIdentity data={data} />
             <GlassSection title="تگ ریسک" description="چهار سطح ثابت برای نماینده — دیفالت «مطمئن». فقط کارکنان می‌بینند.">
               <ColorTagPanel userId={data.user.id} current={data.user.color_tag} tags={data.color_tags} onDone={reload} />
             </GlassSection>

@@ -79,9 +79,9 @@ describe("reason dialog", () => {
 
 describe("applications", () => {
   const rows: ApplicationRow[] = [
-    { id: 1, user_name: "a", telegram_id: 1, plan_name: "p", price: 1, status: "awaiting_approval", ops: ["approve", "reject"] },
-    { id: 2, user_name: "b", telegram_id: 2, plan_name: "p", price: 1, status: "pending_payment", ops: ["reject"] },
-    { id: 3, user_name: "c", telegram_id: 3, plan_name: "p", price: 1, status: "approved", ops: [] },
+    { id: 1, user_id: 1, user_name: "a", telegram_id: 1, plan_name: "p", price: 1, status: "awaiting_approval", ops: ["approve", "reject"] },
+    { id: 2, user_id: 2, user_name: "b", telegram_id: 2, plan_name: "p", price: 1, status: "pending_payment", ops: ["reject"] },
+    { id: 3, user_id: 3, user_name: "c", telegram_id: 3, plan_name: "p", price: 1, status: "approved", ops: [] },
   ];
 
   it("counts only the rows that accept the operation", () => {

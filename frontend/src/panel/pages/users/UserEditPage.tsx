@@ -26,34 +26,29 @@ import {
   TagSection,
   WalletSection,
 } from "./UserEditForms";
+import { ImportServiceSection } from "./UserEditImport";
 import { LedgerSection, ServicesSection } from "./UserEditServices";
+import { UserIdentity } from "./UserIdentity";
 
 function Identity({ edit }: { edit: UserEdit }) {
   const { user, wallet } = edit;
   const tone = wallet.balance > 0 ? "text-success" : wallet.balance < 0 ? "text-danger" : "text-foreground";
+  const badges = (
+    <>
+      <Chip size="sm" variant="soft" color={user.is_blocked ? "danger" : "success"}>
+        {user.is_blocked ? "مسدود" : "فعال"}
+      </Chip>
+      {user.is_demo ? (
+        <Chip size="sm" variant="soft">
+          دمو
+        </Chip>
+      ) : null}
+      <RiskTagChip tag={edit.tag} />
+    </>
+  );
   return (
     <GlassSection>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div className="flex min-w-0 flex-col gap-2">
-          <h3 className="truncate text-lg font-bold text-foreground" dir="auto">
-            {user.name === "—" ? "کاربر" : user.name}
-          </h3>
-          <p className="flex flex-wrap items-center gap-2 text-sm text-muted">
-            <bdi dir="ltr" className="num">
-              {user.telegram_id}
-            </bdi>
-            {user.username ? <bdi dir="ltr">@{user.username}</bdi> : null}
-            <Chip size="sm" variant="soft" color={user.is_blocked ? "danger" : "success"}>
-              {user.is_blocked ? "مسدود" : "فعال"}
-            </Chip>
-            {user.is_demo ? (
-              <Chip size="sm" variant="soft">
-                دمو
-              </Chip>
-            ) : null}
-            <RiskTagChip tag={edit.tag} />
-          </p>
-        </div>
+      <UserIdentity person={user} badges={badges}>
         <div className="flex flex-wrap gap-3">
           <div className="inset-tile flex min-w-44 flex-col gap-0.5 rounded-lg px-4 py-3">
             <span className="text-xs text-muted">کیف پول</span>
@@ -68,7 +63,7 @@ function Identity({ edit }: { edit: UserEdit }) {
             </strong>
           </div>
         </div>
-      </div>
+      </UserIdentity>
     </GlassSection>
   );
 }
@@ -115,6 +110,11 @@ export function EditBody({ edit, reload }: { edit: UserEdit; reload: () => void 
       </Anchor>
     ) : null,
     edit.can.pg_create ? <AssignPlanSection key="plan" {...props} /> : null,
+    edit.can.assign_existing_service ? (
+      <Anchor key="import" id="user-import-service">
+        <ImportServiceSection {...props} />
+      </Anchor>
+    ) : null,
   ].filter(Boolean);
 
   // The page arrives empty, so the browser cannot scroll to the address's #anchor itself.

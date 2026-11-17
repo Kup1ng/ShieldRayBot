@@ -313,6 +313,7 @@ class SettingsAndApplicationsTests(PanelResellersApiCase):
         self.assertEqual(statuses[2], "cancelled", "a payment that never started is released first, as before")
         first = next(row for row in body["rows"] if row["id"] == 1)
         self.assertEqual((first["user_name"], first["plan_name"], first["price"]), ("Applicant", "Fixed pack", 100_000))
+        self.assertEqual(first["user_id"], 5, "the name opens the applicant's card")
 
     async def test_applications_are_refused_to_everyone_but_the_owner_who_may_manage(self) -> None:
         for staff in (l1_staff(self.l1_a), shop_staff(3)):

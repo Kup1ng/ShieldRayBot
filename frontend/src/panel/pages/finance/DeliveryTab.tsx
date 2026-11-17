@@ -9,6 +9,7 @@ import { fa, type ChipColor } from "../../core/format";
 import { BulkBar, Ltr, RowMenu, StatusChip, type MenuAction } from "../../ui/Data";
 import { EmptyBlock, Loadable } from "../../ui/States";
 import { GlassSection } from "../../ui/Page";
+import { UserNameLink } from "../../ui/UserNameLink";
 import { availableOps, eligibleIds } from "./bulk";
 import { countText, runBulk, type BulkSpec } from "./bulkRun";
 import { faId, orderStatusLabel, paymentStatusLabel } from "./format";
@@ -215,9 +216,7 @@ function DeliveryTable({ data, refresh }: { data: DeliveryPayload; refresh: () =
                     <Ltr>#{faId(row.order_id)}</Ltr>
                   </Table.Cell>
                   <Table.Cell>
-                    <span dir="auto" className="font-medium text-foreground">
-                      {row.user_name}
-                    </span>
+                    <UserNameLink userId={row.user_id} name={row.user_name} page="finance" />
                   </Table.Cell>
                   <Table.Cell>
                     <DiagnosisCell row={row} />

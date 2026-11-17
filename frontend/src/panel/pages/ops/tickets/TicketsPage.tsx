@@ -11,6 +11,7 @@ import { PanelShell } from "../../../layout/PanelShell";
 import { BulkBar, Ltr, StatusChip } from "../../../ui/Data";
 import { GlassSection, PageHeader } from "../../../ui/Page";
 import { EmptyBlock, Loadable } from "../../../ui/States";
+import { UserNameLink } from "../../../ui/UserNameLink";
 import type { BotTicketRow, PanelTicketRow, TicketsOverview } from "../types";
 import { BotTicketDialog, NewTicketDialog, PanelTicketDialog } from "./TicketDialogs";
 import { SupportsDialog } from "./SupportsDialog";
@@ -181,13 +182,7 @@ function BotTickets({ rows, onOpen, reload }: { rows: BotTicketRow[]; onOpen: (i
                     <Ltr>{fa(row.id)}</Ltr>
                   </Table.Cell>
                   <Table.Cell>
-                    {row.user_id ? (
-                      <a href={`/users?uid=${row.user_id}`} dir="auto" className="text-accent">
-                        {row.user_label}
-                      </a>
-                    ) : (
-                      <span dir="auto">{row.user_label}</span>
-                    )}
+                    <UserNameLink userId={row.user_id} name={row.user_label} page="tickets" />
                   </Table.Cell>
                   <Table.Cell>
                     <span dir="auto">{row.subject}</span>
