@@ -188,6 +188,25 @@ class HomeWidgetsTests(ApiHarness):
         self.assertEqual([row["label"] for row in body["link_health"]["recent_failures"]], ["timeout"])
         self.assertEqual(body["periods"]["week"]["revenue"], 90000)
 
+    async def tile_states(self, **overrides) -> dict[str, dict]:
+        context = {**owner_context(), **overrides}
+        with patch("app.api.panel_home_api.home_dashboard_context", AsyncMock(return_value=("home.html", context))):
+            body = (await self.client.get("/api/panel/home/widgets")).json()
+        return {tile["id"]: tile for tile in body["tiles"]}
+
+    async def test_a_tile_not_checked_yet_is_neutral_and_never_a_red_outage(self) -> None:
+        from app.api.home_pages import _UNCHECKED_CONN, _unchecked_overview
+
+        tiles = await self.tile_states(overview=_unchecked_overview(), pg_health=dict(_UNCHECKED_CONN))
+        self.assertEqual({tile_id: tile["state"] for tile_id, tile in tiles.items()}, {"bot": "neutral", "pg": "neutral", "nodes": "neutral"})
+        self.assertEqual({tile["detail"] for tile in tiles.values()}, {"بررسی نشده"})
+
+    async def test_nodes_that_are_really_down_still_show_the_outage(self) -> None:
+        down = {"ok": False, "error": "پاسخی نیامد", "nodes": [], "total": 0, "connected": 0, "warn": 0, "error_count": 0, "overall": "err"}
+        tiles = await self.tile_states(overview={**owner_context()["overview"], "nodes": down})
+        self.assertEqual((tiles["nodes"]["state"], tiles["nodes"]["detail"]), ("err", "پاسخی نیامد"))
+        self.assertEqual(tiles["bot"]["state"], "ok")
+
     async def test_a_failed_build_serves_unchecked_tiles_never_a_false_outage(self) -> None:
         with patch("app.api.panel_home_api.home_dashboard_context", AsyncMock(side_effect=RuntimeError("boom"))):
             response = await self.client.get("/api/panel/home/widgets")
