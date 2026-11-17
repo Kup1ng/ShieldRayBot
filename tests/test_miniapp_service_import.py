@@ -18,9 +18,11 @@ from app.api.miniapp_service_import import (
 from app.db.models import (
     BotUser,
     BotUserShop,
+    Plan,
     ResellerProfile,
     ServiceImportOfferDismissal,
     ServiceImportRequest,
+    TrialClaim,
     UserService,
 )
 from app.services import service_import as si
@@ -36,6 +38,8 @@ from tests.test_service_import import PLATFORM_ADMIN, SHOP_ADMIN, FakePanel, _pa
 OFFER, DISMISS, IMPORT = "/api/mini/service-import/offer", "/api/mini/service-import/dismiss", "/api/mini/service-import"
 # Telegram ids of the customers these tests add (the fixture's customer 10 owns services everywhere).
 PLATFORM_NEWCOMER, SHOP_NEWCOMER, BOTH_NEWCOMER, OTHER_SHOP_CUSTOMER = 2020, 2021, 2022, 2023
+# The other shop's owner: opening this shop's Mini App never makes them this shop's customer.
+OTHER_SHOP_OWNER = 6006
 PLATFORM_LINK = "https://p.example/sub/tok-plat-0000001"
 PLATFORM_TOKEN = "tok-plat-0000001"
 SHOP_LINK = "https://p.example/sub/tok-shop-0000001"
@@ -97,10 +101,13 @@ class ImportRoutesCase(ShopFixture):
             headers["X-Mini-Shop"] = key
         return headers
 
-    async def offer(self, telegram_id: int, **kwargs) -> bool:
+    async def offer_body(self, telegram_id: int, **kwargs) -> dict:
         response = await self.client.get(OFFER, headers=self.headers(telegram_id, **kwargs))
         self.assertEqual(response.status_code, 200, response.text)
-        return response.json()["show"]
+        return response.json()
+
+    async def offer(self, telegram_id: int, **kwargs) -> bool:
+        return (await self.offer_body(telegram_id, **kwargs))["show"]
 
     async def dismiss(self, telegram_id: int, body: dict | None = None, **kwargs) -> httpx.Response:
         return await self.client.post(DISMISS, json=body or {}, headers=self.headers(telegram_id, **kwargs))
@@ -161,6 +168,75 @@ class OfferTests(ImportRoutesCase):
         self.assertEqual(await self.imported(), [])
 
 
+class TrialOfferTests(ImportRoutesCase):
+    """A free trial is offered beside «اتصال اشتراک قبلی», or alone, to a customer with no service."""
+
+    async def asyncSetUp(self) -> None:
+        await super().asyncSetUp()
+        async with self.Session() as session:
+            session.add_all([
+                Plan(id=900, name="تست پلتفرم", is_trial=True, is_active=True, price=0, duration_days=1),
+                Plan(id=901, name="تست فروشگاه", is_trial=True, is_active=True, price=0, duration_days=1, owner_reseller_id=SHOP),
+            ])
+            await session.commit()
+            for shop_id in (None, SHOP):
+                await set_setting(session, "trial_enabled", "1", reseller_id=shop_id)
+        clear_settings_cache()
+
+    async def test_the_trial_is_offered_beside_adding_a_previous_service(self) -> None:
+        both = {"show": True, "import_enabled": True, "trial_available": True}
+        self.assertEqual(await self.offer_body(PLATFORM_NEWCOMER), both)
+        self.assertEqual(await self.offer_body(SHOP_NEWCOMER, shop=True), both)
+
+    async def test_the_trial_alone_is_enough_while_adding_previous_services_is_off(self) -> None:
+        await self.set_import_setting("service_import_enabled", "0")
+        self.assertEqual(
+            await self.offer_body(PLATFORM_NEWCOMER), {"show": True, "import_enabled": False, "trial_available": True}
+        )
+
+    async def test_without_a_trial_the_offer_is_only_the_import(self) -> None:
+        await self.set_import_setting("trial_enabled", "0")
+        self.assertEqual(
+            await self.offer_body(PLATFORM_NEWCOMER), {"show": True, "import_enabled": True, "trial_available": False}
+        )
+        await self.set_import_setting("service_import_enabled", "0")
+        self.assertFalse(await self.offer(PLATFORM_NEWCOMER))
+
+    async def test_a_shop_offers_only_its_own_trial_plan(self) -> None:
+        async with self.Session() as session:
+            await session.merge(Plan(id=901, name="تست فروشگاه", is_trial=True, is_active=False, price=0, duration_days=1,
+                                     owner_reseller_id=SHOP))
+            await session.commit()
+        body = await self.offer_body(SHOP_NEWCOMER, shop=True)
+        self.assertFalse(body["trial_available"], "the platform's trial plan is not this shop's")
+        self.assertTrue((await self.offer_body(PLATFORM_NEWCOMER))["trial_available"])
+
+    async def test_a_customer_who_took_the_trial_there_is_not_offered_it_again(self) -> None:
+        async with self.Session() as session:
+            session.add(TrialClaim(user_id=20, shop_key="platform", telegram_id=PLATFORM_NEWCOMER))
+            await session.commit()
+        self.assertFalse((await self.offer_body(PLATFORM_NEWCOMER))["trial_available"])
+        self.assertTrue((await self.offer_body(BOTH_NEWCOMER, shop=True))["trial_available"], "another customer is unaffected")
+        async with self.Session() as session:
+            session.add(TrialClaim(user_id=22, shop_key=str(SHOP), telegram_id=BOTH_NEWCOMER))
+            await session.commit()
+        self.assertFalse((await self.offer_body(BOTH_NEWCOMER, shop=True))["trial_available"])
+        self.assertTrue((await self.offer_body(BOTH_NEWCOMER))["trial_available"], "the platform trial is a separate claim")
+
+    async def test_the_trial_needs_the_wallet_purchase_the_mini_app_starts_it_with(self) -> None:
+        await self.set_import_setting("pay_wallet_enabled", "0")
+        self.assertEqual(
+            await self.offer_body(PLATFORM_NEWCOMER), {"show": True, "import_enabled": True, "trial_available": False}
+        )
+
+    async def test_a_customer_with_a_service_or_who_declined_gets_no_trial_offer(self) -> None:
+        self.assertEqual(await self.offer_body(1010), {"show": False, "import_enabled": False, "trial_available": False})
+        self.assertEqual((await self.dismiss(PLATFORM_NEWCOMER)).status_code, 200)
+        self.assertEqual(
+            await self.offer_body(PLATFORM_NEWCOMER), {"show": False, "import_enabled": False, "trial_available": False}
+        )
+
+
 class DismissTests(ImportRoutesCase):
     async def test_dismissing_hides_the_offer_for_good_and_twice_leaves_one_row(self) -> None:
         for _ in range(2):
@@ -184,10 +260,15 @@ class DismissTests(ImportRoutesCase):
         self.assertEqual([(r.user_id, r.shop_key) for r in await self.rows(ServiceImportOfferDismissal)], [(20, 0)])
         self.assertTrue(await self.offer(SHOP_NEWCOMER, shop=True))
 
-    async def test_a_customer_of_another_shop_cannot_dismiss_in_this_shop(self) -> None:
-        response = await self.dismiss(OTHER_SHOP_CUSTOMER, shop=True)
+    async def test_someone_the_shop_would_not_admit_cannot_dismiss_in_this_shop(self) -> None:
+        response = await self.dismiss(OTHER_SHOP_OWNER, shop=True)
         self.assertEqual((response.status_code, response.json()["detail"]), (403, NOT_A_CUSTOMER))
         self.assertEqual(await self.rows(ServiceImportOfferDismissal), [])
+
+    async def test_a_customer_of_another_shop_who_opens_this_shop_dismisses_only_for_themselves_here(self) -> None:
+        # Opening the shop's Mini App joins the person to the shop, like /start in the shop's bot.
+        self.assertEqual((await self.dismiss(OTHER_SHOP_CUSTOMER, shop=True)).status_code, 200)
+        self.assertEqual([(r.user_id, r.shop_key) for r in await self.rows(ServiceImportOfferDismissal)], [(23, SHOP)])
 
     async def test_a_shop_key_that_does_not_match_the_signing_bot_is_refused(self) -> None:
         response = await self.dismiss(SHOP_NEWCOMER, shop=True, key=OTHER_KEY, token=SHOP_TOKEN)
@@ -251,11 +332,17 @@ class ImportTests(ImportRoutesCase):
         (service,) = await self.imported()
         self.assertEqual(service.bot_user_id, 20)
 
-    async def test_a_customer_of_another_shop_cannot_import_into_this_shop(self) -> None:
-        response = await self.add(OTHER_SHOP_CUSTOMER, SHOP_LINK, shop=True)
+    async def test_someone_the_shop_would_not_admit_cannot_import_into_this_shop(self) -> None:
+        response = await self.add(OTHER_SHOP_OWNER, SHOP_LINK, shop=True)
         self.assertEqual((response.status_code, response.json()["detail"]), (403, NOT_A_CUSTOMER))
         self.assertEqual(self.shop_panel.info_calls, [])
         self.assertEqual(await self.imported(), [])
+
+    async def test_a_customer_of_another_shop_who_opens_this_shop_imports_only_into_their_own_list(self) -> None:
+        response = await self.add(OTHER_SHOP_CUSTOMER, SHOP_LINK, shop=True)
+        self.assertEqual(response.status_code, 200, response.text)
+        (service,) = await self.imported()
+        self.assertEqual((service.bot_user_id, service.shop_id), (23, SHOP))
 
     async def test_a_shop_the_customer_does_not_belong_to_cannot_be_reached_through_the_body(self) -> None:
         response = await self.client.post(

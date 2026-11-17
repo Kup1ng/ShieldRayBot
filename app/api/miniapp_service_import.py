@@ -1,4 +1,4 @@
-"""Mini App «اتصال اشتراک قبلی»: the home offer, hiding it, and adding a service by its link.
+"""Mini App «اتصال اشتراک قبلی»: the home offer (with a free trial), hiding it, and adding a service by its link.
 
 Thin routes over ``app.services.service_import`` (every ownership, scope and rate-limit check)
 and ``service_import_offer``. The customer comes from initData and the shop from the verified
@@ -32,7 +32,7 @@ from app.services.service_import import (
 )
 from app.services.service_import_config import read_settings
 from app.services.service_import_notify import announce_import_result
-from app.services.service_import_offer import dismiss_offer, home_offer_visible
+from app.services.service_import_offer import dismiss_offer, home_offer
 
 logger = logging.getLogger(__name__)
 
@@ -92,8 +92,8 @@ def register_miniapp_service_import(app: FastAPI, *, get_db) -> None:
         user = await load_mini_user(session, request)
         _require_commerce(user)
         ui = await _scope_ui(session, request)
-        show = await home_offer_visible(session, user_id=int(user.id), shop_id=mini_scope(request).shop_id, ui=ui)
-        return _no_store({"show": show})
+        offer = await home_offer(session, user_id=int(user.id), shop_id=mini_scope(request).shop_id, ui=ui)
+        return _no_store({"show": offer.show, "import_enabled": offer.import_enabled, "trial_available": offer.trial_available})
 
     @app.post("/api/mini/service-import/dismiss")
     async def mini_import_dismiss(request: Request, session: AsyncSession = Depends(get_db)):
