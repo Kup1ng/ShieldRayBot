@@ -156,7 +156,7 @@ def admin_row(admin: dict[str, Any], status: dict[str, Any] | None, usage: dict[
     }
 
 
-async def _prepare(session: AsyncSession) -> None:
+async def _prepare(session: AsyncSession, staff: dict) -> None:
     """Housekeeping the page has always done on load; a failure must not hide the list."""
     try:
         # The «current capacity» plan must exist before the grant forms list plans.
@@ -166,8 +166,8 @@ async def _prepare(session: AsyncSession) -> None:
         logger.exception("ensure current_capacity plan failed on the admins page")
         await rollback_quiet(session)
     try:
-        # Drop web rows of admins that no longer exist in PasarGuard.
-        await purge_orphaned_staff_access(session)
+        # Drop web rows of admins that no longer exist in PasarGuard; only an owner's list is complete proof.
+        await purge_orphaned_staff_access(session, sees_every_admin=bool(staff.get("pg_is_owner")))
     except Exception:
         logger.warning("purging orphaned staff access failed on the admins page", exc_info=True)
         await rollback_quiet(session)
@@ -183,7 +183,7 @@ async def admins_payload(session: AsyncSession, staff: dict) -> dict[str, Any]:
         "error": None,
     }
     try:
-        await _prepare(session)
+        await _prepare(session, staff)
         pg = get_pg()
         admins = await pg.get_admins() or await pg.get_admins_simple()
         admins = [a for a in admins if isinstance(a, dict)][:MAX_ADMINS]

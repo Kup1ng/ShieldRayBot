@@ -35,6 +35,19 @@ NODE_GRANTS = {"nodes": {"reconnect": True, "create": False, "update": True, "de
 OWNER = {"role": "admin", "username": "root", "pg_is_owner": True, "pg_permissions": PAGES, "pg_actions": NODE_GRANTS}
 SHOP_A = {"role": "reseller", "bot_user_id": 2, "pg_admin_username": "shop_a", "pg_permissions": ["pg_overview", "pg_nodes"], "pg_actions": {}}
 SHOP_B = {**SHOP_A, "bot_user_id": 3, "pg_admin_username": "shop_b"}
+# The web owner whose PasarGuard account is not an owner and cannot read admins.
+WEB_OWNER = {
+    "role": "admin",
+    "username": "root",
+    "web_owner": True,
+    "org_principal_id": 1,
+    "org_depth": 0,
+    "org_parent_id": None,
+    "org_status": "active",
+    "pg_capabilities_ok": True,
+    "pg_is_owner": False,
+    "pg_permissions": ["pg_overview", "pg_nodes"],
+}
 NO_PAGES = {"role": "reseller", "bot_user_id": 4, "pg_admin_username": "shop_c", "pg_permissions": []}
 
 
@@ -495,6 +508,17 @@ class AdminsTests(InfraCase):
 
         names = set((await self.session.scalars(select(PgStaffAccess.pg_username))).all())
         self.assertEqual(names, {"sam"})
+
+    async def test_a_role_that_only_reads_admins_never_drops_web_rows_it_cannot_see(self) -> None:
+        # Its list may be scoped, so a missing admin is not proof that the admin left the panel.
+        self.session.add(PgStaffAccess(pg_username="hidden", web_username="hidden", web_password_hash=HASH_SECRET, is_active=True))
+        await self.session.commit()
+        reader = {**WEB_OWNER, "pg_permissions": ["pg_overview", "pg_admins"]}
+        self.assertEqual((await self.get(reader, "/api/panel/pg/admins")).status_code, 200)
+        from sqlalchemy import select
+
+        names = set((await self.session.scalars(select(PgStaffAccess.pg_username))).all())
+        self.assertEqual(names, {"sam", "hidden"})
 
     async def test_a_failing_panel_shows_a_safe_message_and_an_empty_list(self) -> None:
         self.pg.get_admins = AsyncMock(side_effect=RuntimeError("Traceback password=hunter2"))
