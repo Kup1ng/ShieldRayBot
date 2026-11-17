@@ -18,6 +18,7 @@ from app.services.host_gauges import gauges_from_pg_system_stats, gauges_json
 from app.services.node_traffic import build_nodes_overview, nodes_overview_json
 from app.services.panel_home_payload import pg_limits_payload
 from app.services.pasarguard import get_pg
+from app.services.pg_access import admins_page_hint
 from app.services.pg_overview import build_reseller_pg_overview
 from app.services.pg_overview_view import overview_view, owner_user_counts
 from app.services.pg_panel_errors import safe_persian_text
@@ -35,6 +36,12 @@ EMPTY_COUNTS = {"admins": 0, "groups": 0, "hosts": 0, "nodes": 0, "users": 0}
 def is_pg_owner(staff: dict) -> bool:
     """The true PasarGuard owner (hybrid account), not merely the web Owner session."""
     return bool(staff.get("pg_is_owner"))
+
+
+def admins_hint(staff: dict) -> dict[str, str] | None:
+    """Why the web owner does not get «ادمین‌ها», for the banner on the overview (None for everyone else)."""
+    hint = admins_page_hint(staff)
+    return asdict(hint) if hint else None
 
 
 def _list_len(value: Any) -> int:

@@ -66,7 +66,7 @@ function WebAccessCell({ admin }: { admin: AdminRow }) {
 }
 
 function RoleCell({ admin }: { admin: AdminRow }) {
-  const parts = [admin.role_name, admin.is_sudo ? "دسترسی کامل" : "", admin.status].filter(Boolean);
+  const parts = [admin.role_name, admin.is_sudo ? "دسترسی کامل" : "", admin.status_label].filter(Boolean);
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
       <span dir="auto" className="text-muted">

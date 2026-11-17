@@ -87,6 +87,7 @@ def register_panel_pg_infra_api(
                 "external_url": external_url or None,
                 "ticket_alert": await _ticket_alert(request, staff, session),
                 "remediation": await _remediation(session, staff),
+                "admins_hint": pg_overview_panel.admins_hint(staff),
             }
         )
 

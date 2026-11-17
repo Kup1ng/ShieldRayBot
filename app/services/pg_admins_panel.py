@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.models import ResellerPlan
 from app.services.db_safe import rollback_quiet
+from app.services.formatting import pg_user_status_fa
 from app.services.pasarguard import get_pg
 from app.services.pg_overview import admin_usage_snapshot
 from app.services.pg_panel_errors import safe_pg_error
@@ -148,6 +149,8 @@ def admin_row(admin: dict[str, Any], status: dict[str, Any] | None, usage: dict[
         "role_name": str(role.get("name") or ""),
         "is_sudo": bool(admin.get("is_sudo")),
         "status": str(admin.get("status") or ""),
+        # `status` stays the panel's own word; the Persian label is what the table shows.
+        "status_label": pg_user_status_fa(admin.get("status")) if admin.get("status") else "",
         "note": str(admin.get("note") or ""),
         "users_text": usage.get("users_text") or "—",
         "traffic_text": usage.get("traffic_text") or "—",

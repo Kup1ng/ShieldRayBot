@@ -210,7 +210,7 @@ function web(patch: Partial<WebAccess>): WebAccess {
 }
 
 function admin(patch: Partial<AdminRow>): AdminRow {
-  return { id: 1, username: "eve", role_name: "فروش", is_sudo: false, status: "active", note: "", users_text: "۳/۱۰", traffic_text: "۱ / ۱۰ گیگ", lifetime_text: null, web: web({}), ...patch };
+  return { id: 1, username: "eve", role_name: "فروش", is_sudo: false, status: "active", status_label: "فعال", note: "", users_text: "۳/۱۰", traffic_text: "۱ / ۱۰ گیگ", lifetime_text: null, web: web({}), ...patch };
 }
 
 const CAPACITY: AdminsData["plans"]["grant"][number] = { id: 9, name: "ظرفیت فعلی", plan_kind: "current_capacity", billing_mode: "fixed", price_per_gb: 0, duration_days: 0 };
@@ -233,6 +233,13 @@ function admins(rows: AdminRow[], patch: Partial<AdminsData> = {}): AdminsData {
 }
 
 describe("admins page", () => {
+  it("shows the admin's status in Persian next to the role, never the panel's English word", async () => {
+    answer({ "/api/panel/pg/admins": admins([admin({ id: 2, username: "eve", role_name: "فروش", status: "limited", status_label: "محدود" })]) });
+    mount(<AdminsContent />);
+    expect(await screen.findByText("فروش · محدود")).toBeTruthy();
+    expect(screen.queryByText(/limited/)).toBeNull();
+  });
+
   it("gives the owner row no actions and the others the actions of how they reach the web panel", async () => {
     answer({
       "/api/panel/pg/admins": admins([
@@ -359,7 +366,7 @@ describe("admins page", () => {
 
 /* ---------- overview ---------- */
 
-const SHELL: OverviewShell = { owner: true, external_url: "https://pg.example.test", ticket_alert: null, remediation: null };
+const SHELL: OverviewShell = { owner: true, external_url: "https://pg.example.test", ticket_alert: null, remediation: null, admins_hint: null };
 
 const OWNER: OwnerWidgets = {
   owner: true,
@@ -454,12 +461,35 @@ describe("overview page", () => {
 
   it("shows the ticket alert and the credential reminder of a secondary admin", async () => {
     answer({
-      "/api/panel/pg": { owner: false, external_url: null, ticket_alert: { title: "یک تیکت خوانده‌نشده", detail: "پاسخ جدید", href: "/tickets" }, remediation: { username_aligned: true, credentials_ready: false, can_self_serve: true } },
+      "/api/panel/pg": { owner: false, external_url: null, ticket_alert: { title: "یک تیکت خوانده‌نشده", detail: "پاسخ جدید", href: "/tickets" }, remediation: { username_aligned: true, credentials_ready: false, can_self_serve: true }, admins_hint: null },
       "/api/panel/pg/widgets": SHOP,
     });
     mount(<OverviewContent />);
     expect(await screen.findByText("یک تیکت خوانده‌نشده")).toBeTruthy();
     expect(screen.getByText("اعتبارنامه پاسارگارد ذخیره نشده")).toBeTruthy();
     expect(screen.getByRole("button", { name: "تغییر رمز" })).toBeTruthy();
+  });
+
+  it("tells the web owner why «ادمین‌ها» is missing and where to fix the connection", async () => {
+    const assign = vi.fn();
+    vi.stubGlobal("location", { ...window.location, assign });
+    answer({
+      "/api/panel/pg": { ...SHELL, admins_hint: { title: "منوی «ادمین‌ها» نمایش داده نمی‌شود", detail: "نقش این حساب خواندن ادمین‌ها را ندارد.", href: "/settings?tab=bot" } },
+      "/api/panel/pg/widgets": OWNER,
+    });
+    mount(<OverviewContent />);
+    expect(await screen.findByText("منوی «ادمین‌ها» نمایش داده نمی‌شود")).toBeTruthy();
+    expect(screen.getByText("نقش این حساب خواندن ادمین‌ها را ندارد.")).toBeTruthy();
+    await userEvent.setup().click(screen.getByRole("button", { name: "اتصال پاسارگارد" }));
+    expect(assign).toHaveBeenCalledWith("/settings?tab=bot");
+    vi.unstubAllGlobals();
+  });
+
+  it("shows no admins banner when the menu is there", async () => {
+    answer({ "/api/panel/pg": SHELL, "/api/panel/pg/widgets": OWNER });
+    mount(<OverviewContent />);
+    await screen.findByText("سرور پاسارگارد");
+    expect(screen.queryByText("منوی «ادمین‌ها» نمایش داده نمی‌شود")).toBeNull();
+    expect(screen.queryByRole("button", { name: "اتصال پاسارگارد" })).toBeNull();
   });
 });

@@ -39,6 +39,21 @@ function RemediationBanner({ remediation }: { remediation: NonNullable<OverviewS
   );
 }
 
+function AdminsHintBanner({ hint }: { hint: NonNullable<OverviewShell["admins_hint"]> }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <Notice tone="warning" title={hint.title}>
+        {hint.detail}
+      </Notice>
+      <div>
+        <Button size="sm" variant="outline" onPress={() => window.location.assign(hint.href)}>
+          اتصال پاسارگارد
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function Banners({ shell }: { shell: OverviewShell }) {
   return (
     <>
@@ -55,6 +70,7 @@ function Banners({ shell }: { shell: OverviewShell }) {
         </div>
       ) : null}
       {shell.remediation ? <RemediationBanner remediation={shell.remediation} /> : null}
+      {shell.admins_hint ? <AdminsHintBanner hint={shell.admins_hint} /> : null}
     </>
   );
 }
