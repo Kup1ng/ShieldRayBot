@@ -10,6 +10,7 @@ import httpx
 from fastapi import FastAPI
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.api.miniapp_feeds import catalog_plans_payload
 from app.api.miniapp_renewal import register_miniapp_renewal
 from app.db.models import Base, BotUser, Plan, PlanCategory, UserService
 from tests.pgtest import pg_engine
@@ -110,6 +111,24 @@ class RenewalOptionsTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((await self.options(73)).status_code, 404, "a shop's service is not renewed from the platform")
         self.scope = SimpleNamespace(shop_id=SHOP)
         self.assertEqual((await self.options(70)).status_code, 404, "a platform service is not renewed from a shop")
+
+    async def test_category_and_plan_descriptions_reach_the_renewal_choices_as_text(self) -> None:
+        text = "ویژهٔ <b>کاربران</b>\nپشتیبانی کامل"
+        (await self.session.get(PlanCategory, 10)).description = text
+        (await self.session.get(Plan, 1)).description = "پلن اصلی"
+        await self.session.commit()
+        data = (await self.options(70)).json()
+        category = data["categories"][0]
+        self.assertEqual(category["description"], text)
+        self.assertEqual([p["description"] for p in category["plans"]], ["پلن اصلی", ""])
+        self.assertEqual(data["current"]["description"], "پلن اصلی")
+        self.assertEqual(data["other"][0]["description"], "")
+
+    async def test_the_shop_catalog_lists_each_plans_description(self) -> None:
+        (await self.session.get(Plan, 1)).description = "مناسب استفادهٔ روزانه"
+        await self.session.commit()
+        by_id = {p["id"]: p for p in (await catalog_plans_payload(self.session))["plans"]}
+        self.assertEqual((by_id[1]["description"], by_id[2]["description"]), ("مناسب استفادهٔ روزانه", ""))
 
     async def test_a_linked_service_is_refused(self) -> None:
         response = await self.options(72)
