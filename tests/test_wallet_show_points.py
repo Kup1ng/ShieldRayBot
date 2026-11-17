@@ -82,7 +82,7 @@ class WalletHubLoyaltyShortcutTests(unittest.TestCase):
 
 
 class WalletHomeShopSettingsParityTests(unittest.IsolatedAsyncioTestCase):
-    """Text line and club button must share one shop-scoped settings source."""
+    """The points line follows the shop's own settings; the hub has no club button (the club is in the main menu)."""
 
     async def asyncSetUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
@@ -123,7 +123,7 @@ class WalletHomeShopSettingsParityTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("امتیاز", text)
         self.assertNotIn("nv:loy:home", callbacks)
 
-    async def test_platform_off_shop_on_shows_points_and_club(self) -> None:
+    async def test_platform_off_shop_on_shows_points_without_a_club_button(self) -> None:
         async with self.Session() as session:
             await set_setting(session, "loyalty_enabled", "0", reseller_id=None)
             await set_setting(session, "loyalty_enabled", "1", reseller_id=3)
@@ -143,7 +143,7 @@ class WalletHomeShopSettingsParityTests(unittest.IsolatedAsyncioTestCase):
         text, callbacks = await self._home()
         self.assertIn("امتیاز", text)
         self.assertIn(format_number(88), text)
-        self.assertIn("nv:loy:home", callbacks)
+        self.assertNotIn("nv:loy:home", callbacks)
 
 
 class MiniappCustomerSummaryPointsTests(unittest.IsolatedAsyncioTestCase):
