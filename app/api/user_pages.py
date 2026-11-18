@@ -26,6 +26,7 @@ from app.services.shop_scope import (
     ShopScopeError,
     resolve_shop_scope_id,
 )
+from app.services.user_card import DEFAULT_CARD_PAGE, USER_CARD_PAGES
 from app.services.user_photo import photo_bot, user_photo
 
 
@@ -67,8 +68,12 @@ def _redirect_list_form(
 ):
     from app.services.users_ops import users_list_href
 
-    fk, q = _list_return_from_form(form)
-    href = users_list_href(filter_key=fk, uid=uid, q=q)
+    return_page = str(form.get("return_page") or "")
+    if return_page in USER_CARD_PAGES and return_page != DEFAULT_CARD_PAGE:
+        href = USER_CARD_PAGES[return_page]
+    else:
+        fk, q = _list_return_from_form(form)
+        href = users_list_href(filter_key=fk, uid=uid, q=q)
     bits = []
     if err:
         bits.append(f"err={_q(err)}")

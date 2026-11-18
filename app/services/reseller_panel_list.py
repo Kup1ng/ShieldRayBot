@@ -344,6 +344,8 @@ def _application_row(application: ResellerApplication) -> dict[str, Any]:
     user, plan = application.user, application.plan
     return {
         "id": int(application.id),
+        # The applicant's name opens their user card in place (the owner reviews applications).
+        "user_id": int(user.id) if user else None,
         "user_name": (user.full_name or user.username or "") if user else "",
         "telegram_id": user.telegram_id if user else None,
         "plan_name": plan.name if plan else "",

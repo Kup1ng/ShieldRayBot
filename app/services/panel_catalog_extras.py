@@ -6,6 +6,7 @@ scope helpers used here (``discount_scope``, ``gift_code_scope``) decide whose r
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,6 +16,7 @@ from app.services.catalog_discounts import MODES, SCOPES, discount_dashboard, ne
 from app.services.gift_codes import (
     GIFT_CODE_LIST_LIMIT,
     MAX_AMOUNT,
+    MAX_EXPIRY_DAYS,
     MAX_USES,
     PURCHASE_TYPES,
     code_plan_ids,
@@ -77,8 +79,8 @@ async def discounts_payload(session: AsyncSession, staff: dict, *, before: int |
     }
 
 
-def serialize_gift_code(code: ChargeCode) -> dict[str, Any]:
-    detail = describe_code(code)
+def serialize_gift_code(code: ChargeCode, plan_names: Mapping[int, str] | None = None) -> dict[str, Any]:
+    detail = describe_code(code, plan_names)
     return {
         "id": code.id,
         "code": code.code,
@@ -95,8 +97,9 @@ def serialize_gift_code(code: ChargeCode) -> dict[str, Any]:
         "note": code.note or "",
         "is_active": bool(code.is_active),
         "state": detail["state"],
-        "expiry_input": detail["expiry_input"],
+        "expiry_days": detail["expiry_days"],
         "expiry_label": detail["expiry_label"],
+        "plans_label": detail["plans_label"],
         "plan_ids": sorted(code_plan_ids(code)),
     }
 
@@ -107,11 +110,17 @@ async def gift_codes_payload(session: AsyncSession, staff: dict) -> dict[str, An
     codes = await list_gift_codes(session, shop_id=shop_id)
     # The plans a code may be limited to: this shop's own, never another shop's.
     plans = await gift_code_plan_options(session, shop_id=shop_id)
+    plan_names = {plan_id: name for plan_id, name, _active in plans}
     return {
-        "codes": [serialize_gift_code(c) for c in codes],
+        "codes": [serialize_gift_code(c, plan_names) for c in codes],
         "plans": [{"id": plan_id, "name": name, "active": active} for plan_id, name, active in plans],
         "purchase_types": _options(PURCHASE_TYPES),
-        "limits": {"max_amount": MAX_AMOUNT, "max_uses": MAX_USES, "list_limit": GIFT_CODE_LIST_LIMIT},
+        "limits": {
+            "max_amount": MAX_AMOUNT,
+            "max_uses": MAX_USES,
+            "max_expiry_days": MAX_EXPIRY_DAYS,
+            "list_limit": GIFT_CODE_LIST_LIMIT,
+        },
         "tabs": marketing_tabs(staff, "gift_codes"),
     }
 

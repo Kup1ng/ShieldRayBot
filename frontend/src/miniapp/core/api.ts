@@ -51,6 +51,26 @@ export function onAuthLost(handler: ((err: ApiError) => void) | null): void {
   authLostHandler = handler;
 }
 
+/**
+ * Steps the person finishes inside the Mini App (referral code, required channels, terms);
+ * the server names them in `X-Mini-Error` with a 403 (app/services/miniapp_auth.py).
+ */
+export const GATE_CODES: ReadonlySet<string> = new Set(["referral_required", "force_join", "terms"]);
+/** An approval an admin still has to give, and a block: refusals with a screen of their own. */
+export const ENTRY_PENDING = "entry_pending";
+export const BLOCKED = "blocked";
+
+export function isGateError(err: unknown): err is ApiError {
+  return err instanceof ApiError && err.status === 403 && GATE_CODES.has(err.code);
+}
+
+let gateHandler: ((err: ApiError) => void) | null = null;
+
+/** Called whenever the server holds the person at an onboarding step (e.g. they left a required channel). */
+export function onGate(handler: ((err: ApiError) => void) | null): void {
+  gateHandler = handler;
+}
+
 export type ApiOptions = {
   method?: "GET" | "POST" | "PUT" | "DELETE";
   /** Sent as JSON. */
@@ -106,6 +126,7 @@ export async function api<T = unknown>(path: string, options: ApiOptions = {}): 
   if (!res.ok) {
     const err = new ApiError(errorText(data, res.status), res.status, errorCode(res));
     if (res.status === 401 && authLostHandler) authLostHandler(err);
+    if (isGateError(err) && gateHandler) gateHandler(err);
     throw err;
   }
   return data as T;

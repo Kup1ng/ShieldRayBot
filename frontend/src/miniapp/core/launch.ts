@@ -26,6 +26,14 @@ export function initDataFromHash(hash: string | null | undefined): string {
   }
 }
 
+// Telegram adds tgWebAppVersion, tgWebAppPlatform… to the address of every Mini App it opens.
+const TELEGRAM_PARAM = /(?:^|[#&?])tgWebApp[A-Za-z]+=/;
+
+/** True when Telegram's launch parameters are in this address (a browser visit has none). */
+export function openedByTelegram(hash: string | null | undefined): boolean {
+  return TELEGRAM_PARAM.test(String(hash || ""));
+}
+
 let captured: string | null = null;
 
 /** The launch initData, read once: the boot-time stash first, then the live address. */
@@ -34,6 +42,22 @@ export function launchInitData(): string {
   if (typeof window === "undefined") return "";
   captured = initDataFromHash(window.__SR_LAUNCH_HASH__) || initDataFromHash(window.location.hash);
   return captured;
+}
+
+/** True when this page was launched by Telegram: its parameters are in the boot-time stash or the live address. */
+export function launchedByTelegram(): boolean {
+  if (typeof window === "undefined") return false;
+  return openedByTelegram(window.__SR_LAUNCH_HASH__) || openedByTelegram(window.location.hash);
+}
+
+const BOT_USERNAME = /^[A-Za-z][A-Za-z0-9_]{3,31}$/;
+const BOT_META = 'meta[name="pg-mini-bot"]';
+
+/** The username of this Mini App's bot, as the server wrote it into the page ("" when it did not say). */
+export function botUsername(): string {
+  if (typeof document === "undefined") return "";
+  const value = document.querySelector(BOT_META)?.getAttribute("content") ?? "";
+  return BOT_USERNAME.test(value) ? value : "";
 }
 
 // A shop's Mini App lives at /miniapp/s/<key>/; the key names the shop, and the server still

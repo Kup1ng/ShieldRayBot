@@ -8,7 +8,8 @@ import { ResellerPlanForm, type ResellerKind } from "./ResellerPlanForm";
 import type { PlansOverview } from "./types";
 
 export type Audience = "users" | "resellers";
-export type PlanDialogState = { audience: Audience; kind: string } | null;
+/** `category` starts the fixed-plan form inside that category («پلن در این دسته»). */
+export type PlanDialogState = { audience: Audience; kind: string; category?: string } | null;
 
 const USER_KINDS = [
   { id: "fixed", label: "ثابت" },
@@ -26,11 +27,11 @@ const RESELLER_KINDS = [
 ];
 
 /** The unified «افزودن پلن» dialog: audience and kind decide the form, each posts its own handler. */
-export function PlanDialog({ data, state, onChange, onClose, onDone }: { data: PlansOverview; state: PlanDialogState; onChange: (next: PlanDialogState) => void; onClose: () => void; onDone: (result: ActionResult) => void }) {
+export function PlanDialog({ data, state, onChange, onClose, onDone, onCategoryAdded }: { data: PlansOverview; state: PlanDialogState; onChange: (next: PlanDialogState) => void; onClose: () => void; onDone: (result: ActionResult) => void; onCategoryAdded?: () => void }) {
   if (!state) return null;
   const kinds = state.audience === "resellers" ? RESELLER_KINDS : USER_KINDS;
   const kind = kinds.some((k) => k.id === state.kind) ? state.kind : kinds[0].id;
-  const common = { data, onDone, onCancel: onClose };
+  const common = { data, onDone, onCancel: onClose, onCategoryAdded };
   const resellerCategories = data.categories.filter((c) => c.is_active && c.audience === "resellers");
 
   let form: React.ReactNode;
@@ -56,7 +57,7 @@ export function PlanDialog({ data, state, onChange, onClose, onDone }: { data: P
   else if (kind === "custom") form = <CustomForm {...common} />;
   else if (kind === "wholesale") form = <WholesaleForm {...common} />;
   else if (kind === "addon_volume" || kind === "addon_duration") form = <AddonPackCreateForm key={kind} {...common} kind={kind === "addon_duration" ? "duration" : "volume"} />;
-  else form = <FixedPlanForm {...common} />;
+  else form = <FixedPlanForm {...common} initialCategory={state.category} />;
 
   return (
     <FormModal isOpen onOpenChange={(open) => !open && onClose()} title="افزودن پلن" description="پلن فروشگاه یا نمایندگی را اینجا بسازید" size="lg">

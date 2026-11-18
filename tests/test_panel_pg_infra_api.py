@@ -21,6 +21,7 @@ from app.api.panel_pg_infra_api import register_panel_pg_infra_api
 from app.db.models import Base, BotUser, PgStaffAccess, ResellerPlan, ResellerProfile
 from app.services import pg_admins_panel, pg_nodes_panel, pg_overview_panel
 from app.services.pasarguard import PasarGuardError
+from app.services.pg_access import ADMINS_PAGE_HINT_API_KEY, ADMINS_PAGE_HINT_ROLE
 from app.services.pg_panel_errors import safe_persian_text, safe_pg_error
 from app.services.pg_read import PgReadDenied
 from tests.pgtest import pg_engine
@@ -35,6 +36,19 @@ NODE_GRANTS = {"nodes": {"reconnect": True, "create": False, "update": True, "de
 OWNER = {"role": "admin", "username": "root", "pg_is_owner": True, "pg_permissions": PAGES, "pg_actions": NODE_GRANTS}
 SHOP_A = {"role": "reseller", "bot_user_id": 2, "pg_admin_username": "shop_a", "pg_permissions": ["pg_overview", "pg_nodes"], "pg_actions": {}}
 SHOP_B = {**SHOP_A, "bot_user_id": 3, "pg_admin_username": "shop_b"}
+# The web owner whose PasarGuard account is not an owner and cannot read admins.
+WEB_OWNER = {
+    "role": "admin",
+    "username": "root",
+    "web_owner": True,
+    "org_principal_id": 1,
+    "org_depth": 0,
+    "org_parent_id": None,
+    "org_status": "active",
+    "pg_capabilities_ok": True,
+    "pg_is_owner": False,
+    "pg_permissions": ["pg_overview", "pg_nodes"],
+}
 NO_PAGES = {"role": "reseller", "bot_user_id": 4, "pg_admin_username": "shop_c", "pg_permissions": []}
 
 
@@ -294,7 +308,7 @@ class InboundsTests(InfraCase):
 class OverviewTests(InfraCase):
     async def test_the_shell_is_local_data_only_and_carries_no_figures(self) -> None:
         body = (await self.get(OWNER, "/api/panel/pg")).json()
-        self.assertEqual(body, {"owner": True, "external_url": "https://panel.example", "ticket_alert": None, "remediation": None})
+        self.assertEqual(body, {"owner": True, "external_url": "https://panel.example", "ticket_alert": None, "remediation": None, "admins_hint": None})
         self.pg.get_system_stats.assert_not_awaited()
 
     async def test_the_shell_shows_a_shop_its_ticket_alert(self) -> None:
@@ -313,6 +327,27 @@ class OverviewTests(InfraCase):
         response = await self.get(staff, "/api/panel/pg")
         self.assertEqual(response.json()["remediation"], {"username_aligned": True, "credentials_ready": False, "can_self_serve": True})
         self.assertNotIn(HASH_SECRET, response.text)
+
+    async def test_the_web_owner_is_told_why_the_admins_menu_is_missing(self) -> None:
+        owner = {**WEB_OWNER, "pg_auth_method": "api_key"}
+        hint = (await self.get(owner, "/api/panel/pg")).json()["admins_hint"]
+        self.assertEqual(set(hint), {"title", "detail", "href"})
+        self.assertEqual(hint["detail"], ADMINS_PAGE_HINT_API_KEY)
+        self.assertEqual(hint["href"], "/settings?tab=bot")
+        by_password = (await self.get({**WEB_OWNER, "pg_auth_method": "password"}, "/api/panel/pg")).json()["admins_hint"]
+        self.assertEqual(by_password["detail"], ADMINS_PAGE_HINT_ROLE)
+
+    async def test_no_admins_hint_when_the_menu_is_there_or_for_anyone_but_the_web_owner(self) -> None:
+        cases = {
+            "page granted": {**WEB_OWNER, "pg_permissions": ["pg_overview", "pg_admins"]},
+            "pg owner": {**WEB_OWNER, "pg_is_owner": True},
+            "probe failed": {**WEB_OWNER, "pg_capabilities_ok": False},
+            "a shop": SHOP_A,
+            "pg staff": {"role": "pg_staff", "username": "sam", "pg_admin_username": "sam", "pg_capabilities_ok": True, "pg_permissions": ["pg_overview"]},
+        }
+        for name, staff in cases.items():
+            with self.subTest(name):
+                self.assertIsNone((await self.get(staff, "/api/panel/pg")).json()["admins_hint"])
 
     async def test_the_owner_sees_the_panel_wide_figures(self) -> None:
         body = (await self.get(OWNER, "/api/panel/pg/widgets")).json()
@@ -429,6 +464,8 @@ class AdminsTests(InfraCase):
             self.assertNotIn(secret, response.text)
         by_name = {a["username"]: a for a in response.json()["admins"]}
         self.assertEqual(set(by_name), {"root", "Sam", "rex", "eve"})
+        self.assertEqual((by_name["root"]["status"], by_name["root"]["status_label"]), ("active", "فعال"))
+        self.assertEqual((by_name["rex"]["status"], by_name["rex"]["status_label"]), ("", ""))
         self.assertEqual(by_name["root"]["web"]["source"], "owner")
         self.assertEqual(by_name["Sam"]["web"]["source"], "pg_staff")
         self.assertEqual(by_name["Sam"]["web"]["note"], "staff note")
@@ -495,6 +532,17 @@ class AdminsTests(InfraCase):
 
         names = set((await self.session.scalars(select(PgStaffAccess.pg_username))).all())
         self.assertEqual(names, {"sam"})
+
+    async def test_a_role_that_only_reads_admins_never_drops_web_rows_it_cannot_see(self) -> None:
+        # Its list may be scoped, so a missing admin is not proof that the admin left the panel.
+        self.session.add(PgStaffAccess(pg_username="hidden", web_username="hidden", web_password_hash=HASH_SECRET, is_active=True))
+        await self.session.commit()
+        reader = {**WEB_OWNER, "pg_permissions": ["pg_overview", "pg_admins"]}
+        self.assertEqual((await self.get(reader, "/api/panel/pg/admins")).status_code, 200)
+        from sqlalchemy import select
+
+        names = set((await self.session.scalars(select(PgStaffAccess.pg_username))).all())
+        self.assertEqual(names, {"sam", "hidden"})
 
     async def test_a_failing_panel_shows_a_safe_message_and_an_empty_list(self) -> None:
         self.pg.get_admins = AsyncMock(side_effect=RuntimeError("Traceback password=hunter2"))

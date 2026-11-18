@@ -71,7 +71,9 @@ function Overview({ extra, webhook, previewUrl }: { extra: BotExtra; webhook: bo
             <span className="text-xs text-muted">{webhook ? <>Webhook{previewUrl ? <> · <Ltr>{previewUrl}</Ltr></> : null}</> : "Long Polling"}</span>
           </span>
           <Chip size="sm" color={webhook ? "success" : "accent"} variant="soft">
-            <Chip.Label>{webhook ? "Webhook" : "Polling"}</Chip.Label>
+            <Chip.Label>
+              <bdi dir="ltr">{webhook ? "Webhook" : "Polling"}</bdi>
+            </Chip.Label>
           </Chip>
         </div>
       </div>

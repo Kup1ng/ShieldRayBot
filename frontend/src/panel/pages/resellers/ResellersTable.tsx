@@ -4,6 +4,7 @@ import { Checkbox, Chip, Table, type Selection } from "@heroui/react";
 
 import { fa } from "../../core/format";
 import { Ltr, RowMenu, StatusChip, type MenuAction } from "../../ui/Data";
+import { UserNameLink } from "../../ui/UserNameLink";
 import { roleLabel, SETUP_LABELS, STATUS_LABELS, isPayg } from "./labels";
 import { RiskTagChip } from "../users/RiskTagChip";
 import type { ResellerRow } from "./types";
@@ -32,15 +33,7 @@ function NameCell({ row, ownerView }: { row: ResellerRow; ownerView: boolean }) 
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        {ownerView ? (
-          <a href={`/resellers/${row.user_id}/edit`} dir="auto" className="font-medium text-foreground underline-offset-2 hover:underline focus-visible:underline">
-            {name}
-          </a>
-        ) : (
-          <span dir="auto" className="font-medium text-foreground">
-            {name}
-          </span>
-        )}
+        <UserNameLink userId={ownerView ? row.user_id : null} name={name} page="resellers" />
         <span className="text-xs text-muted md:hidden">
           (<Ltr>{row.telegram_id}</Ltr>)
         </span>

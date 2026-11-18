@@ -17,7 +17,7 @@ vi.mock("../../core/session", () => ({
 vi.mock("../../layout/PanelShell", () => ({ PanelShell: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 
 import { ShopSettingsPage } from "./ShopSettingsPage";
-import type { MiniappExtra, NotificationsExtra, ShopSettings } from "./types";
+import type { MainAppGuide, MiniappExtra, NotificationsExtra, ShopSettings } from "./types";
 
 beforeEach(() => get.mockReset());
 afterEach(() => {
@@ -38,7 +38,7 @@ function mount() {
   );
 }
 
-const MINIAPP: MiniappExtra = { available: true, blocker: "", on: true, url: "https://panel.example/miniapp/s/key1/", accent: "", notice: "", presets: [] };
+const MINIAPP: MiniappExtra = { available: true, blocker: "", on: true, url: "https://panel.example/miniapp/s/key1/", accent: "", notice: "", presets: [], main_app: null };
 
 describe("shop Mini App tab", () => {
   it("shows the switch and the shop's address while the Mini App is on", async () => {
@@ -65,6 +65,30 @@ describe("shop Mini App tab", () => {
     expect(await screen.findByText(hostile)).toBeTruthy();
     expect(screen.queryByText("مینی‌اپ فروشگاه")).toBeNull();
     expect(document.querySelector("img")).toBeNull();
+  });
+});
+
+describe("shop «Open» button guide", () => {
+  const GUIDE: MainAppGuide = { url: "https://panel.example/miniapp/s/key1/", bot_username: "Shop5Bot", enabled: false, open_link: "https://t.me/Shop5Bot?startapp" };
+
+  it("shows the address to paste in BotFather, the status and the warning not to use the platform address", async () => {
+    window.history.replaceState(null, "", "/shop-settings?tab=miniapp");
+    get.mockResolvedValue(settings("miniapp", { ...MINIAPP, main_app: GUIDE }));
+    mount();
+    expect(await screen.findByText("دکمهٔ «Open» در جستجوی تلگرام")).toBeTruthy();
+    expect(screen.getByDisplayValue(GUIDE.url).getAttribute("dir")).toBe("ltr");
+    expect(screen.getByText("خاموش")).toBeTruthy();
+    expect(screen.getByText("@Shop5Bot")).toBeTruthy();
+    expect(screen.getByRole("link", { name: GUIDE.open_link }).getAttribute("href")).toBe(GUIDE.open_link);
+    expect(screen.getByText(/آدرس مینی‌اپ پلتفرم را در ربات فروشگاه وارد نکنید/)).toBeTruthy();
+  });
+
+  it("is absent while the shop's Mini App is off", async () => {
+    window.history.replaceState(null, "", "/shop-settings?tab=miniapp");
+    get.mockResolvedValue(settings("miniapp", { ...MINIAPP, on: false, main_app: null }));
+    mount();
+    await screen.findByText("مینی‌اپ فروشگاه");
+    expect(screen.queryByText("دکمهٔ «Open» در جستجوی تلگرام")).toBeNull();
   });
 });
 

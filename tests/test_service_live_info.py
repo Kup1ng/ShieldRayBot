@@ -431,7 +431,7 @@ def call_settings(endpoint, *, dns_error=False, **overrides):
     return response, save, reset, clear, probe
 
 
-def test_panel_settings_save_preserves_password_and_changes_only_pg(settings_endpoint):
+def test_panel_settings_save_checks_the_login_then_preserves_password_and_changes_only_pg(settings_endpoint):
     response, save, reset, clear, probe = call_settings(settings_endpoint)
     assert response.status_code == 200, response.body.decode()
     assert json.loads(response.body)["ok"]
@@ -446,7 +446,6 @@ def test_panel_settings_save_preserves_password_and_changes_only_pg(settings_end
     )
     reset.assert_called_once()
     clear.assert_called_once()
-    # Saving signs in with the kept password first, so a refused login is never written to .env.
     probe.assert_awaited_once_with(
         username="panel-user",
         password="stored-secret",

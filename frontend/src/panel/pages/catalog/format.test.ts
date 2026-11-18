@@ -21,6 +21,25 @@ describe("catalog formatting", () => {
     expect(namingSample({ prefix: "vip", suffix: "_x", pattern: "{prefix}-{plan_volume}{plan_unit}{suffix}" }, defaults, "0")).toBe("vip-unlimitedGB_x");
   });
 
+  it("keeps an empty global prefix empty instead of falling back to clk, and trims the separator it leaves", () => {
+    const defaults = { prefix: "", suffix: "", pattern: "{prefix}_{random}{suffix}" };
+    expect(namingSample({ prefix: "", suffix: "", pattern: "" }, defaults, "30", "xyz")).toBe("xyz");
+    expect(namingSample({ prefix: "", suffix: "_end", pattern: "" }, defaults, "30", "xyz")).toBe("xyz_end");
+    // A prefix of the plan itself still wins over an empty global one.
+    expect(namingSample({ prefix: "vip", suffix: "", pattern: "" }, defaults, "30", "xyz")).toBe("vip_xyz");
+  });
+
+  it("uses the global prefix when the plan has none and trims separators at both ends", () => {
+    const defaults = { prefix: "clk", suffix: "-", pattern: "_{prefix}_{random}{suffix}_" };
+    expect(namingSample({ prefix: "", suffix: "", pattern: "" }, defaults, "", "xyz")).toBe("clk_xyz-");
+  });
+
+  it("gives a name that is nothing but separators the random part, as the generator does", () => {
+    const defaults = { prefix: "", suffix: "", pattern: "{prefix}_{suffix}" };
+    expect(namingSample({ prefix: "", suffix: "", pattern: "" }, defaults, "30", "r4nd0m")).toBe("r4nd0m");
+    expect(namingSample({ prefix: "", suffix: "", pattern: "{prefix}_{id}_{suffix}" }, defaults, "30", "r4nd0m")).toBe("42");
+  });
+
   it("serializes wholesale tiers sorted and without invalid rows", () => {
     const json = serializeTiers([
       { min: "20", percent: "20" },

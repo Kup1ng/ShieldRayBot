@@ -81,6 +81,8 @@ tests/test_inbox_platform_scope_leak.py
 tests/test_live_pg_menus.py
 tests/test_miniapp_security_audit.py
 tests/test_miniapp_init_data_window.py
+tests/test_miniapp_onboarding.py
+tests/test_miniapp_main_app.py
 tests/test_miniapp_service_addons.py
 tests/test_addon_preview.py
 tests/test_miniapp_feeds.py
@@ -212,6 +214,8 @@ tests/test_service_import_config.py
 tests/test_service_import_settings_tab.py
 tests/test_service_import_approval.py
 tests/test_service_import_notify.py
+tests/test_service_import_assign.py
+tests/test_service_import_assign_bot.py
 tests/test_reseller_capacity_snapshot.py
 tests/test_reseller_capacity_view.py
 tests/test_random_payment_card.py
@@ -271,6 +275,8 @@ tests/test_manual_approve_undelivered.py
 tests/test_reseller_package.py
 tests/test_reseller_expire_claim.py
 tests/test_reseller_provision_limits.py
+tests/test_pg_admin_role_required.py
+tests/test_bot_make_reseller_plan.py
 tests/test_reseller_approve_idempotent.py
 tests/test_reseller_soft_deactivate_bot.py
 tests/test_reseller_phase5_failclosed.py
@@ -293,6 +299,7 @@ tests/test_shop_notify_isolation.py
 tests/test_user_search.py
 tests/test_psp_gateways.py
 tests/test_user_card.py
+tests/test_user_card_links.py
 tests/test_user_photo.py
 tests/test_custom_plan_shop_limits.py
 tests/test_custom_plan_cleanup.py
@@ -404,7 +411,6 @@ tests/test_shop_bot_customer_tools.py
 # Mini App order payments: shop/customer isolation, request-key idempotency, receipt ownership.
 tests/test_miniapp_order_payments.py
 # Mini App entry gate: per-shop entry terms and referral code scope.
-tests/test_miniapp_access.py
 # React marketing pages: loyalty, campaigns, funnel and broadcast data endpoints keep permission and shop scope.
 tests/test_panel_marketing_api.py
 # React customer pages: users list, card, edit and trial users data keep permission, shop scope and hide subscription links.
@@ -575,6 +581,7 @@ tests/test_settings_modal_list.py
 tests/test_empty_state.py
 tests/test_dashboard_layout.py
 tests/test_pg_capability_probe_credentials.py
+tests/test_pg_capability_outage_hold.py
 tests/test_platform_pg_access_end_to_end.py
 tests/test_plan_template_only_role.py
 #
@@ -588,3 +595,18 @@ tests/test_panel_tickets_who.py
 tests/test_panel_users_points.py
 tests/test_panel_plan_packs.py
 tests/test_shop_credit_panel.py
+tests/test_plan_category_board.py
+tests/test_entry_approval.py
+tests/test_platform_pg_admins_page.py
+tests/test_pg_role_parity.py
+tests/test_reseller_revoke_panel_admin.py
+tests/test_pg_quota_parity.py
+#
+# React panel and Mini App ports of the 0.6.2 pages: shop isolation of the plan board and
+# category offers, the user card and edit payloads, name links, onboarding gates, and the
+# Mini App page naming only a validated bot username.
+tests/test_panel_catalog_board.py
+tests/test_user_edit_payload.py
+tests/test_panel_name_link_payloads.py
+tests/test_miniapp_onboarding_gates.py
+tests/test_miniapp_shell_page.py

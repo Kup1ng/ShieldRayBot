@@ -40,6 +40,38 @@ async function toCheckout(user: ReturnType<typeof userEvent.setup>) {
   return screen.findByRole("button", { name: "پرداخت" });
 }
 
+describe("plan descriptions", () => {
+  const WITH_TEXT = {
+    wallet_pay_enabled: true,
+    plans: [
+      { id: 1, name: "تست", price: 0, days: 1, gb: 1, is_trial: true, description: "یک روز رایگان\nبرای امتحان" },
+      { id: 2, name: "ماهانه", price: 80000, days: 30, gb: 50, is_trial: false, description: `مناسب کاربر عادی\n${HOSTILE}` },
+      { id: 3, name: "بزرگ", price: 150000, days: 30, gb: 100, is_trial: false, description: "" },
+    ],
+  };
+
+  it("shows the chosen plan's description as plain text and follows the choice", async () => {
+    const user = userEvent.setup();
+    shop(meWithWallet(5000000), { "GET /api/mini/plans": () => ({ json: WITH_TEXT }) });
+    const box = await screen.findByRole("region", { name: "توضیحات پلن" });
+    expect(box.textContent).toContain("مناسب کاربر عادی");
+    expect(box.textContent).toContain(HOSTILE);
+    expect(document.querySelector("img[onerror]")).toBeNull();
+    // A plan without a description has no empty box.
+    await user.click(screen.getByRole("radio", { name: /۱۰۰ گیگ|بزرگ/ }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "توضیحات پلن" })).toBeNull());
+  });
+
+  it("shows the trial plan's description with its terms", async () => {
+    const user = userEvent.setup();
+    shop(meWithWallet(5000000), { "GET /api/mini/plans": () => ({ json: WITH_TEXT }) });
+    await user.click(await screen.findByRole("radio", { name: /سرویس تست/ }));
+    const trial = await screen.findByRole("region", { name: "سرویس تست" });
+    expect(trial.textContent).toContain("یک روز رایگان");
+    expect(trial.textContent).toContain("برای امتحان");
+  });
+});
+
 describe("shop catalog", () => {
   it("never renders a plan name as markup", async () => {
     const user = userEvent.setup();

@@ -45,6 +45,7 @@ from app.services.chat_cleanup_config import chat_cleanup_payload
 from app.services.panel_nav import DOT_LABELS as NAV_DOT_LABELS
 from app.services.panel_nav import build_dock, sidebar_for_template
 from app.services.resellers import feature_perm_groups
+from app.services.user_card import can_open_user_card
 from app.services.reseller_bots import schedule_shop_menu_sync
 from app.services.connection_guides import prune_guide_media, serialize_submitted_guides
 from app.services.miniapp_branding import ACCENT_PRESETS
@@ -166,7 +167,9 @@ from app.services.backup_settings import apply_backup_retention, normalize_backu
 from app.services.bbc_settlement import bbc_enable_error
 from app.api.home_pages import register_home_pages
 from app.api.pg_pages import register_pg_pages
+from app.api.service_import_assign_pages import register_service_import_assign_pages
 from app.api.service_import_pages import register_service_import_pages
+from app.api.entry_approval_pages import register_entry_approval_pages
 from app.api.panel_connection import PanelConnectionMiddleware, finish_panel_authentication
 from app.api.login_guard import (
     client_ip as _client_ip,
@@ -181,12 +184,14 @@ logger = logging.getLogger(__name__)
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 templates = Jinja2Templates(directory=str(WEB_DIR / "templates"))
 
-from app.services.formatting import order_status_fa, ticket_status_fa
+from app.services.formatting import node_status_fa, order_status_fa, pg_user_status_fa, ticket_status_fa
 from app.services.web_numbers import WEB_NUMBER_FILTERS
 
 templates.env.filters.update(WEB_NUMBER_FILTERS)
 templates.env.filters["order_status"] = order_status_fa
 templates.env.filters["ticket_status"] = ticket_status_fa
+templates.env.filters["node_status"] = node_status_fa
+templates.env.filters["pg_user_status"] = pg_user_status_fa
 templates.env.globals["app_version"] = local_version()
 templates.env.globals["psp_gateways_form_json"] = psp_gateways_form_json
 templates.env.globals["miniapp_accent_presets"] = ACCENT_PRESETS
@@ -224,6 +229,7 @@ templates.env.globals["panel_sidebar"] = sidebar_for_template
 templates.env.globals["panel_dock"] = build_dock
 templates.env.globals["nav_dot_labels"] = NAV_DOT_LABELS
 templates.env.globals["feature_perm_groups"] = feature_perm_groups
+templates.env.globals["can_open_user_card"] = can_open_user_card
 templates.env.globals["ticket_status_fa"] = ticket_status_fa
 templates.env.globals["template_variable_specs"] = template_variable_specs
 
@@ -1355,7 +1361,9 @@ def create_api_app(lifespan=None) -> FastAPI:
         )
         if wants_json:
             detail = exc.detail if isinstance(exc.detail, (str, dict, list)) else "خطا"
-            return JSONResponse({"detail": detail}, status_code=exc.status_code)
+            # Keep the exception's headers (as FastAPI's own handler does): the Mini App reads why it was
+            # refused from ``X-Mini-Error``, and a 401 may carry ``WWW-Authenticate``.
+            return JSONResponse({"detail": detail}, status_code=exc.status_code, headers=getattr(exc, "headers", None))
         if exc.status_code == 404:
             return _status_page(
                 request,
@@ -1600,12 +1608,12 @@ def create_api_app(lifespan=None) -> FastAPI:
         require_staff=require_staff,
         get_db=get_db,
     )
-    from app.api.miniapp_access import register_miniapp_access
     from app.api.miniapp_codes import register_miniapp_codes
     from app.api.miniapp_feeds import register_miniapp_feeds
     from app.api.miniapp_guides import register_miniapp_guides
     from app.api.miniapp_loyalty import register_miniapp_loyalty
     from app.api.miniapp_order_payments import register_miniapp_order_payments
+    from app.api.miniapp_onboarding import register_miniapp_onboarding
     from app.api.miniapp_pages import register_miniapp_pages
     from app.api.miniapp_renewal import register_miniapp_renewal
     from app.api.miniapp_reseller import register_miniapp_reseller
@@ -1628,7 +1636,7 @@ def create_api_app(lifespan=None) -> FastAPI:
     register_miniapp_service_usage(app, get_db=get_db)
     register_miniapp_service_import(app, get_db=get_db)
     register_miniapp_order_payments(app, get_db=get_db)
-    register_miniapp_access(app, get_db=get_db)
+    register_miniapp_onboarding(app, get_db=get_db)
     from app.api.customer_features import register_customer_features
 
     register_customer_features(app, render=render, require_staff=require_staff, get_db=get_db)
@@ -1666,6 +1674,8 @@ def create_api_app(lifespan=None) -> FastAPI:
     register_panel_brand_pages(app, require_staff=require_staff, get_db=get_db)
     register_mobile_bar_settings(app, require_admin=require_admin, get_db=get_db)
     register_service_import_pages(app, require_staff=require_staff, get_db=get_db)
+    register_service_import_assign_pages(app, require_staff=require_staff, get_db=get_db)
+    register_entry_approval_pages(app, require_staff=require_staff, get_db=get_db)
     register_connection_status_pages(app, render=render, require_staff=require_staff, get_db=get_db)
     register_panel_session(app, require_staff=require_staff, cookie_secure=_cookie_secure)
     install_panel_fetch(app)
@@ -3567,14 +3577,19 @@ def create_api_app(lifespan=None) -> FastAPI:
                 format_credentials_message,
                 get_reseller_panel_base_url,
                 provision_reseller,
+                reseller_plan_from_form,
             )
 
             try:
+                # A package brings its own PasarGuard role, limits and permissions.
+                plan = await reseller_plan_from_form(session, staff, form.get("reseller_plan_id"))
+                perms = None if plan is not None else DEFAULT_FEATURE_PERMS
                 creds = await provision_reseller(
                     session,
                     user=user,
-                    web_permissions=DEFAULT_FEATURE_PERMS,
-                    bot_permissions=DEFAULT_FEATURE_PERMS,
+                    plan=plan,
+                    web_permissions=perms,
+                    bot_permissions=perms,
                     create_pg_admin=True,
                     panel_base_url=await get_reseller_panel_base_url(session),
                 )
@@ -3608,7 +3623,11 @@ def create_api_app(lifespan=None) -> FastAPI:
         else:
             # Demoting a reseller must tear down profile / PG admin / shop bot
             if user.role == Role.RESELLER.value and role != Role.RESELLER.value:
-                from app.services.resellers import notify_reseller_revoked, revoke_reseller
+                from app.services.resellers import (
+                    PanelAdminNotRemoved,
+                    notify_reseller_revoked,
+                    revoke_reseller,
+                )
 
                 try:
                     info = await revoke_reseller(
@@ -3617,6 +3636,9 @@ def create_api_app(lifespan=None) -> FastAPI:
                         delete_pg_admin=True,
                         reason=reason,
                     )
+                except PanelAdminNotRemoved as e:
+                    # The shop and its role stay as they are while its admin is still in PasarGuard.
+                    return _redirect_msg("/users", err=str(e))
                 except ValueError:
                     user.role = role
                     await session.commit()

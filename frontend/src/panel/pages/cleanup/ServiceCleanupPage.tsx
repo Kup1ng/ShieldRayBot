@@ -9,6 +9,7 @@ import { PanelShell } from "../../layout/PanelShell";
 import { StatusChip } from "../../ui/Data";
 import { GlassSection, PageHeader, StatTile } from "../../ui/Page";
 import { Loadable } from "../../ui/States";
+import { UserNameLink } from "../../ui/UserNameLink";
 import { RowActions, SelectableTable, type Column, type RowAction } from "../catalog/Tables";
 import { ReasonDialog, type ReasonRequest } from "../users/ReasonDialog";
 import { PolicyForm } from "./PolicyForm";
@@ -43,11 +44,7 @@ export function deadlineColor(daysLeft: number): "danger" | "warning" | "default
 }
 
 function CustomerLink({ row }: { row: { user_id: number; customer: string } }) {
-  return (
-    <a href={`/users/${row.user_id}/edit`} dir="auto" className="font-medium text-foreground underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus">
-      {row.customer}
-    </a>
-  );
+  return <UserNameLink userId={row.user_id} name={row.customer} page="cleanup" />;
 }
 
 function viewUserAction(row: { user_id: number }): RowAction {

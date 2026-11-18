@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, FALLBACK_ERROR, api, errorText, isUnknownOutcome, onAuthLost } from "./api";
+import { ApiError, FALLBACK_ERROR, api, errorText, isUnknownOutcome, onAuthLost, onGate } from "./api";
 import { resetLaunchCache } from "./launch";
 
 afterEach(() => {
   vi.unstubAllGlobals();
   onAuthLost(null);
+  onGate(null);
   resetLaunchCache();
   window.history.replaceState(null, "", "/");
 });
@@ -76,5 +77,22 @@ describe("api", () => {
     );
     const err = (await api("/api/mini/me").catch((e: unknown) => e)) as ApiError;
     expect(err.code).toBe("");
+  });
+
+  it("tells the app when the server holds the person at an onboarding step, and for no other refusal", async () => {
+    const held = vi.fn();
+    onGate(held);
+    const reply = (status: number, code: string) => vi.fn().mockImplementation(async () => new Response("{}", { status, headers: { "X-Mini-Error": code } }));
+    for (const code of ["referral_required", "force_join", "terms"]) {
+      vi.stubGlobal("fetch", reply(403, code));
+      await api("/api/mini/services").catch(() => undefined);
+    }
+    expect(held.mock.calls.map(([err]) => (err as ApiError).code)).toEqual(["referral_required", "force_join", "terms"]);
+    held.mockClear();
+    for (const [status, code] of [[403, "blocked"], [403, "entry_pending"], [403, ""], [401, "terms"], [400, "terms"]] as const) {
+      vi.stubGlobal("fetch", reply(status, code));
+      await api("/api/mini/services").catch(() => undefined);
+    }
+    expect(held).not.toHaveBeenCalled();
   });
 });

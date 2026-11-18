@@ -16,7 +16,8 @@ import { CheckoutStep } from "./CheckoutStep";
 import { CARD_PAY_UNKNOWN, newRequestKey, readStart, type OrderChoice, type OrderPayStart, type OrderPayment } from "./orderPay";
 import { PaymentStages } from "./PaymentStages";
 import { PlanPicker } from "./PlanPicker";
-import { defaultPlanId } from "./planGroups";
+import { defaultPlanId, trialPlan } from "./planGroups";
+import { TRIAL_STEP } from "./trialStep";
 import type { Checkout, PlansPayload, PurchaseResult } from "./types";
 import { useServiceName } from "./useServiceName";
 
@@ -36,9 +37,10 @@ type Started = { sig: string; orderId: number; payment: OrderPayment; label: str
 /** The buying flow over one loaded catalog. */
 function ShopFlow({ data }: { data: PlansPayload }) {
   const mini = useMini();
-  const { customer, commerce, features, run, busy, notify, refreshAfterChange, showFreshState, go } = mini;
+  const { customer, commerce, features, run, busy, notify, refreshAfterChange, showFreshState, go, route } = mini;
   const plans = data.plans ?? [];
-  const [planId, setPlanId] = useState<number | null>(() => defaultPlanId(plans));
+  // Arriving from the home offer «دریافت تست» starts on the trial plan, when this shop lists one.
+  const [planId, setPlanId] = useState<number | null>(() => (route.then === TRIAL_STEP ? trialPlan(plans)?.id : undefined) ?? defaultPlanId(plans));
   const [step, setStep] = useState<Step>("pick");
   const [checkout, setCheckout] = useState<CheckoutState | null>(null);
   const [done, setDone] = useState<Ticket | null>(null);

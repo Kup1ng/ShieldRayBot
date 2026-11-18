@@ -93,7 +93,8 @@ class NodeOverviewBuilderTests(unittest.TestCase):
         ]
         cards = build_nodes_overview(nodes)["nodes"]
         self.assertEqual([c["status_label"] for c in cards], ["متصل", "خطا", "غیرفعال", "—"])
-        self.assertEqual(cards[0]["status"], "connected")
+        # Upstream shows the card status in Persian too; the card colour comes from status_kind.
+        self.assertEqual(cards[0]["status"], "متصل")
         polled = nodes_overview_json({"nodes": cards, "live": {}})["nodes"]
         self.assertEqual([c["status_label"] for c in polled], ["متصل", "خطا", "غیرفعال", "—"])
         rows = [node_row(n) for n in nodes]

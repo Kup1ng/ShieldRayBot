@@ -42,6 +42,10 @@ KEY_BYTES = 16
 # its data from MiniScope.shop_id; every other route stays closed to shops.
 SHOP_ROUTES: frozenset[str] = frozenset({
     "/api/mini/me",
+    "/api/mini/onboarding",
+    "/api/mini/onboarding/referral",
+    "/api/mini/onboarding/join-check",
+    "/api/mini/onboarding/terms",
     "/api/mini/services",
     "/api/mini/service/{service_id}",
     "/api/mini/service/{service_id}/qr",
@@ -69,7 +73,6 @@ SHOP_ROUTES: frozenset[str] = frozenset({
     "/api/mini/club",
     "/api/mini/club/history",
     "/api/mini/club/rewards/{reward_id}/redeem",
-    "/api/mini/access",
     "/api/mini/service-import/offer",
     "/api/mini/service-import/dismiss",
     "/api/mini/service-import",
@@ -222,6 +225,11 @@ async def ensure_shop_key(session: AsyncSession, profile: ResellerProfile) -> st
         profile.miniapp_key = new_shop_key()
         await session.flush()
     return str(profile.miniapp_key)
+
+
+async def shop_bot_username(session: AsyncSession, key: str) -> str:
+    """The shop bot's public username, for the page's «open in Telegram» link."""
+    return (await session.scalar(select(ResellerProfile.bot_username).where(ResellerProfile.miniapp_key == key))) or ""
 
 
 def shop_miniapp_url(key: str) -> str:

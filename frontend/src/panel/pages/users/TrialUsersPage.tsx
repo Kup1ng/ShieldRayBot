@@ -13,6 +13,7 @@ import { PanelShell } from "../../layout/PanelShell";
 import { GlassSection, PageHeader, StatTile } from "../../ui/Page";
 import { SectionTabs } from "../../ui/SectionTabs";
 import { EmptyBlock, ErrorBlock, LoadingBlock } from "../../ui/States";
+import { UserNameLink } from "../../ui/UserNameLink";
 import { money, selectedIds } from "./format";
 import { ReasonDialog, type ReasonRequest } from "./ReasonDialog";
 import { SelectionBar } from "./SelectionBar";
@@ -138,9 +139,7 @@ function TrialTable({ data, selectable, selected, onSelect, onOp }: { data: Tria
                   </bdi>
                 </Table.Cell>
                 <Table.Cell>
-                  <a href={`/users?uid=${row.user_id}`} dir="auto" className="font-medium text-foreground underline-offset-4 outline-none hover:underline focus-visible:ring-2 focus-visible:ring-focus">
-                    {row.name}
-                  </a>
+                  <UserNameLink userId={row.user_id} name={row.name} page="trials" />
                 </Table.Cell>
                 <Table.Cell className="hidden lg:table-cell">
                   <bdi dir="ltr" className="num text-muted">

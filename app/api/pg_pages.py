@@ -17,6 +17,7 @@ from app.services.credential_policy import validate_pg_username
 from app.services.customer_action_notices import notify_customers, pg_user_targets
 from app.services.numbers import normalize_number_text, parse_float, parse_int, parse_optional_float, parse_optional_int
 from app.services.pasarguard import (
+    PasarGuardClient,
     PasarGuardError,
     build_user_create_payload,
     build_user_modify_payload,
@@ -24,7 +25,13 @@ from app.services.pasarguard import (
     get_pg_for_reseller,
     user_subscription_url,
 )
-from app.services.pg_access import staff_pg_action, staff_pg_writes, staff_user_actions
+from app.services.pg_admin_roles import AdminRoleError, apply_admin_role, resolve_new_admin_role_id
+from app.services.pg_access import (
+    staff_may_delete_pg_admin,
+    staff_pg_action,
+    staff_pg_writes,
+    staff_user_actions,
+)
 from app.services.pg_read_cache import NODE_LIST_MAX_AGE_SEC
 from app.services.pg_quota import (
     PgQuotaError,
@@ -57,6 +64,8 @@ from app.services.volume_allocation import apply_create_form_oversell
 
 
 logger = logging.getLogger(__name__)
+
+PG_ADMIN_DELETE_DENIED_MSG = "حساب پاسارگاردی که پنل با آن وصل است اجازهٔ حذف ادمین ندارد؛ چیزی حذف نشد."
 
 
 def _q(msg: str) -> str:
@@ -209,6 +218,32 @@ def _is_admin(staff: dict) -> bool:
 def _is_pg_owner_principal(staff: dict) -> bool:
     """True PasarGuard owner (Hybrid) — not merely web Owner session."""
     return bool(staff.get("pg_is_owner"))
+
+
+async def _no_user_list() -> dict:
+    """Stands in for the user list when the role may create users but not read them."""
+    return {"users": [], "total": 0}
+
+
+def _is_permission_refusal(result: object) -> bool:
+    """PasarGuard refused the read for this role (403), as opposed to failing."""
+    return isinstance(result, PasarGuardError) and result.status_code == 403
+
+
+async def _groups_for_user_form(pg: PasarGuardClient, staff: dict) -> list[dict] | None:
+    """Groups this staff member may pick in the user form.
+
+    ``[]`` when PasarGuard refuses the list to the role (no ``groups.read_simple``),
+    exactly as PasarGuard's own form then offers none; ``None`` when the read failed.
+    """
+    try:
+        raw = await pg.get_groups_simple()
+    except Exception as exc:
+        if _is_permission_refusal(exc):
+            return []
+        logger.warning("pg users: PasarGuard groups fetch failed", exc_info=True)
+        return None
+    return filter_groups_for_staff(raw if isinstance(raw, list) else [], staff)
 
 
 def _pg_owner(staff: dict) -> str:
@@ -425,20 +460,9 @@ def register_pg_pages(
                     return _pg_form_err(getattr(qe, "message", str(qe)), modal="create")
 
                 pg, as_owner = await _staff_pg(session, staff)
-                try:
-                    raw_groups = await pg.get_groups_simple()
-                except Exception:
-                    logger.warning(
-                        "pg users create: PasarGuard groups fetch failed",
-                        exc_info=True,
-                    )
-                    return _pg_form_err(
-                        "خواندن گروه‌های پاسارگارد ناموفق بود؛ دوباره تلاش کنید",
-                        modal="create",
-                    )
-                visible = filter_groups_for_staff(
-                    raw_groups if isinstance(raw_groups, list) else [], staff
-                )
+                visible = await _groups_for_user_form(pg, staff)
+                if visible is None:
+                    return _pg_form_err("خواندن گروه‌های پاسارگارد ناموفق بود؛ دوباره تلاش کنید", modal="create")
                 try:
                     resolved_ids = resolve_user_write_group_ids(
                         ids, visible_groups=visible
@@ -578,21 +602,11 @@ def register_pg_pages(
             except (ProvisionError, PgQuotaError) as qe:
                 return _pg_form_err(getattr(qe, "message", str(qe)), modal="edit", uid=user_id)
             pg, _as_owner = await _staff_pg(session, staff)
-            try:
-                raw_groups = await pg.get_groups_simple()
-            except Exception:
-                logger.warning(
-                    "pg users edit: PasarGuard groups fetch failed",
-                    exc_info=True,
-                )
+            visible = await _groups_for_user_form(pg, staff)
+            if visible is None:
                 return _pg_form_err(
-                    "خواندن گروه‌های پاسارگارد ناموفق بود؛ دوباره تلاش کنید",
-                    modal="edit",
-                    uid=user_id,
+                    "خواندن گروه‌های پاسارگارد ناموفق بود؛ دوباره تلاش کنید", modal="edit", uid=user_id
                 )
-            visible = filter_groups_for_staff(
-                raw_groups if isinstance(raw_groups, list) else [], staff
-            )
             try:
                 resolved_ids = resolve_user_write_group_ids(
                     ids, visible_groups=visible
@@ -1466,7 +1480,10 @@ def register_pg_pages(
                     f"/pg/admins?err={_q('ساخت ادمین با دسترسی sudo از پنل مجاز نیست — یک نقش غیرمالک انتخاب کنید')}",
                     status_code=303,
                 )
-            payload["is_sudo"] = False
+            try:
+                apply_admin_role(payload, await resolve_new_admin_role_id(get_pg(), None))
+            except AdminRoleError as exc:
+                return RedirectResponse(f"/pg/admins?err={_q(str(exc))}", status_code=303)
         if data_limit_gb:
             try:
                 gb = parse_float(data_limit_gb)
@@ -1920,6 +1937,8 @@ def register_pg_pages(
         pg_u = (username or "").strip()
         if not pg_u:
             return RedirectResponse(f"/pg/admins?err={_q('نام ادمین نامعتبر است')}", status_code=303)
+        if not staff_may_delete_pg_admin(staff):
+            return RedirectResponse(f"/pg/admins?err={_q(PG_ADMIN_DELETE_DENIED_MSG)}", status_code=303)
 
         reseller = await reseller_by_pg_username(session, pg_u)
         staff_row = await access_by_pg_username(session, pg_u)

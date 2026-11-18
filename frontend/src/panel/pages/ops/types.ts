@@ -1,9 +1,9 @@
 /** JSON shapes of /api/panel/shop-settings, /api/panel/tickets, /api/panel/connection-status and /setup/data. */
 
 import type { ChipColor } from "../../core/format";
-import type { Choice, GuideMediaItem, GuidesExtra, MenuEntry, StyleOption } from "../../settings-ui/types";
+import type { Choice, GuideMediaItem, GuidesExtra, MainAppGuide, MenuEntry, StyleOption } from "../../settings-ui/types";
 
-export type { Choice, GuideMediaItem, GuidesExtra, MenuEntry, StyleOption };
+export type { Choice, GuideMediaItem, GuidesExtra, MainAppGuide, MenuEntry, StyleOption };
 
 export type SettingField = {
   key: string;
@@ -40,7 +40,7 @@ export type ShopSettings = {
 
 export type BotExtra = { status: { ok: boolean; username?: string; id?: number; name?: string; error?: string }; token_masked: string; username: string };
 export type BrandExtra = { name: string; has_own_logo: boolean; logo_url: string; effective_name: string; platform_logo: boolean };
-export type MiniappExtra = { available: boolean; blocker: string; on: boolean; url: string; accent: string; notice: string; presets: Choice[] };
+export type MiniappExtra = { available: boolean; blocker: string; on: boolean; url: string; accent: string; notice: string; presets: Choice[]; main_app: MainAppGuide | null };
 export type MenuExtra = { items: MenuEntry[]; pool: MenuEntry[]; layout: string; cleanup: { chat_cleanup: boolean; persistent_menu: boolean; restart_button: boolean } };
 export type ColorsExtra = { label: string; caption: string; groups: { name: string; items: { key: string; label: string; value: string }[] }[] };
 export type LinksExtra = { bot_username: string; links: Record<string, string> };

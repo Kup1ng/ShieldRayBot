@@ -21,12 +21,14 @@ from app.services.button_styles import (
     PLAN_BUTTON_STYLE_OPTIONS,
     plan_button_style_form_value,
 )
+from app.services.panel_catalog_board import empty_board, plan_board_payload
 from app.services.panel_plan_packs import (
     reseller_pack_config,
     reseller_plan_packs,
     user_pack_config,
     user_plan_packs,
 )
+from app.services.plan_category_board import DEFAULT_TONE, category_tones
 from app.services.pg_quota import limit_snapshot_cards, load_staff_limit_snapshot
 from app.services.plans_catalog import (
     catalog_owner_id,
@@ -198,7 +200,7 @@ def serialize_wholesale(values: dict[str, str]) -> dict[str, Any]:
     }
 
 
-def serialize_category(cat: PlanCategory, *, linked_plans: list[str], linked_packs: list[str]) -> dict[str, Any]:
+def serialize_category(cat: PlanCategory, *, linked_plans: list[str], linked_packs: list[str], tone: str = DEFAULT_TONE) -> dict[str, Any]:
     return {
         "id": cat.id,
         "name": cat.name,
@@ -207,9 +209,21 @@ def serialize_category(cat: PlanCategory, *, linked_plans: list[str], linked_pac
         "sort_order": cat.sort_order,
         "is_active": bool(cat.is_active),
         "button_style": "inherit" if cat.button_style is None else cat.button_style,
+        "tone": tone,
         "linked_plans": linked_plans,
         "linked_packs": linked_packs,
     }
+
+
+def plan_form_categories(
+    categories: list[PlanCategory], current_id: int | None, tones: dict[int, str]
+) -> list[dict[str, Any]]:
+    """The categories a plan form offers: the user ones that are on, plus the plan's own even when it is off."""
+    return [
+        {"id": c.id, "name": c.name, "is_active": bool(c.is_active), "tone": tones.get(int(c.id), DEFAULT_TONE)}
+        for c in categories
+        if ((c.audience or "users") == "users" and c.is_active) or c.id == current_id
+    ]
 
 
 def serialize_pack(pack: ServiceAddonPack, *, category_map: dict[int, PlanCategory]) -> dict[str, Any]:
@@ -314,9 +328,11 @@ async def _pg_roles() -> list[dict[str, Any]]:
         return []
 
 
-async def _label_data(session: AsyncSession, staff: dict, sale_plans: list[Plan], reseller_plans: list[ResellerPlan]) -> dict[str, Any]:
-    """Categories, add-on packs and the maps that label plans with them."""
-    out: dict[str, Any] = {"categories": [], "packs": [], "plan_map": {}, "reseller_map": {}}
+async def _label_data(
+    session: AsyncSession, staff: dict, sale_plans: list[Plan], reseller_plans: list[ResellerPlan], ui: dict[str, str]
+) -> dict[str, Any]:
+    """Categories, the grouped plan board, add-on packs and the maps that label plans with them."""
+    out: dict[str, Any] = {"categories": [], "board": empty_board(), "packs": [], "plan_map": {}, "reseller_map": {}}
     if not (is_platform_admin(staff) or catalog_owner_id(staff)):
         return out
     try:
@@ -330,15 +346,18 @@ async def _label_data(session: AsyncSession, staff: dict, sale_plans: list[Plan]
         packs = await list_packs(session, staff)
         if packs:
             plan_map.update(await category_map_for_plans(session, staff, packs))
+        tones = category_tones(categories, ui)
         out.update(
             categories=[
                 serialize_category(
                     c,
                     linked_plans=linked.get(int(c.id)) or [],
                     linked_packs=[p.name for p in packs if p.category_id == c.id],
+                    tone=tones.get(int(c.id), DEFAULT_TONE),
                 )
                 for c in categories
             ],
+            board=plan_board_payload(sale_plans, categories, ui=ui),
             packs=[serialize_pack(p, category_map=plan_map) for p in packs],
             plan_map=plan_map,
             reseller_map=reseller_map,
@@ -380,7 +399,7 @@ async def plans_overview(session: AsyncSession, staff: dict) -> dict[str, Any]:
         feature_perms = [[key, label] for key, label in FEATURE_PERMS]
         reseller_plans, reseller_error = await _reseller_plan_section(session)
         pg_roles = await _pg_roles()
-    labels = await _label_data(session, staff, sale_plans, reseller_plans)
+    labels = await _label_data(session, staff, sale_plans, reseller_plans, values)
 
     return {
         "is_platform_admin": is_admin,
@@ -402,6 +421,7 @@ async def plans_overview(session: AsyncSession, staff: dict) -> dict[str, Any]:
         "templates": pg_option_rows(templates),
         "groups": pg_option_rows(groups),
         "categories": labels["categories"],
+        "plan_board": labels["board"],
         "addon_packs": labels["packs"],
         "reseller_plans": [serialize_reseller_plan(p, category_map=labels["reseller_map"]) for p in reseller_plans],
         "reseller_plans_error": reseller_error,
@@ -422,6 +442,7 @@ async def plan_edit_data(session: AsyncSession, staff: dict, plan: Plan) -> dict
         from app.services.plan_categories import list_categories
 
         categories = await list_categories(session, staff, active_only=False)
+    tones = category_tones(categories, values)
     templates, groups, pg_error = await load_pg_plan_options(staff, session=session)
     snapshot = await load_staff_limit_snapshot(staff, session=session)
     return {
@@ -451,11 +472,8 @@ async def plan_edit_data(session: AsyncSession, staff: dict, plan: Plan) -> dict
         "limits": limit_payload(snapshot),
         "templates": pg_option_rows(templates),
         "groups": pg_option_rows(groups),
-        "categories": [
-            {"id": c.id, "name": c.name, "is_active": bool(c.is_active)}
-            for c in categories
-            if (c.audience or "users") == "users" or plan.category_id == c.id
-        ],
+        "categories": plan_form_categories(categories, plan.category_id, tones),
+        "category_style_options": style_options(CATEGORY_BUTTON_STYLE_OPTIONS),
         "naming_defaults": {
             "prefix": values.get("pg_username_prefix", DEFAULT_NAMING["prefix"]),
             "suffix": values.get("pg_username_suffix", DEFAULT_NAMING["suffix"]),

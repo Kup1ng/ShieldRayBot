@@ -6,6 +6,7 @@ import { fa } from "../../core/format";
 import { Ltr } from "../../ui/Data";
 import { EmptyBlock } from "../../ui/States";
 import { GlassSection, StatTile } from "../../ui/Page";
+import { UserNameLink } from "../../ui/UserNameLink";
 import type { LoyaltyOverview } from "./types";
 
 export function LoyaltyOverviewTab({ overview }: { overview: LoyaltyOverview }) {
@@ -37,7 +38,7 @@ export function LoyaltyOverviewTab({ overview }: { overview: LoyaltyOverview }) 
                   {metrics.top_referrers.map((row, index) => (
                     <Table.Row key={`${index}:${row.label}`} id={index}>
                       <Table.Cell>
-                        <span dir="auto">{row.label}</span>
+                        <UserNameLink userId={row.user_id} name={row.label} page="loyalty" />
                       </Table.Cell>
                       <Table.Cell>{fa(row.count)}</Table.Cell>
                     </Table.Row>

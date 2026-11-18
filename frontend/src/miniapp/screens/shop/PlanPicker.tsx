@@ -7,7 +7,7 @@ import { haptic } from "../../core/telegram";
 import { StepFooter } from "../../ui/flow/StepFooter";
 import { priceView } from "./catalogPrice";
 import { PriceText } from "./PriceText";
-import { InkSegment, InsetBlock } from "./parts";
+import { Description, InkSegment, InsetBlock } from "./parts";
 import { durationKey, durationOptions, planMetaText, paidPlans, trialPlan, volumeOptions, type PlanKind } from "./planGroups";
 import type { Plan } from "./types";
 
@@ -74,6 +74,7 @@ export function PlanPicker({ plans, plan, onSelect, onNext }: PlanPickerProps) {
             </div>
             <PriceText quote={trial} className="text-sm text-foreground" />
           </div>
+          <Description text={trial.description} />
         </InsetBlock>
       ) : (
         <>
@@ -107,6 +108,11 @@ export function PlanPicker({ plans, plan, onSelect, onNext }: PlanPickerProps) {
               ))}
             </RadioGroup>
           </InsetBlock>
+          {plan?.description?.trim() ? (
+            <InsetBlock title="توضیحات پلن" labelId="shop-description">
+              <Description text={plan.description} />
+            </InsetBlock>
+          ) : null}
         </>
       )}
 

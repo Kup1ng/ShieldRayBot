@@ -7,11 +7,14 @@ import { AppToastProvider } from "@/components/feedback/AppToast";
 import { CrystalBackdrop } from "@/components/shell/CrystalBackdrop";
 import { applyTheme, currentTheme, hasSavedTheme } from "@/lib/theme";
 
-import { ApiError, api, onAuthLost } from "./core/api";
+import { ApiError, ENTRY_PENDING, GATE_CODES, BLOCKED, api, onAuthLost, onGate } from "./core/api";
 import { setCurrency } from "./core/format";
-import { closeApp, getInitData, initTelegram, isFullscreen, paintTelegramChrome, telegramScheme, whenTelegram } from "./core/telegram";
+import { botUsername } from "./core/launch";
+import { closeApp, getInitData, initTelegram, isFullscreen, outsideTelegram, paintTelegramChrome, requestWriteAccessOnce, telegramScheme, whenTelegram } from "./core/telegram";
 import { MiniShell } from "./layout/MiniShell";
-import { AccessScreen } from "./screens/access/AccessScreen";
+import { BlockedScreen, OutsideTelegramScreen, PendingApprovalScreen } from "./screens/onboarding/GateNotices";
+import { OnboardingScreen } from "./screens/onboarding/OnboardingScreen";
+import type { Refusal } from "./screens/onboarding/onboardingKit";
 import { ScreenRouter } from "./screens/ScreenRouter";
 import { MiniProvider, routeFromHash } from "./state/store";
 import type { MePayload, Route } from "./types";
@@ -26,7 +29,13 @@ const LATE_SDK_MS = 20_000;
 
 type Boot =
   | { phase: "loading" }
-  | { phase: "access" }
+  /** A referral code, required channels or terms still to finish. */
+  | { phase: "onboarding" }
+  /** An admin has not approved this customer yet. */
+  | { phase: "pending"; message: string }
+  | { phase: "blocked"; message: string }
+  /** Opened in a browser, not by Telegram. */
+  | { phase: "outside"; bot: string; sdkBlocked: boolean }
   | { phase: "ready"; me: MePayload; route: Route }
   | { phase: "error"; message: string; reopen: boolean };
 
@@ -39,9 +48,22 @@ function bootErrorText(err: unknown, sdkReady: boolean): string {
   return err instanceof Error && err.message ? err.message : "بارگذاری مینی‌اپ ناموفق بود.";
 }
 
-/** The server holds the person at the terms gate: /me answers 403 with `X-Mini-Error: terms`. */
-function isTermsGate(err: unknown): boolean {
-  return err instanceof ApiError && err.status === 403 && err.code === "terms";
+/** The server holds the person at an onboarding step: /me answers 403 with its `X-Mini-Error` code. */
+function isOnboardingGate(err: unknown): boolean {
+  return err instanceof ApiError && err.status === 403 && GATE_CODES.has(err.code);
+}
+
+/**
+ * The screen for a refusal at launch. `afterOnboarding`: the server just said every step is
+ * done, so a step reported again is an error to show, not a reason to go round again.
+ */
+function bootFromError(err: unknown, sdkReady: boolean, afterOnboarding: boolean): Boot {
+  if (err instanceof ApiError && err.status === 403) {
+    if (err.code === ENTRY_PENDING) return { phase: "pending", message: err.message };
+    if (err.code === BLOCKED) return { phase: "blocked", message: err.message };
+  }
+  if (isOnboardingGate(err) && !afterOnboarding) return { phase: "onboarding" };
+  return { phase: "error", message: bootErrorText(err, sdkReady), reopen: needsReopen(err) };
 }
 
 function needsReopen(err: unknown): boolean {
@@ -78,35 +100,52 @@ function connectTelegram() {
 }
 
 /** Connect Telegram (now or when a slow SDK arrives), then read /me. Never throws. */
-async function loadBoot(): Promise<Boot> {
+async function loadBoot(afterOnboarding = false): Promise<Boot> {
   const sdkReady = await whenTelegram();
   if (sdkReady) connectTelegram();
   else void whenTelegram(LATE_SDK_MS).then((ok) => ok && connectTelegram());
   try {
     await waitForInitData(6);
-    if (!getInitData()) throw new ApiError("no initData", 401);
+    if (!getInitData()) {
+      if (outsideTelegram()) return { phase: "outside", bot: botUsername(), sdkBlocked: !sdkReady };
+      throw new ApiError("no initData", 401);
+    }
     const me = await api<MePayload>("/api/mini/me");
     setCurrency(me.currency);
+    requestWriteAccessOnce();
     return { phase: "ready", me, route: routeFromHash(window.location.hash) };
   } catch (err) {
-    if (isTermsGate(err)) return { phase: "access" };
-    return { phase: "error", message: bootErrorText(err, sdkReady), reopen: needsReopen(err) };
+    return bootFromError(err, sdkReady, afterOnboarding);
   }
 }
 
 export function MiniApp() {
   const [boot, setBoot] = useState<Boot>({ phase: "loading" });
 
-  const start = useCallback(() => {
-    void loadBoot().then(setBoot);
+  const start = useCallback((afterOnboarding = false) => {
+    void loadBoot(afterOnboarding).then(setBoot);
+  }, []);
+
+  const refused = useCallback((kind: Refusal, err: ApiError) => {
+    setBoot(kind === "pending" ? { phase: "pending", message: err.message } : { phase: "blocked", message: err.message });
   }, []);
 
   useEffect(() => {
     // A 401 after launch: the session ended under an open screen; show how to reopen.
     onAuthLost((err) => setBoot({ phase: "error", message: bootErrorText(err, true), reopen: needsReopen(err) }));
+    // The server holds the person at a step under an open screen (they left a required channel).
+    onGate(() => setBoot((current) => (current.phase === "ready" ? { phase: "onboarding" } : current)));
     start();
-    return () => onAuthLost(null);
+    return () => {
+      onAuthLost(null);
+      onGate(null);
+    };
   }, [start]);
+
+  const restart = (afterOnboarding = false) => {
+    setBoot({ phase: "loading" });
+    start(afterOnboarding);
+  };
 
   return (
     <>
@@ -117,21 +156,16 @@ export function MiniApp() {
             <ScreenRouter />
           </MiniShell>
         </MiniProvider>
-      ) : boot.phase === "access" ? (
-        <AccessScreen
-          onDone={() => {
-            setBoot({ phase: "loading" });
-            start();
-          }}
-        />
+      ) : boot.phase === "onboarding" ? (
+        <OnboardingScreen onDone={() => restart(true)} onRefused={refused} />
+      ) : boot.phase === "pending" ? (
+        <PendingApprovalScreen message={boot.message} onRetry={() => restart()} />
+      ) : boot.phase === "blocked" ? (
+        <BlockedScreen message={boot.message} />
+      ) : boot.phase === "outside" ? (
+        <OutsideTelegramScreen bot={boot.bot} sdkBlocked={boot.sdkBlocked} />
       ) : (
-        <BootScreen
-          boot={boot}
-          onRetry={() => {
-            setBoot({ phase: "loading" });
-            start();
-          }}
-        />
+        <BootScreen boot={boot} onRetry={() => restart()} />
       )}
     </>
   );

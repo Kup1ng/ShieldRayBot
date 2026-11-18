@@ -7,13 +7,14 @@ import type { ActionResult } from "../../core/api";
 import { FormGrid, FormSection, MoneyInput, SelectInput, SwitchInput, TextInput } from "../../ui/Fields";
 import { serializeTiers } from "./format";
 import { Notice } from "../../ui/States";
-import { ButtonStyleField, CategorySelect, FormActions, NamingFields, PgSourceFields, durationHelp, groupFields, volumeHelp, type SourceMode } from "./PlanParts";
+import { PlanCategoryField } from "./PlanCategoryField";
+import { ButtonStyleField, FormActions, NamingFields, PgSourceFields, durationHelp, groupFields, volumeHelp, type SourceMode } from "./PlanParts";
 import type { CustomPlan, Naming, PlanEdit, PlansOverview, TrialPlan, WholesalePlan } from "./types";
 import { useFormSubmit } from "./useFormSubmit";
 import { UserExtraSalesSection, useUserExtraSales } from "./UserExtraSales";
 
 type Done = (result: ActionResult) => void;
-type Common = { data: PlansOverview; onDone: Done; onCancel: () => void };
+type Common = { data: PlansOverview; onDone: Done; onCancel: () => void; onCategoryAdded?: () => void };
 
 const gbText = (gb: number | null | undefined) => (gb === null || gb === undefined ? "" : String(gb));
 const submitOn = (handler: () => void) => (event: FormEvent) => {
@@ -25,8 +26,8 @@ const usersCategories = (data: PlansOverview) => data.categories.filter((c) => c
 
 /* ───────── fixed plan (create) ───────── */
 
-export function FixedPlanForm({ data, onDone, onCancel }: Common) {
-  const [category, setCategory] = useState("");
+export function FixedPlanForm({ data, onDone, onCancel, onCategoryAdded, initialCategory = "" }: Common & { initialCategory?: string }) {
+  const [category, setCategory] = useState(initialCategory);
   const [name, setName] = useState("");
   const [price, setPrice] = useState("");
   const [days, setDays] = useState("30");
@@ -66,9 +67,9 @@ export function FixedPlanForm({ data, onDone, onCancel }: Common) {
 
   return (
     <form className="flex flex-col gap-4" onSubmit={submitOn(() => void submit())}>
-      <CategorySelect value={category} onChange={setCategory} categories={usersCategories(data)} help="برچسب نمایش در بات — بسته‌های حجم/زمان همین دسته فقط روی سرویس‌های همین برچسب دیده می‌شوند" />
+      <TextInput label="نام پلن" value={name} onChange={setName} required placeholder="مثلاً ویژه ۴۰ گیگ" />
+      <PlanCategoryField value={category} onChange={setCategory} categories={usersCategories(data)} styleOptions={data.category_style_options} onCategoryAdded={onCategoryAdded} />
       <FormGrid>
-        <TextInput label="نام پلن" value={name} onChange={setName} required placeholder="مثلاً ویژه ۴۰ گیگ" />
         <MoneyInput label="قیمت (تومان)" value={price} onChange={setPrice} required placeholder="150000" />
         <TextInput label="مدت (روز)" type="number" min={0} value={days} onChange={setDays} placeholder="خالی = نامحدود" help={durationHelp(data.limits)} />
         <TextInput label="حجم (گیگ)" type="number" min={0} step={0.1} value={gb} onChange={setGb} placeholder="خالی = نامحدود" help={volumeHelp(data.limits)} />
@@ -421,18 +422,16 @@ export function PlanEditForm({ data, onDone, onCancel }: { data: PlanEdit; onDon
 
   return (
     <form className="flex flex-col gap-4" onSubmit={submitOn(() => void submit())}>
+      <TextInput label="نام پلن" value={name} onChange={setName} required />
+      <PlanCategoryField value={category} onChange={setCategory} categories={data.categories} styleOptions={data.category_style_options} />
       <FormGrid>
-        <TextInput label="نام پلن" value={name} onChange={setName} required />
         <MoneyInput label="قیمت (تومان)" value={price} onChange={setPrice} required />
+        <TextInput label="ترتیب نمایش" type="number" value={sort} onChange={setSort} />
         <TextInput label="مدت (روز)" type="number" min={0} value={days} onChange={setDays} placeholder="خالی = نامحدود" help={durationHelp(data.limits)} />
         <TextInput label="حجم (گیگ)" type="number" min={0} step={0.1} value={gb} onChange={setGb} placeholder="خالی = نامحدود" help={volumeHelp(data.limits)} />
       </FormGrid>
       <TextInput label="توضیح کوتاه" value={description} onChange={setDescription} placeholder="نمایش در بات" />
       <SwitchInput label="انتقال مانده حجم و زمان در تمدید" help={CARRY_QUOTA_HELP} checked={carry} onChange={setCarry} />
-      <FormGrid>
-        <CategorySelect value={category} onChange={setCategory} categories={data.categories} help="نوع پلن (ثابت/تست/…) عوض نمی‌شود؛ برچسب خاموش فعلی قابل نگه‌داشتن است" />
-        <TextInput label="ترتیب نمایش" type="number" value={sort} onChange={setSort} />
-      </FormGrid>
       <PgSourceFields
         mode={mode}
         onMode={setMode}

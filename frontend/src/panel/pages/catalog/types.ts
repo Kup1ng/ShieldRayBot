@@ -60,6 +60,29 @@ export type CustomPlan = {
 export type WholesaleTier = { min: number; percent: number };
 export type WholesalePlan = { enabled: boolean; min_qty: string; max_qty: string; button_text: string; tiers: WholesaleTier[] };
 
+export type Tone = "default" | "primary" | "success" | "danger";
+
+/** One category of the plans list, in the order of the category buttons in the shop bot. */
+export type BoardGroup = {
+  category_id: number;
+  name: string;
+  tone: Tone;
+  is_active: boolean;
+  /** False when the bot shows no button for it; `bot_note` says why. */
+  in_bot: boolean;
+  bot_note: string | null;
+  plan_ids: number[];
+  can_move_up: boolean;
+  can_move_down: boolean;
+};
+
+export type PlanBoard = {
+  has_categories: boolean;
+  groups: BoardGroup[];
+  /** The plans without a category: the bot's «سایر» button, or everything under «ثابت» when no category shows. */
+  other: { title: string; note: string; plan_ids: number[] };
+};
+
 export type CategoryRow = {
   id: number;
   name: string;
@@ -68,6 +91,8 @@ export type CategoryRow = {
   sort_order: number;
   is_active: boolean;
   button_style: string;
+  /** The tone of the category's bot button (the colour of its dot), «default» for a plain one. */
+  tone: Tone;
   linked_plans: string[];
   linked_packs: string[];
 };
@@ -130,6 +155,7 @@ export type PlansOverview = {
   templates: PgOption[];
   groups: PgOption[];
   categories: CategoryRow[];
+  plan_board: PlanBoard;
   addon_packs: PackRow[];
   reseller_plans: ResellerPlanRow[];
   reseller_plans_error: string | null;
@@ -169,10 +195,14 @@ export type PlanEdit = {
   limits: Limits;
   templates: PgOption[];
   groups: PgOption[];
-  categories: Array<{ id: number; name: string; is_active: boolean }>;
+  categories: PlanFormCategory[];
+  category_style_options: StyleOption[];
   naming_defaults: NamingDefaults;
   plan_style_options: StyleOption[];
 };
+
+/** A category a plan form offers; a switched-off one is only there when the plan already has it. */
+export type PlanFormCategory = { id: number; name: string; is_active: boolean; tone: Tone };
 
 export type ResellerPlanEdit = {
   plan: {
@@ -266,14 +296,21 @@ export type GiftCode = {
   note: string;
   is_active: boolean;
   state: string;
-  expiry_input: string;
+  /** Whole days left (rounded up), "" without an expiry and "0" once expired: what the form shows. */
+  expiry_days: string;
   expiry_label: string;
+  plans_label: string;
+  plan_ids: number[];
 };
+
+export type GiftCodePlan = { id: number; name: string; active: boolean };
 
 export type GiftCodesData = {
   codes: GiftCode[];
+  /** The shop's own plans a discount code can be limited to. */
+  plans: GiftCodePlan[];
   purchase_types: Array<{ key: string; label: string }>;
-  limits: { max_amount: number; max_uses: number; list_limit: number };
+  limits: { max_amount: number; max_uses: number; max_expiry_days: number; list_limit: number };
   tabs: MarketingTab[];
 };
 

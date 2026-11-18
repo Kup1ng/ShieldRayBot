@@ -256,7 +256,7 @@ class CleanupRoutesTests(CleanupCase):
         preview = data["preview"]
         self.assertEqual((preview["expired_total"], preview["time_due_now"]), (1, 1))
         self.assertEqual([(row["service_id"], row["username"], row["customer"], row["user_id"]) for row in preview["rows"]],
-                         [(1, "mine<script>", "<b>Eve</b>", 20)])
+                         [(1, "mine<script>", "<b>Eve</b> · 120", 20)])
         self.assertEqual(data["exempt"], [])
         for other in ("foreign", "platform"):
             self.assertNotIn(other, response.text)

@@ -243,6 +243,7 @@ function userEdit(plan: Partial<PlanEdit["plan"]> = {}, packs: PlanEdit["packs"]
     templates: [],
     groups: [{ id: 2, name: "گروه" }],
     categories: [],
+    category_style_options: STYLES,
     naming_defaults: { prefix: "clk", suffix: "", pattern: "{prefix}_{random}{suffix}" },
     plan_style_options: STYLES.slice(0, 2),
   };

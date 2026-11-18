@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import BotUser, Plan, WalletTransaction
+from app.db.models import BotUser, Plan, ResellerPlan, WalletTransaction
 from app.services.authz import authz_from_staff, can_shop
 from app.services.bot_user_admin import (
     ServiceSnapshot,
@@ -26,6 +26,8 @@ from app.services.demo_users import DEMO_USERS_PERMISSION
 from app.services.plans_catalog import list_catalog_plans
 from app.services.platform_identity import is_explicit_owner_staff
 from app.services.loyalty import points_balance
+from app.services.resellers import list_active_reseller_plans
+from app.services.service_import_assign import may_assign_existing_services
 from app.services.shop_customer_block import shop_block_form_context
 from app.services.shop_manual_adjust import ManualAdjustError, adjustable_customer, new_request_key
 from app.services.shop_points_adjust import points_adjust_shop, shop_points_form_context
@@ -47,6 +49,9 @@ class UserEditView:
     services: list[ServiceSnapshot]
     can_view_services: bool
     plans: list[Plan]
+    # The packages a new reseller can be given; only the platform Owner is offered them.
+    reseller_plans: list[ResellerPlan]
+    can_assign_existing_services: bool
     can_edit_private_marks: bool
     can_manage_users: bool
     can_manage_demo_users: bool
@@ -98,6 +103,8 @@ async def load_user_edit_view(session: AsyncSession, staff: dict, user: BotUser)
         services=services,
         can_view_services=can_view_services,
         plans=plans,
+        reseller_plans=await list_active_reseller_plans(session) if is_owner else [],
+        can_assign_existing_services=may_assign_existing_services(staff),
         can_edit_private_marks=await may_edit_private_marks(session, staff, user),
         # Role, account-wide block, delete and the platform purse stay Owner-only.
         can_manage_users=is_owner,

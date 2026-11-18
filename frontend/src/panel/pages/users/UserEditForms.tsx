@@ -111,20 +111,41 @@ const ROLE_OPTIONS = [
   { id: "admin", label: "مدیر" },
 ];
 
+const RESELLER_ROLE = "reseller";
+/** React Aria cannot select an empty key, so «no package» travels as this one. */
+const NO_PLAN = "none";
+
+/** The package field exists only for a new reseller: the role is being changed to «نماینده» and the Owner has packages to give. */
+export function takesResellerPlan(edit: UserEdit, role: string): boolean {
+  return role === RESELLER_ROLE && edit.user.role !== RESELLER_ROLE && edit.reseller_plans.length > 0;
+}
+
+export function roleFields(edit: UserEdit, role: string, planId: string): Record<string, string> {
+  return takesResellerPlan(edit, role) && planId !== NO_PLAN ? { role, reseller_plan_id: planId } : { role };
+}
+
 export function RoleSection({ edit, reload }: SectionProps) {
   const [role, setRole] = useState(edit.user.role);
+  const [planId, setPlanId] = useState(NO_PLAN);
   const { pending, save } = useSave(reload);
   const current = ROLE_OPTIONS.find((option) => option.id === edit.user.role)?.label ?? "کاربر";
+  const planOptions = [{ id: NO_PLAN, label: "— بدون پلن —" }, ...edit.reseller_plans.map((plan) => ({ id: String(plan.id), label: plan.label }))];
   return (
     <GlassSection title="تغییر نقش" description={`نقش فعلی: ${current}`}>
       <Choice label="نقش جدید" value={role} onChange={setRole} options={ROLE_OPTIONS} />
+      {takesResellerPlan(edit, role) ? (
+        <>
+          <Choice label="پلن نمایندگی" value={planId} onChange={setPlanId} options={planOptions} />
+          <p className="text-xs text-muted">نقش پاسارگارد، سقف‌ها و دسترسی‌ها از همین پلن گرفته می‌شود؛ اگر پنل چند نقش دارد، انتخاب پلن لازم است.</p>
+        </>
+      ) : null}
       <div>
         <Button
           className="button--ink !h-12 !rounded-lg"
           isPending={pending}
           onPress={async () => {
             if (!(await confirm("نقش این کاربر تغییر کند؟", { confirmLabel: "اعمال نقش", tone: "warning" }))) return;
-            await save(`/users/${edit.user.id}/role`, { role }, "نقش به‌روز شد");
+            await save(`/users/${edit.user.id}/role`, roleFields(edit, role, planId), "نقش به‌روز شد");
           }}
         >
           اعمال نقش

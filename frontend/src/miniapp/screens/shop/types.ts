@@ -4,6 +4,8 @@ import type { PriceQuote } from "./catalogPrice";
 export type Plan = PriceQuote & {
   id: number;
   name: string;
+  /** The admin's text about the plan ("" when none); plain text. */
+  description?: string;
   /** Days of service; 0 or null is unlimited time. */
   days: number | null;
   /** Data in GB; null is unlimited volume. */

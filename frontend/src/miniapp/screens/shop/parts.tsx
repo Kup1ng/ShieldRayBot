@@ -30,6 +30,13 @@ export function InsetBlock({
   );
 }
 
+/** The admin's text about a plan or category: plain text with its line breaks, never markup. */
+export function Description({ text, className = "" }: { text?: string | null; className?: string }) {
+  const value = String(text ?? "").trim();
+  if (!value) return null;
+  return <p className={`text-xs leading-6 whitespace-pre-line text-muted ${className}`}>{value}</p>;
+}
+
 export type SegmentOption = { key: string; label: string };
 
 /** Styles live in globals.css (`.segment--ink`): Tailwind reads "__" in arbitrary variants as spaces. */

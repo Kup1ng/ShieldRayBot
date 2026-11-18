@@ -128,7 +128,8 @@ async def loyalty_overview(session: AsyncSession, staff: dict, scope: int | None
             "wallet_credits_issued": int(metrics["wallet_credits_issued"]),
             "active_rewards": int(metrics["active_rewards"]),
             "top_referrers": [
-                {"label": str(row["label"]), "count": int(row["count"])} for row in metrics["top_referrers"]
+                {"user_id": int(row["user_id"]), "label": str(row["label"]), "count": int(row["count"])}
+                for row in metrics["top_referrers"]
             ],
         },
         "wheel": await _wheel_metrics(session, scope),
@@ -155,6 +156,7 @@ async def loyalty_transactions(session: AsyncSession, scope: int | None) -> list
     return [
         {
             "id": int(tx.id),
+            "user_id": int(tx.user_id),
             "user_label": bot_user_panel_label(user, fallback_id=tx.user_id),
             "amount": int(tx.amount),
             "balance_after": int(tx.balance_after),

@@ -9,7 +9,7 @@ import { num } from "../../core/format";
 import { ActionButton } from "../../ui/ActionButton";
 import { EmptyState } from "../../ui/ScreenState";
 import { PriceText } from "../shop/PriceText";
-import { InsetBlock } from "../shop/parts";
+import { Description, InsetBlock } from "../shop/parts";
 import { planMetaText } from "../shop/planGroups";
 import { categoryGroups, hasRenewablePlans, type CategoryGroup, type RenewPlan, type RenewRelation, type RenewalOptions } from "./renewalOptions";
 
@@ -40,6 +40,7 @@ function PlanRow({ plan, onPick }: { plan: RenewPlan; onPick: (plan: RenewPlan) 
           ) : null}
         </span>
         <span className="text-xs text-muted">{planMetaText(plan)}</span>
+        <Description text={plan.description} />
       </span>
       <PriceText quote={plan} className="shrink-0 items-end text-sm text-foreground" />
     </Button>
@@ -69,6 +70,7 @@ function CategoryRow({ group, onOpen }: { group: CategoryGroup; onOpen: (key: st
           {group.name}
         </span>
         <span className="text-xs text-muted">{num(group.plans.length)} پلن</span>
+        <Description text={group.description} />
       </span>
       <Icon name="solar:alt-arrow-left-linear" size={18} className="text-muted" />
     </Button>
@@ -127,6 +129,7 @@ export function RenewCategoryPlans({
   return (
     <>
       <InsetBlock title={group.name} labelId="renew-category">
+        <Description text={group.description} className="text-center" />
         <PlanList plans={group.plans} onPick={onPick} />
       </InsetBlock>
       <ActionButton tone="neutral" icon="solar:arrow-right-linear" onPress={onBack}>

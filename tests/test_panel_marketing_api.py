@@ -141,7 +141,7 @@ class LoyaltyEndpointTests(MarketingApiCase):
         self.assertFalse(plain["shop"]["allowed"])
         self.assertEqual(plain["shop"]["nonce"], "")
 
-    async def test_ledger_shows_only_the_shops_own_entries_with_labels_not_user_ids(self) -> None:
+    async def test_ledger_shows_only_the_shops_own_entries_labelled_by_name(self) -> None:
         self.session.add_all(
             [
                 PointsTransaction(user_id=10, amount=40, balance_after=40, tx_type="earn", source="x", description="shop two", idempotency_key="k1", reseller_id=2),
@@ -153,7 +153,8 @@ class LoyaltyEndpointTests(MarketingApiCase):
         shop = (await self.get(_reseller(["loyalty"]), "/api/panel/marketing/loyalty/transactions")).json()["transactions"]
         self.assertEqual([row["description"] for row in shop], ["shop two"])
         self.assertEqual(shop[0]["user_label"], "@alice")
-        self.assertNotIn("user_id", shop[0])
+        # The label is what is shown; the id only lets it open the user card.
+        self.assertEqual(shop[0]["user_id"], 10)
         platform = (await self.get(OWNER, "/api/panel/marketing/loyalty/transactions")).json()["transactions"]
         self.assertEqual([row["description"] for row in platform], ["platform"])
 

@@ -14,6 +14,8 @@ export type OverviewShell = {
   external_url: string | null;
   ticket_alert: { title: string; detail: string; href: string } | null;
   remediation: { username_aligned: boolean; credentials_ready: boolean; can_self_serve: boolean } | null;
+  /** Why the web owner has no «ادمین‌ها» menu (the PasarGuard role cannot read admins); null for everyone else. */
+  admins_hint: { title: string; detail: string; href: string } | null;
 };
 
 export type UserCounts = { total: number; online: number; active: number; expired: number; limited: number; disabled: number; on_hold: number };
@@ -146,6 +148,8 @@ export type AdminRow = {
   role_name: string;
   is_sudo: boolean;
   status: string;
+  /** Persian word for `status` (empty when the panel sent none). */
+  status_label: string;
   note: string;
   users_text: string;
   traffic_text: string;

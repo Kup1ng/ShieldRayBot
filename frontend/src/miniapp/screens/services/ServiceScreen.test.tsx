@@ -379,6 +379,42 @@ describe("renewal", () => {
     expect(await screen.findByRole("region", { name: "اقتصادی" })).toBeTruthy();
   });
 
+  it("shows the admin's descriptions of a category and its plans as plain text, and nothing when there is none", async () => {
+    const described = { id: 3, name: "بزرگ", price: 2000, days: 30, gb: 100, is_trial: false, relation: "upgrade", description: `ترافیک بالا\nبدون محدودیت سرعت ${HOSTILE}` };
+    const plain = { id: 4, name: "ساده", price: 900, days: 30, gb: 10, is_trial: false, relation: null, description: "" };
+    mount({
+      [OPTIONS_PATH]: {
+        json: {
+          wallet_pay_enabled: true,
+          grouped: true,
+          current: null,
+          categories: [
+            { id: 10, name: "ویژه", description: "پلن‌های ویژهٔ حرفه‌ای\nبا پشتیبانی", plans: [described, plain] },
+            { id: 11, name: "بی‌توضیح", description: "", plans: [plain] },
+          ],
+          other: [],
+          plans: [],
+        },
+      },
+    });
+    const user = userEvent.setup();
+    await screen.findByRole("heading", { name: "سرویس فعلی" });
+    await user.click(screen.getByRole("button", { name: "تمدید سرویس" }));
+    const categories = await screen.findByRole("region", { name: "انتخاب پلن تمدید" });
+    const special = within(categories).getByRole("button", { name: /ویژه/ });
+    expect(special.textContent).toContain("پلن‌های ویژهٔ حرفه‌ای");
+    expect(special.textContent).toContain("با پشتیبانی");
+    expect(within(categories).getByRole("button", { name: /بی‌توضیح/ }).textContent).toBe("بی‌توضیح۱ پلن");
+    await user.click(special);
+    const list = await screen.findByRole("region", { name: "ویژه" });
+    expect(list.textContent).toContain("پلن‌های ویژهٔ حرفه‌ای");
+    const row = within(list).getByRole("button", { name: /بزرگ/ });
+    expect(row.textContent).toContain("ترافیک بالا");
+    expect(row.textContent).toContain(HOSTILE);
+    expect(document.querySelector("img[onerror]")).toBeNull();
+    expect(within(list).getByRole("button", { name: /ساده/ }).textContent).not.toContain("undefined");
+  });
+
   it("lists one flat list, the service's own plan first, when the shop has no categories", async () => {
     const other = { id: 5, name: "کوچک", price: 500, days: 30, gb: 10, is_trial: false, relation: "downgrade" };
     mount({ [OPTIONS_PATH]: { json: { ...OPTIONS, plans: [{ ...PLAN, relation: "current" }, other] } } });

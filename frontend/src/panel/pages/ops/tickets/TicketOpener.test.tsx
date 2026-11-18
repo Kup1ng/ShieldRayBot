@@ -9,7 +9,10 @@ vi.mock("../../../core/api", async (importOriginal) => {
 });
 vi.mock("../../../core/confirm", () => ({ confirm: vi.fn() }));
 vi.mock("../../../core/session", () => ({
-  usePanelSession: () => ({ session: { csrf_token: "token", alerts: { tickets: 0, inbox: false, cancellations: false } }, refresh: vi.fn() }),
+  usePanelSession: () => ({
+    session: { csrf_token: "token", alerts: { tickets: 0, inbox: false, cancellations: false }, nav: [{ id: "shop", items: [{ id: "customers" }] }] },
+    refresh: vi.fn(),
+  }),
 }));
 vi.mock("../../../layout/PanelShell", () => ({ PanelShell: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 
@@ -38,11 +41,12 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("who opened a customer ticket", () => {
-  it("shows the name, username and Telegram id in the list as one link to the customer", async () => {
+  it("shows the name, username and Telegram id in the list as one button that opens the customer's card", async () => {
     get.mockResolvedValue(OVERVIEW);
     render(<TicketsPage />);
     const who = await screen.findByText(WHO);
-    expect(who.closest("a")?.getAttribute("href")).toBe("/users?uid=11");
+    expect(who.closest("button")?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(who.closest("a")).toBeNull();
   });
 
   it("shows the same label in the ticket dialog", async () => {

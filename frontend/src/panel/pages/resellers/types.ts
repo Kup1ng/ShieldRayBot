@@ -70,6 +70,7 @@ export type ColorTagData = { user_id: number; name: string; color_tag: string; t
 
 export type ApplicationRow = {
   id: number;
+  user_id: number | null;
   user_name: string;
   telegram_id: number | null;
   plan_name: string;

@@ -2,7 +2,7 @@
 
 export type MarketingSection = { key: string; label: string; href: string };
 
-export type TopReferrer = { label: string; count: number };
+export type TopReferrer = { user_id: number; label: string; count: number };
 
 export type LoyaltyOverview = {
   sections: MarketingSection[];
@@ -27,6 +27,7 @@ export type LoyaltyOverview = {
 
 export type PointsTransaction = {
   id: number;
+  user_id: number;
   user_label: string;
   amount: number;
   balance_after: number;

@@ -46,7 +46,7 @@ class LoyaltyTransactionsTemplateTests(unittest.TestCase):
 
 
 class LoyaltyTransactionsPayloadTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ledger_rows_carry_a_user_label_and_no_user_id(self):
+    async def test_ledger_rows_carry_a_user_label_and_the_id_that_opens_the_card(self):
         import tempfile
 
         from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -73,7 +73,8 @@ class LoyaltyTransactionsPayloadTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 await engine.dispose()
         self.assertEqual(rows[0]["user_label"], "Alice (@alice)")
-        self.assertNotIn("user_id", rows[0])
+        # The id is not shown: it only lets the label open the user card.
+        self.assertEqual(rows[0]["user_id"], 7)
 
 
 if __name__ == "__main__":

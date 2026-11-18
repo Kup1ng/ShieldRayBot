@@ -155,7 +155,13 @@ def test_alembic_upgrade_and_downgrade_postgres():
     eng.dispose()
 
     downgrade_one(url)
-    assert current_revision(url) == scripts.get_revision(head).down_revision
+    # The head may join two branches; one step back then leaves both of its parents current.
+    parents = scripts.get_revision(head).down_revision
+    expected = set(parents) if isinstance(parents, (tuple, list)) else {parents}
+    eng = pg_sync_engine(schema=schema)
+    with eng.connect() as conn:
+        assert set(conn.execute(text("SELECT version_num FROM alembic_version")).scalars()) == expected
+    eng.dispose()
 
 
 def test_sqlite_to_pg_migration_and_validation(tmp_path):

@@ -53,16 +53,27 @@ export type UsersList = {
   rows: UserRow[];
 };
 
+/** The pages whose tables open the card from a customer's name (the server's USER_CARD_PAGES). */
+export type UserCardPage = "users" | "resellers" | "finance" | "tickets" | "trials" | "cleanup" | "applications" | "loyalty";
+
+/** Where the card's «ویرایش» leads: the reseller's edit screen, the customer's, or the customer's through a link. */
+export type CardEditTarget = "reseller" | "user" | "user_link";
+
+export type UserIdentityData = { id: number; name: string; username: string; telegram_id: number; role: string; is_blocked: boolean };
+
 export type UserCard = {
-  user: { id: number; name: string; username: string; telegram_id: number; role: string; is_demo: boolean; is_blocked: boolean; message_name: string };
+  user: UserIdentityData & { is_demo: boolean; message_name: string };
   risk_tag: RiskTag | null;
   wallet_balance: number;
+  points_balance: number;
   paid_total: number;
   paid_count: number;
   joined: string;
   services: ServiceSummary[];
-  can_edit: boolean;
+  edit_target: CardEditTarget | null;
   can_message: boolean;
+  /** The known page the card was opened from; the message form returns there. */
+  opened_from: UserCardPage;
 };
 
 export type EditService = {
@@ -83,14 +94,16 @@ export type EditService = {
 export type WalletTx = { id: number; amount: number; reason: string; balance_after: number };
 
 export type UserEdit = {
-  user: { id: number; name: string; username: string; telegram_id: number; role: string; is_blocked: boolean; is_demo: boolean };
+  user: UserIdentityData & { is_demo: boolean };
   tag: RiskTag;
   color_tags: RiskTag[];
   note: string;
   wallet: { balance: number; nonce: string; transactions: WalletTx[] };
   services: EditService[];
   plans: { id: number; label: string }[];
-  can: { manage: boolean; demo: boolean; private_marks: boolean; view_services: boolean; pg_create: boolean; pg_update: boolean; pg_delete: boolean; delete_user: boolean };
+  /** The packages a new reseller can be given; empty unless the platform Owner is looking. */
+  reseller_plans: { id: number; label: string }[];
+  can: { manage: boolean; demo: boolean; private_marks: boolean; view_services: boolean; pg_create: boolean; pg_update: boolean; pg_delete: boolean; assign_existing_service: boolean; delete_user: boolean };
   shop_wallet: { nonce: string; max: number; daily: number } | null;
   shop_block: { blocked: boolean; reason: string } | null;
   points: { balance: number };

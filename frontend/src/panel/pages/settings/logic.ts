@@ -7,13 +7,15 @@ const NAMING_SAMPLES: Array<[string, string]> = [
   ["{username}", "ali_user"],
 ];
 
-/** An example panel username for the naming pattern, as the bot would build it. */
+/**
+ * An example panel username for the naming pattern, as the bot would build it: an empty prefix means
+ * «no prefix», and the separator an empty prefix or suffix leaves at either end is dropped.
+ */
 export function namingSample(prefix: string, suffix: string, pattern: string, random: string): string {
-  const chosenPrefix = prefix || "clk";
   let out = pattern || "{prefix}_{random}{suffix}";
-  out = out.replaceAll("{prefix}", chosenPrefix).replaceAll("{suffix}", suffix).replaceAll("{random}", random);
+  out = out.replaceAll("{prefix}", prefix.trim()).replaceAll("{suffix}", suffix).replaceAll("{random}", random);
   for (const [token, sample] of NAMING_SAMPLES) out = out.replaceAll(token, sample);
-  return out;
+  return out.replace(/^_+|_+$/g, "");
 }
 
 /* ---------- Mini App brand colour preview ---------- */

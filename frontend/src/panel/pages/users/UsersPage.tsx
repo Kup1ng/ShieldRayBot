@@ -18,7 +18,7 @@ import { ReasonDialog, type ReasonRequest } from "./ReasonDialog";
 import { SelectionBar } from "./SelectionBar";
 import type { BulkOp, UserRow, UsersFilter, UsersList } from "./types";
 import { BulkMessageDialog, CreateUserDialog, MessageDialog, type ListReturn } from "./UserDialogs";
-import { UserCardModal } from "./UserCardModal";
+import { UserCardModal, type MessageTarget } from "./UserCardModal";
 import { useSelection } from "./useSelection";
 import { UsersTable, type RowAction } from "./UsersTable";
 
@@ -102,7 +102,7 @@ export function UsersContent() {
   const { data, reload } = list;
   const { selected, select: setSelected, clear: clearSelection } = useSelection(search);
   const [cardId, setCardId] = useState<number | null>(null);
-  const [message, setMessage] = useState<{ id: number; name: string } | null>(null);
+  const [message, setMessage] = useState<MessageTarget | null>(null);
   const [bulkMessageOpen, setBulkMessageOpen] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const [reason, setReason] = useState<ReasonRequest | null>(null);
@@ -262,7 +262,7 @@ export function UsersContent() {
         onRun={(op) => void bulk(op as BulkOp)}
         onClear={clearSelection}
       />
-      <UserCardModal userId={cardId} onClose={() => setCardId(null)} onMessage={setMessage} />
+      <UserCardModal userId={cardId} page="users" onClose={() => setCardId(null)} onMessage={setMessage} />
       <MessageDialog target={message} listReturn={listReturn} onClose={() => setMessage(null)} onDone={refresh} />
       <BulkMessageDialog open={bulkMessageOpen} count={bulkCount} listReturn={listReturn} onClose={() => setBulkMessageOpen(false)} onDone={refresh} />
       <CreateUserDialog

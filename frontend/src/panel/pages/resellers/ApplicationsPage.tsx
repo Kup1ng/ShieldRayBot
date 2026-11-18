@@ -11,6 +11,7 @@ import { BulkBar, Ltr, RowMenu, StatusChip, type BulkButton, type MenuAction } f
 import { GlassSection, PageHeader } from "../../ui/Page";
 import { SectionTabs } from "../../ui/SectionTabs";
 import { EmptyBlock, Loadable } from "../../ui/States";
+import { UserNameLink } from "../../ui/UserNameLink";
 import { applicationStatus, RESELLER_TABS } from "./labels";
 import type { ApplicationRow, Applications } from "./types";
 
@@ -117,7 +118,7 @@ function ApplicationsTable({ rows, refresh }: { rows: ApplicationRow[]; refresh:
                     </Table.Cell>
                     <Table.Cell>
                       <div className="flex flex-col">
-                        <span dir="auto">{row.user_name || "—"}</span>
+                        <UserNameLink userId={row.user_id} name={row.user_name || "—"} page="applications" />
                         {row.telegram_id ? (
                           <span className="text-xs text-muted">
                             <Ltr>{row.telegram_id}</Ltr>

@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.services.catalog_pricing import displayed_quote, quote_product, sale_price
 from app.config import get_settings
 from app.db.models import BotUser, Order, ResellerProfile, UserService
+from app.api.miniapp_shell import miniapp_shell_response
 from app.api.miniapp_buy_extras import (
     check_buy_extras,
     checkout_options,
@@ -53,7 +54,6 @@ from app.services.formatting import (
     status_label_plain,
     time_remaining_label,
 )
-from app.api.spa_pages import spa_response
 from app.services.miniapp_auth import (
     assert_mini_force_join,
     assert_miniapp_feature_enabled,
@@ -64,6 +64,7 @@ from app.services.miniapp_auth import (
 from app.services.miniapp_branding import platform_brand, shop_brand
 from app.services.miniapp_badges import home_badges
 from app.services.miniapp_home import customer_home_summary
+from app.services.miniapp_main_app import platform_bot_username
 from app.services.miniapp_shop import (
     KEY_PATTERN,
     PLATFORM_SCOPE,
@@ -73,6 +74,7 @@ from app.services.miniapp_shop import (
     is_shop_miniapp_owner,
     mini_scope,
     resolve_shop_scope,
+    shop_bot_username,
     shop_display_name,
     shop_nav,
 )
@@ -614,7 +616,7 @@ def register_miniapp_pages(app: FastAPI, *, render, get_db) -> None:
     @app.get("/miniapp", response_class=HTMLResponse)
     async def miniapp_index(request: Request):
         assert_miniapp_feature_enabled()
-        return spa_response("miniapp")
+        return miniapp_shell_response(platform_bot_username())
 
     @app.get("/miniapp/s/{shop_key}/", response_class=HTMLResponse)
     @app.get("/miniapp/s/{shop_key}", response_class=HTMLResponse)
@@ -624,7 +626,7 @@ def register_miniapp_pages(app: FastAPI, *, render, get_db) -> None:
         if not KEY_PATTERN.fullmatch(shop_key):
             raise HTTPException(404, SHOP_UNAVAILABLE)
         await resolve_shop_scope(session, shop_key)
-        return spa_response("miniapp")
+        return miniapp_shell_response(await shop_bot_username(session, shop_key))
 
     @app.get("/api/mini/me")
     async def mini_me(request: Request, session: AsyncSession = Depends(get_db)):

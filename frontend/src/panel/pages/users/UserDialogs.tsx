@@ -10,6 +10,7 @@ import { fa } from "../../core/format";
 import { editIdFrom, FILTER_LABELS } from "./format";
 import { RiskTagPicker } from "./RiskTagChip";
 import type { RiskTag, UsersFilter } from "./types";
+import type { MessageTarget } from "./UserCardModal";
 
 /** The list's filter and search, posted back so the handlers redirect to the same view. */
 export type ListReturn = { filter: UsersFilter; q: string };
@@ -20,7 +21,12 @@ function returnFields({ filter, q }: ListReturn): Record<string, string> {
 
 const MESSAGE_MAX = 2000;
 
-function MessageForm({ target, listReturn, onClose, onDone }: { target: { id: number; name: string }; listReturn: ListReturn; onClose: () => void; onDone: () => void }) {
+/** The page a message returns to: the card's known page, or the users list's own filter and search. */
+function messageReturnFields(target: MessageTarget, listReturn: ListReturn | null): Record<string, string> {
+  return { ...(listReturn ? returnFields(listReturn) : {}), ...(target.returnPage ? { return_page: target.returnPage } : {}) };
+}
+
+function MessageForm({ target, listReturn, onClose, onDone }: { target: MessageTarget; listReturn: ListReturn | null; onClose: () => void; onDone?: () => void }) {
   const [body, setBody] = useState("");
   const [pending, setPending] = useState(false);
   return (
@@ -35,10 +41,10 @@ function MessageForm({ target, listReturn, onClose, onDone }: { target: { id: nu
       canSubmit={body.trim().length > 0}
       onSubmit={async () => {
         setPending(true);
-        const result = await run(`/users/${target.id}/message`, { body, ...returnFields(listReturn) }, { success: "پیام ارسال شد" });
+        const result = await run(`/users/${target.id}/message`, { body, ...messageReturnFields(target, listReturn) }, { success: "پیام ارسال شد" });
         setPending(false);
         if (result?.ok) onClose();
-        onDone();
+        onDone?.();
       }}
     >
       <p className="text-sm text-muted">
@@ -52,8 +58,8 @@ function MessageForm({ target, listReturn, onClose, onDone }: { target: { id: nu
   );
 }
 
-/** One customer's direct message (the row action and the card button). */
-export function MessageDialog({ target, listReturn, onClose, onDone }: { target: { id: number; name: string } | null; listReturn: ListReturn; onClose: () => void; onDone: () => void }) {
+/** One customer's direct message (the row action and the card button). Outside the users list there is no ``listReturn``. */
+export function MessageDialog({ target, listReturn = null, onClose, onDone }: { target: MessageTarget | null; listReturn?: ListReturn | null; onClose: () => void; onDone?: () => void }) {
   return target ? <MessageForm key={target.id} target={target} listReturn={listReturn} onClose={onClose} onDone={onDone} /> : null;
 }
 
